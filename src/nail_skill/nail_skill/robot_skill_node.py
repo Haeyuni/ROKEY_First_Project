@@ -796,6 +796,8 @@ class RobotSkillNode(Node):
         search_speed = self.get_parameter('lateral_search_speed_mms').value
         step_mm = self.get_parameter('lateral_search_step_mm').value
         contact_threshold = self.get_parameter('lateral_contact_threshold_n').value
+        retreat_mm = goal.retreat_mm if goal.retreat_mm > 0.0 else \
+            self.get_parameter('lateral_retreat_mm').value
 
         def feedback(pct, current_pass, travel_mm, w=None):
             fb = LateralContact.Feedback()
@@ -834,8 +836,7 @@ class RobotSkillNode(Node):
         contacted = False
         while travelled < applied_limit:
             if goal_handle.is_cancel_requested or not self._safe_to_move():
-                self._cleanup_lateral(goal_handle, approach_vec,
-                                       self.get_parameter('lateral_retreat_mm').value)
+                self._cleanup_lateral(goal_handle, approach_vec, retreat_mm)
                 reason = 'cancel' if goal_handle.is_cancel_requested else 'safety'
                 result.base = self._finish_from_reason(reason, goal_handle, started_at,
                                                          context='LateralContact 탐색')
@@ -853,8 +854,7 @@ class RobotSkillNode(Node):
                 break
 
         if not contacted:
-            self._cleanup_lateral(goal_handle, approach_vec,
-                                   self.get_parameter('lateral_retreat_mm').value)
+            self._cleanup_lateral(goal_handle, approach_vec, retreat_mm)
             self._log_abort(ErrorCode.E_LATERAL_LIMIT,
                              f'LateralContact: travel={travelled:.2f}mm '
                              f'limit={applied_limit:.2f}mm 까지 접촉 미검출')
@@ -922,8 +922,7 @@ class RobotSkillNode(Node):
             if aborted:
                 break
 
-        self._cleanup_lateral(goal_handle, approach_vec,
-                               self.get_parameter('lateral_retreat_mm').value)
+        self._cleanup_lateral(goal_handle, approach_vec, retreat_mm)
 
         mean_force = (sum(abs(axis_component(self._msg_to_wrench(f))) for f in force_log)
                       / len(force_log)) if force_log else 0.0

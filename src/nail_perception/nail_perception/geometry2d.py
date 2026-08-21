@@ -80,6 +80,39 @@ def centroid(points_xy):
     return (sum(xs) / len(xs), sum(ys) / len(ys))
 
 
+def ray_polygon_distance(origin_xy, direction_xy, polygon_xy, want='nearest'):
+    """origin_xy 에서 direction_xy(단위벡터 아니어도 됨) 방향으로 쏜 반직선이
+    polygon_xy 의 변들과 만나는 거리(t, |direction_xy| 배수 아님 — direction_xy
+    가 이미 단위벡터라는 전제 하에 mm 그대로) 중 want 조건에 맞는 값을 반환한다.
+
+    SDS §5.3 `compute_travel_limit` 의 두 용도를 이 하나의 함수로 처리한다:
+      - forbidden_polygon 까지: 바깥에서 쏴 처음 닿는 거리 → want='nearest'
+      - boundary_polygon 밖으로: 안에서 쏴 빠져나가는 거리 → want='nearest'
+        (내부에서 볼록다각형에 쏘면 전방 교차는 하나뿐이라 nearest==farthest)
+    없으면 None.
+    """
+    ox, oy = origin_xy
+    dx, dy = direction_xy
+    n = len(polygon_xy)
+    if n < 3:
+        return None
+    hits = []
+    for i in range(n):
+        ax, ay = polygon_xy[i]
+        bx, by = polygon_xy[(i + 1) % n]
+        ex, ey = bx - ax, by - ay
+        denom = ex * dy - ey * dx
+        if abs(denom) < 1e-9:
+            continue
+        t = (ex * (ay - oy) - ey * (ax - ox)) / denom
+        u = (dx * (ay - oy) - dy * (ax - ox)) / denom
+        if t > 1e-6 and -1e-9 <= u <= 1 + 1e-9:
+            hits.append(t)
+    if not hits:
+        return None
+    return min(hits) if want == 'nearest' else max(hits)
+
+
 def pca_major_axis_deg(points_xy):
     """점군의 1주성분 방향(도, X축 기준 반시계). 손톱 "길이축" 추정에 쓴다."""
     if len(points_xy) < 2:

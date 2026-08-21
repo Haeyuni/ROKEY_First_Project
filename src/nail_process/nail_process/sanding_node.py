@@ -1,0 +1,490 @@
+"""sanding_node — 수평 접근 연마 (NIS §6.2 M01, SDS §5.3 ★★).
+
+`LateralContact` 를 쓰는 유일한 공정 노드다. 압입을 하지 않는 수평 접근에서는
+강성 감시(`E_LOW_STIFFNESS`)가 작동하지 않으므로, 피부 접촉을 막는 방어선은
+`travel_limit_mm` 하나뿐이다 — 이 값을 강성 맵에서 기하학적으로 계산하는
+`_compute_travel_limit` 이 이 노드에서 가장 중요한 함수다 (상수로 하드코딩
+금지, SDS §12 체크리스트).
+
+이 노드도 dsr_msgs2 를 import 하지 않는다 — 실제 이동은 robot_skill_node 의
+`/skill/lateral_contact` 를 호출한다 (SDS §4.1).
+"""
+import math
+import threading
+import time
+
+import rclpy
+from geometry_msgs.msg import Pose, Vector3
+from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+
+from nail_msgs.action import LateralContact, SandSurface
+from nail_msgs.msg import ErrorCode, ResultBase, SafetyState, ToolState
+from nail_msgs.srv import GetStiffnessMap, ValidatePrecondition
+
+from nail_perception.geometry2d import centroid, ray_polygon_distance
+
+SEVERITY_BY_CODE = {
+    ErrorCode.OK: ErrorCode.SEV_NONE,
+    ErrorCode.E_CANCELLED: ErrorCode.SEV_NONE,
+    ErrorCode.E_LATERAL_JAM: ErrorCode.SEV_RETRY,
+    ErrorCode.E_OVERFORCE: ErrorCode.SEV_ABORT,
+    ErrorCode.E_MOTION_FAILED: ErrorCode.SEV_ABORT,
+    ErrorCode.E_TIMEOUT: ErrorCode.SEV_ABORT,
+    ErrorCode.E_NO_SCAN: ErrorCode.SEV_ABORT,
+    ErrorCode.E_INVALID_GOAL: ErrorCode.SEV_ABORT,
+    ErrorCode.E_LATERAL_LIMIT: ErrorCode.SEV_SAFETY,
+    ErrorCode.E_SAFETY_BLOCKED: ErrorCode.SEV_SAFETY,
+}
+
+
+def _severity_for(code):
+    return SEVERITY_BY_CODE.get(code, ErrorCode.SEV_ABORT)
+
+
+def _sub(a, b):
+    return (a[0] - b[0], a[1] - b[1])
+
+
+def _add_scaled(origin, vec, t):
+    return (origin[0] + vec[0] * t, origin[1] + vec[1] * t)
+
+
+def _dot(a, b):
+    return a[0] * b[0] + a[1] * b[1]
+
+
+def _rotate90(v):
+    """반시계 90도 회전 — 접근축에 수직인 이송축(feed_axis)을 얻는다."""
+    return (-v[1], v[0])
+
+
+class SandingNode(Node):
+
+    def __init__(self):
+        super().__init__('sanding_node')
+        self._declare_parameters()
+
+        self._latest_safety = None
+        safety_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                                 durability=DurabilityPolicy.TRANSIENT_LOCAL)
+
+        self._cb_action = MutuallyExclusiveCallbackGroup()
+        self._cb_client = MutuallyExclusiveCallbackGroup()
+
+        self.create_subscription(SafetyState, self.get_parameter('safety_topic').value,
+                                  self._on_safety_status, safety_qos,
+                                  callback_group=self._cb_client)
+
+        self._get_map_client = self.create_client(
+            GetStiffnessMap, '/scan/get_map', callback_group=self._cb_client)
+        self._validate_client = self.create_client(
+            ValidatePrecondition, '/safety/validate', callback_group=self._cb_client)
+        self._lateral_client = ActionClient(self, LateralContact, '/skill/lateral_contact',
+                                             callback_group=self._cb_client)
+        self._lateral_goal_handle = None
+
+        self._sand_server = ActionServer(
+            self, SandSurface, '/process/sand',
+            execute_callback=self._execute,
+            goal_callback=self._on_goal,
+            cancel_callback=self._on_cancel,
+            callback_group=self._cb_action)
+
+        self.get_logger().info('sanding_node ready')
+
+    # --- 파라미터 (NIS §6.2 표) -------------------------------------------------
+    def _declare_parameters(self):
+        d = self.declare_parameter
+        d('safety_topic', '/safety/status')
+        d('node_timeout_s', 120.0)
+        d('log_force_data', False)
+        # 접근
+        d('approach_side', SandSurface.Goal.SIDE_FREE_EDGE)
+        d('work_plane_offset_mm', 0.0)
+        d('approach_pitch_deg', 0.0)
+        # 힘
+        d('target_force_n', 2.0)
+        d('max_force_n', 4.0)
+        d('jam_force_n', 4.0)
+        # 경로
+        d('passes', 3)
+        d('step_over_mm', 1.5)
+        d('feed_speed_mms', 8.0)
+        d('max_duration_s', 60.0)
+        # 안전 ★
+        d('travel_limit_margin_mm', 2.0)
+        d('forbidden_margin_mm', 1.5)
+        d('require_dust_collector', True)
+
+    # --- 안전 -----------------------------------------------------------------
+    def _on_safety_status(self, msg):
+        self._latest_safety = msg
+
+    def _safe_to_move(self):
+        return self._latest_safety is not None and self._latest_safety.safe_to_move
+
+    def _on_cancel(self, goal_handle):
+        if self._lateral_goal_handle is not None:
+            self._lateral_goal_handle.cancel_goal_async()
+        return CancelResponse.ACCEPT
+
+    # --- 서비스 폴링 헬퍼 --------------------------------------------------------
+    def _call_get_map(self, session_id, timeout_s=5.0):
+        if not self._get_map_client.wait_for_service(timeout_sec=timeout_s):
+            return False, False, None
+        req = GetStiffnessMap.Request()
+        req.session_id = session_id
+        future = self._get_map_client.call_async(req)
+        deadline = time.monotonic() + timeout_s
+        while not future.done():
+            if time.monotonic() > deadline:
+                return False, False, None
+            time.sleep(0.02)
+        resp = future.result()
+        if resp is None or not resp.found:
+            return False, False, None
+        return True, resp.map.valid, resp.map
+
+    def _call_validate_precondition(self, session_id, timeout_s=5.0):
+        if not self._validate_client.wait_for_service(timeout_sec=timeout_s):
+            return False, ['ValidatePrecondition 서비스 연결 실패']
+        req = ValidatePrecondition.Request()
+        req.stage = ValidatePrecondition.Request.STAGE_SAND
+        req.session_id = session_id
+        req.required_tool = ToolState.SANDER
+        future = self._validate_client.call_async(req)
+        deadline = time.monotonic() + timeout_s
+        while not future.done():
+            if time.monotonic() > deadline:
+                return False, ['ValidatePrecondition 응답 타임아웃']
+            time.sleep(0.02)
+        resp = future.result()
+        if resp is None:
+            return False, ['ValidatePrecondition 응답 없음']
+        return resp.ok, list(resp.blocking_reasons)
+
+    # --- goal 수락 (§3.1 ②③④, NIS §6.2 동작 1~2) --------------------------------
+    def _on_goal(self, goal_request):
+        if not goal_request.session_id:
+            self.get_logger().warn('SandSurface REJECT: E_INVALID_GOAL (session_id 없음)')
+            return GoalResponse.REJECT
+        if not self._safe_to_move():
+            self.get_logger().warn('SandSurface REJECT: E_SAFETY_BLOCKED')
+            return GoalResponse.REJECT
+        if self.get_parameter('require_dust_collector').value:
+            if self._latest_safety is None or not self._latest_safety.dust_extraction_on:
+                self.get_logger().warn(
+                    'SandSurface REJECT: E_PRECOND_FAILED (dust_extraction_on=false)')
+                return GoalResponse.REJECT
+        found, valid, _map = self._call_get_map(goal_request.session_id)
+        if not found or not valid:
+            self.get_logger().warn(
+                f'SandSurface REJECT: E_NO_SCAN (found={found}, valid={valid})')
+            return GoalResponse.REJECT
+        ok, reasons = self._call_validate_precondition(goal_request.session_id)
+        if not ok:
+            self.get_logger().warn(f'SandSurface REJECT: E_PRECOND_FAILED {reasons}')
+            return GoalResponse.REJECT
+        return GoalResponse.ACCEPT
+
+    def _val(self, goal_value, param_name):
+        return goal_value if goal_value and goal_value > 0.0 else \
+            self.get_parameter(param_name).value
+
+    # --- 접근 벡터 (NIS §6.2 동작 3) ---------------------------------------------
+    def _approach_vector(self, approach_side, pitch_deg):
+        """nail_local_frame 기준 수평 단위벡터. free_edge=-X, left=+Y, right=-Y."""
+        base = {
+            SandSurface.Goal.SIDE_FREE_EDGE: (-1.0, 0.0),
+            SandSurface.Goal.SIDE_LEFT: (0.0, 1.0),
+            SandSurface.Goal.SIDE_RIGHT: (0.0, -1.0),
+        }.get(approach_side, (-1.0, 0.0))
+        pitch = math.radians(pitch_deg)
+        vx = base[0] * math.cos(pitch)
+        vy = base[1] * math.cos(pitch)
+        vz = math.sin(pitch)
+        return base, (vx, vy, vz)
+
+    # --- travel_limit_mm ★ (SDS §5.3 compute_travel_limit) -----------------------
+    def _compute_travel_limit(self, start_xy, base_xy, boundary_xy, forbidden_xy, margin_mm,
+                               forbidden_margin_mm):
+        eps = 0.05  # start_xy 는 boundary_polygon 경계 위 — t=0 자기교차 회피용 미세 오프셋
+        probe_origin = _add_scaled(start_xy, base_xy, eps)
+        d_boundary = ray_polygon_distance(probe_origin, base_xy, boundary_xy, 'nearest')
+        d_forbidden = None
+        if len(forbidden_xy) >= 3:
+            raw = ray_polygon_distance(probe_origin, base_xy, forbidden_xy, 'nearest')
+            if raw is not None:
+                d_forbidden = raw - forbidden_margin_mm
+        candidates = [d + eps for d in (d_boundary, d_forbidden) if d is not None]
+        if not candidates:
+            return None
+        return min(candidates) - margin_mm
+
+    def _entry_point(self, base_xy, boundary_xy):
+        """boundary_polygon 무게중심에서 -approach_vector 방향으로 쏴 만나는
+        경계 위 점 = 접근이 시작되는 손톱 가장자리 (free_edge 쪽 등)."""
+        c = centroid(boundary_xy)
+        neg = (-base_xy[0], -base_xy[1])
+        d = ray_polygon_distance(c, neg, boundary_xy, 'nearest')
+        if d is None:
+            return None
+        return _add_scaled(c, neg, d)
+
+    # =========================================================================
+    def _execute(self, goal_handle):
+        goal = goal_handle.request
+        started_at = time.monotonic()
+        result = SandSurface.Result()
+
+        approach_side = goal.approach_side or self.get_parameter('approach_side').value
+        pitch_deg = self._val(goal.approach_pitch_deg, 'approach_pitch_deg')
+        work_plane = self._val(goal.work_plane_offset_mm, 'work_plane_offset_mm')
+        target_force = self._val(goal.target_force_n, 'target_force_n')
+        max_force = self._val(goal.max_force_n, 'max_force_n')
+        jam_force = self._val(goal.jam_force_n, 'jam_force_n')
+        passes = int(self._val(goal.passes, 'passes'))
+        step_over = self._val(goal.step_over_mm, 'step_over_mm')
+        feed_speed = self._val(goal.feed_speed_mms, 'feed_speed_mms')
+        max_duration = self._val(goal.max_duration_s, 'max_duration_s')
+        margin_mm = self._val(goal.travel_limit_margin_mm, 'travel_limit_margin_mm')
+        forbidden_margin = self._val(goal.forbidden_margin_mm, 'forbidden_margin_mm')
+
+        # --- 맵 재확인 (goal_callback 과 execute 사이의 갱신 가능성에 대비) ----------
+        found, valid, stiffness_map = self._call_get_map(goal.session_id)
+        if not found or not valid:
+            detail = f'GetStiffnessMap: found={found} valid={valid}'
+            self._log_abort(ErrorCode.E_NO_SCAN, detail)
+            goal_handle.abort()
+            result.base = self._result_base(False, ErrorCode.E_NO_SCAN, detail, started_at)
+            return result
+
+        boundary_xy = [(pt.x, pt.y) for pt in stiffness_map.region.boundary_polygon]
+        forbidden_xy = [(pt.x, pt.y) for pt in stiffness_map.region.forbidden_polygon]
+        if len(boundary_xy) < 3:
+            detail = 'boundary_polygon 점 3개 미만 — 경계 미확정'
+            self._log_abort(ErrorCode.E_NO_SCAN, detail)
+            goal_handle.abort()
+            result.base = self._result_base(False, ErrorCode.E_NO_SCAN, detail, started_at)
+            return result
+
+        base_xy, approach_vec_3d = self._approach_vector(approach_side, pitch_deg)
+        start_xy = self._entry_point(base_xy, boundary_xy)
+        if start_xy is None:
+            detail = f'approach_side="{approach_side}" 방향이 boundary_polygon 과 교차하지 않음'
+            self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
+            goal_handle.abort()
+            result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
+            return result
+
+        # --- travel_limit_mm ★ ----------------------------------------------------
+        travel_limit_mm = self._compute_travel_limit(
+            start_xy, base_xy, boundary_xy, forbidden_xy, margin_mm, forbidden_margin)
+        if travel_limit_mm is None or travel_limit_mm <= 0.0:
+            detail = (f'travel_limit_mm={travel_limit_mm} <= 0 — 접근 방향("{approach_side}") '
+                      f'또는 travel_limit_margin_mm({margin_mm}) 재검토 필요. '
+                      'NFR-09: 이 값이 유일한 피부 접촉 방어선.')
+            self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
+            goal_handle.abort()
+            result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
+            return result
+        result.computed_travel_limit_mm = travel_limit_mm
+
+        # --- 이송 경로(feed_axis 왕복) 폭 산출 ---------------------------------------
+        feed_axis = _rotate90(base_xy)
+        coords = [_dot(_sub(p, start_xy), feed_axis) for p in boundary_xy]
+        c_min, c_max = min(coords), max(coords)
+        half_width = max(0.5, (c_max - c_min) / 2.0)
+        feed_center_offset = (c_max + c_min) / 2.0
+        p_center = _add_scaled(start_xy, feed_axis, feed_center_offset)
+        wp_a_mm = _add_scaled(p_center, feed_axis, -half_width)
+        wp_b_mm = _add_scaled(p_center, feed_axis, half_width)
+
+        def mm_to_pose(xy_mm, z_mm):
+            pose = Pose()
+            pose.position.x = xy_mm[0] / 1000.0
+            pose.position.y = xy_mm[1] / 1000.0
+            pose.position.z = z_mm / 1000.0
+            pose.orientation.w = 1.0
+            return pose
+
+        def feedback(pct, current_pass, travel_mm, wrench=None):
+            fb = SandSurface.Feedback()
+            fb.percent = pct
+            fb.current_pass = current_pass
+            fb.travel_mm = travel_mm
+            if wrench is not None:
+                fb.current_wrench = wrench
+            goal_handle.publish_feedback(fb)
+
+        # --- passes 만큼 반복. step_over_mm 는 패스마다 작업 높이(Z)를 옮겨
+        #     손톱 가장자리의 다른 높이대를 훑는다 (NIS §6.2 파라미터 설명:
+        #     "step_over_mm: 패스 간 이송 간격") -------------------------------------
+        mean_forces, max_forces, max_travels, max_jams = [], [], [], []
+        abort_code, abort_reason, abort_detail = None, '', ''
+        passes_done = 0
+        deadline = time.monotonic() + max_duration
+
+        for pass_idx in range(passes):
+            if goal_handle.is_cancel_requested:
+                abort_code = 'CANCELLED'
+                break
+            if not self._safe_to_move():
+                abort_code = ErrorCode.E_SAFETY_BLOCKED
+                abort_detail = 'safe_to_move=false'
+                break
+            if time.monotonic() > deadline:
+                self.get_logger().warn(
+                    f'sanding: max_duration_s({max_duration}) 초과 — {pass_idx}/{passes} 패스만 수행')
+                break
+
+            z_mm = work_plane + pass_idx * step_over
+            lc_goal = LateralContact.Goal()
+            lc_goal.approach_vector = Vector3(x=approach_vec_3d[0], y=approach_vec_3d[1],
+                                               z=approach_vec_3d[2])
+            lc_goal.waypoints = [mm_to_pose(wp_a_mm, z_mm), mm_to_pose(wp_b_mm, z_mm),
+                                  mm_to_pose(wp_a_mm, z_mm)]
+            lc_goal.frame_id = 'nail_local_frame'
+            lc_goal.session_id = goal.session_id
+            lc_goal.work_plane_offset_mm = z_mm
+            lc_goal.target_force_n = target_force
+            lc_goal.max_force_n = max_force
+            lc_goal.jam_force_n = jam_force
+            lc_goal.feed_speed_mms = feed_speed
+            lc_goal.travel_limit_mm = travel_limit_mm
+            lc_goal.retreat_mm = margin_mm
+            lc_goal.passes = 1
+            lc_goal.max_duration_s = max(1.0, deadline - time.monotonic())
+
+            def on_lc_feedback(fb_msg):
+                fb = fb_msg.feedback
+                feedback(100.0 * (pass_idx + fb.percent / 100.0) / passes, pass_idx,
+                          fb.travel_mm, fb.current_wrench)
+
+            lc_result, err_code, err_detail = self._call_lateral_contact(
+                lc_goal, goal_handle, lc_goal.max_duration_s + 5.0, on_lc_feedback)
+
+            if err_code == 'CANCELLED':
+                abort_code = 'CANCELLED'
+                break
+            if err_code is not None or not lc_result.base.success:
+                abort_code = err_code or lc_result.base.error.code
+                abort_detail = err_detail or lc_result.base.error.detail
+                abort_reason = f'ABORT_{abort_code}' if not lc_result.abort_reason \
+                    else lc_result.abort_reason
+                if lc_result is not None:
+                    mean_forces.append(lc_result.mean_force_n)
+                    max_forces.append(lc_result.max_force_measured_n)
+                    max_travels.append(lc_result.max_travel_mm)
+                    max_jams.append(lc_result.max_jam_force_n)
+                break
+
+            passes_done += 1
+            mean_forces.append(lc_result.mean_force_n)
+            max_forces.append(lc_result.max_force_measured_n)
+            max_travels.append(lc_result.max_travel_mm)
+            max_jams.append(lc_result.max_jam_force_n)
+
+        result.mean_force_n = sum(mean_forces) / len(mean_forces) if mean_forces else 0.0
+        result.max_force_measured_n = max(max_forces) if max_forces else 0.0
+        result.max_travel_mm = max(max_travels) if max_travels else 0.0
+        result.max_jam_force_n = max(max_jams) if max_jams else 0.0
+        result.passes_done = passes_done
+        result.abort_reason = abort_reason
+
+        if abort_code == 'CANCELLED':
+            goal_handle.canceled()
+            result.base = self._result_base(False, ErrorCode.E_CANCELLED, '사용자 취소',
+                                              started_at)
+            return result
+        if abort_code is not None:
+            self._log_abort(abort_code, f'sanding pass {passes_done}: {abort_detail}')
+            goal_handle.abort()
+            result.base = self._result_base(False, abort_code, abort_detail, started_at)
+            return result
+
+        goal_handle.succeed()
+        result.base = self._result_base(True, ErrorCode.OK, '', started_at)
+        return result
+
+    # --- LateralContact 클라이언트 헬퍼 (§3.3 취소 전파) ---------------------------
+    def _call_lateral_contact(self, goal, our_goal_handle, timeout_s, feedback_cb=None):
+        if not self._lateral_client.wait_for_server(timeout_sec=10.0):
+            return None, ErrorCode.E_MOTION_FAILED, 'lateral_contact 액션 서버 연결 실패'
+
+        send_done = threading.Event()
+        state = {}
+
+        def on_goal_response(fut):
+            state['goal_handle'] = fut.result()
+            send_done.set()
+
+        send_future = self._lateral_client.send_goal_async(goal, feedback_callback=feedback_cb)
+        send_future.add_done_callback(on_goal_response)
+        if not send_done.wait(timeout=timeout_s):
+            return None, ErrorCode.E_TIMEOUT, 'lateral_contact goal 전송 타임아웃'
+
+        gh = state.get('goal_handle')
+        if gh is None or not gh.accepted:
+            return None, ErrorCode.E_SAFETY_BLOCKED, 'lateral_contact goal 거부됨'
+        self._lateral_goal_handle = gh
+
+        result_done = threading.Event()
+
+        def on_result(fut):
+            state['result'] = fut.result()
+            result_done.set()
+
+        gh.get_result_async().add_done_callback(on_result)
+        deadline = time.monotonic() + timeout_s
+        cancelled = False
+        while not result_done.wait(timeout=0.1):
+            if our_goal_handle.is_cancel_requested and not cancelled:
+                gh.cancel_goal_async()
+                cancelled = True
+            if time.monotonic() > deadline:
+                gh.cancel_goal_async()
+                self._lateral_goal_handle = None
+                return None, ErrorCode.E_TIMEOUT, 'lateral_contact 결과 타임아웃'
+
+        self._lateral_goal_handle = None
+        result = state['result'].result
+        if cancelled:
+            return result, 'CANCELLED', '사용자 취소'
+        return result, None, None
+
+    # --- 공통 ------------------------------------------------------------------
+    def _result_base(self, success, code, detail, started_at):
+        base = ResultBase()
+        base.success = success
+        base.error.code = code
+        base.error.severity = _severity_for(code)
+        base.error.detail = detail
+        base.duration_s = max(0.0, time.monotonic() - started_at)
+        base.completed_at = self.get_clock().now().to_msg()
+        return base
+
+    def _log_abort(self, code, detail):
+        self.get_logger().error(f'[{code}] sanding_node: {detail}')
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = SandingNode()
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
