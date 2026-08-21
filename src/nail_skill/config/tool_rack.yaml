@@ -1,0 +1,55 @@
+# tool_manager 랙 설정 (NIS §5.2 `rack_config_file` 예시, tool_manager_node.py
+# `_load_rack_config()` 가 그대로 읽는다).
+#
+# ROS2 파라미터 YAML(node/ros__parameters 래핑)이 아니라 순수 yaml 이다 —
+# `_load_rack_config()` 이 `yaml.safe_load()` 로 읽어 `tools` 키 하나만 꺼내
+# 쓰기 때문. launch 에서 이 파일 "경로"를 `rack_config_file` 파라미터로
+# 넘긴다 (파라미터 파일로 로드하지 않음).
+#
+# 필드:
+#   slot_frame             : 랙 슬롯의 TF 프레임 이름. static_transform_publisher 로
+#                             고정 발행되는 이름과 정확히 일치해야 한다 (NIS §11.4).
+#                             tool_manager 는 좌표값을 모르고 이 이름만 PickPlace
+#                             target_key 로 그대로 넘긴다.
+#   expected_grip_width_mm : 정상 파지 시 그리퍼가 읽어야 할 폭. verify_grip=true 면
+#                             grip_width_tolerance_mm 이내인지 검사한다.
+#   tcp_offset              : [x, y, z, rx, ry, rz] — mm / deg. dsr set_tcp("tcp_<tool>")
+#                             가 실제로 적용하는 값이 아니라 GetToolInfo 응답/문서화용.
+#                             tcp_<tool> 프레임 자체는 두산 컨트롤러 쪽에 별도 등록되어야
+#                             한다 (§4.1 참고).
+#
+# sander/uv 두 값은 NIS §5.2 예시 그대로다. probe/brush/coater/tweezers 는
+# 아직 실측/CAD 값이 없어 자리표시자(placeholder)다 — 실제 툴을 랙에 걸고
+# 캘리브레이션한 뒤 반드시 갱신할 것. 그 전까지 이 4개 툴의 ChangeTool 은
+# 값은 통과하지만 실제 로봇에서는 검증되지 않은 수치로 동작한다.
+
+tools:
+  probe:
+    slot_frame: slot_1
+    expected_grip_width_mm: 12.0        # TODO: 실측값으로 교체
+    tcp_offset: [0, 0, 60.0, 0, 0, 0]   # TODO: 실측값으로 교체
+
+  sander:
+    slot_frame: slot_2
+    expected_grip_width_mm: 18.0
+    tcp_offset: [0, 0, 92.5, 0, 0, 0]
+
+  brush:
+    slot_frame: slot_3
+    expected_grip_width_mm: 15.0        # TODO: 실측값으로 교체
+    tcp_offset: [0, 0, 80.0, 0, 0, 0]   # TODO: 실측값으로 교체
+
+  coater:
+    slot_frame: slot_4
+    expected_grip_width_mm: 16.0        # TODO: 실측값으로 교체
+    tcp_offset: [0, 0, 85.0, 0, 0, 0]   # TODO: 실측값으로 교체
+
+  uv:
+    slot_frame: slot_5
+    expected_grip_width_mm: 22.0
+    tcp_offset: [0, 0, 110.0, 0, 0, 0]
+
+  tweezers:
+    slot_frame: slot_6
+    expected_grip_width_mm: 10.0        # TODO: 실측값으로 교체
+    tcp_offset: [0, 0, 70.0, 0, 0, 0]   # TODO: 실측값으로 교체
