@@ -1,0 +1,21 @@
+string  session_id
+geometry_msgs/Point target_position
+float64 target_yaw_deg
+
+float64 press_force_n
+float64 press_duration_s
+float64 position_tolerance_mm
+int32   max_retry
+
+bool    verify_enabled                  # 기본 false
+int32   verify_probe_count
+float64 approach_height_mm
+---
+nail_msgs/ResultBase base
+geometry_msgs/Point actual_position
+float64 position_error_mm               # verify_enabled=false 면 -1.0
+int32   retry_count
+string  abort_reason
+---
+int32   step
+float64 percent

@@ -1,0 +1,6 @@
+string tool_id                 # 빈 문자열이면 현재 장착 툴
+---
+bool                 found
+nail_msgs/ToolState  state
+float64[6]           tcp_offset      # x,y,z(mm) rx,ry,rz(deg)
+string               slot_frame

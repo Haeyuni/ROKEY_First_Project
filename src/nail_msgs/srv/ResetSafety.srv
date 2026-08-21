@@ -1,0 +1,5 @@
+bool confirm                   # true 일 때만 처리
+string operator_note
+---
+bool     ok                    # remaining_faults 가 비었을 때만 true
+string[] remaining_faults

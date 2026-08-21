@@ -1,0 +1,18 @@
+string MODE_PICK  = "pick"
+string MODE_PLACE = "place"
+
+string  mode
+string  target_key             # targets.yaml 키
+string  frame_id
+float64 approach_height_mm
+float64 grip_width_mm          # PICK 시 목표 폭
+float64 expected_width_mm
+float64 width_tolerance_mm
+bool    verify_grip
+---
+nail_msgs/ResultBase base
+float64 measured_width_mm
+bool    grip_verified
+---
+int32   step                   # 0=이동 1=하강 2=그립 3=검증 4=상승
+float64 percent

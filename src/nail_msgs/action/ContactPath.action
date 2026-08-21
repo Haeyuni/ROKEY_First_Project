@@ -1,0 +1,32 @@
+# 브러싱 · 도포용. 표면 법선(-Z) 방향으로 접근하고 +Z로 이탈한다.
+
+geometry_msgs/Pose[] waypoints
+string  frame_id
+string  session_id
+
+float64 target_force_n
+float64 max_force_n
+float64 feed_speed_mms
+bool    use_compliance
+
+# 강성 감시 (법선 접근에서만 유효)
+bool    abort_on_low_stiffness
+float64 min_stiffness_n_per_mm
+
+geometry_msgs/Point[] allowed_polygon   # TCP 이탈 감시
+int32   passes
+float64 max_duration_s
+---
+nail_msgs/ResultBase base
+float64 mean_force_n
+float64 max_force_measured_n
+float64 min_stiffness_measured_n_per_mm
+float64 path_error_mm
+int32   passes_done
+int32[] missed_segment_indices
+string  abort_reason           # ABORT_LOW_STIFFNESS / ABORT_OVERFORCE / …
+nail_msgs/ForceSample[] force_log
+---
+float64 percent
+int32   current_pass
+nail_msgs/ForceSample current_wrench

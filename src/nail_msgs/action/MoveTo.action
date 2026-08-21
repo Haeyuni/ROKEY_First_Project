@@ -1,0 +1,12 @@
+geometry_msgs/Pose target
+string  frame_id
+bool    linear                 # true=movel, false=movej
+float64 speed_ratio            # 0.0~1.0
+float64 accel_ratio
+float64 timeout_s
+---
+nail_msgs/ResultBase base
+float64 position_error_mm
+---
+float64 percent
+geometry_msgs/Pose current_pose
