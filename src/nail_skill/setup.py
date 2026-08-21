@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'robot_skill_node = nail_skill.robot_skill_node:main',
+            'tool_manager = nail_skill.tool_manager_node:main',
         ],
     },
 )

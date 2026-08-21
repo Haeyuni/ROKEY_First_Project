@@ -433,19 +433,26 @@ class RobotSkillNode(Node):
 
     def _target_task_pose(self, target_key, frame_id):
         entry = self._load_targets().get(target_key)
-        if entry is None:
-            raise KeyError(target_key)
-        pose = Pose()
-        pose.position.x = entry.get('x_mm', 0.0) / 1000.0
-        pose.position.y = entry.get('y_mm', 0.0) / 1000.0
-        pose.position.z = entry.get('z_mm', 0.0) / 1000.0
-        pose.orientation.w = 1.0
-        base_pose = self._transform_pose_to_base(pose, entry.get('frame_id', frame_id))
-        tp = pose_to_task_pose(base_pose)
-        tp.rz1_deg = entry.get('rz1_deg', tp.rz1_deg)
-        tp.ry_deg = entry.get('ry_deg', tp.ry_deg)
-        tp.rz2_deg = entry.get('rz2_deg', tp.rz2_deg)
-        return tp
+        if entry is not None:
+            pose = Pose()
+            pose.position.x = entry.get('x_mm', 0.0) / 1000.0
+            pose.position.y = entry.get('y_mm', 0.0) / 1000.0
+            pose.position.z = entry.get('z_mm', 0.0) / 1000.0
+            pose.orientation.w = 1.0
+            base_pose = self._transform_pose_to_base(pose, entry.get('frame_id', frame_id))
+            tp = pose_to_task_pose(base_pose)
+            tp.rz1_deg = entry.get('rz1_deg', tp.rz1_deg)
+            tp.ry_deg = entry.get('ry_deg', tp.ry_deg)
+            tp.rz2_deg = entry.get('rz2_deg', tp.rz2_deg)
+            return tp
+        # targets_yaml_path 에 없으면 target_key 자체를 TF 프레임 이름으로
+        # 취급한다 (예: tool_rack 의 slot_* 프레임 — NIS §11.4). 그 프레임의
+        # 원점 자세를 그대로 접근 자세로 쓴다 — 랙 슬롯은 CAD 로 고정된 자세를
+        # 갖고 있어 방향까지 함께 얻을 수 있다.
+        identity = Pose()
+        identity.orientation.w = 1.0
+        base_pose = self._transform_pose_to_base(identity, target_key)
+        return pose_to_task_pose(base_pose)
 
     def _execute_pick_place(self, goal_handle):
         goal = goal_handle.request
@@ -463,12 +470,12 @@ class RobotSkillNode(Node):
 
         try:
             target = self._target_task_pose(goal.target_key, goal.frame_id)
-        except KeyError:
+        except Exception as e:
             goal_handle.abort()
             result.base = self._result_base(
                 False, ErrorCode.E_INVALID_GOAL,
-                f'target_key "{goal.target_key}" 를 targets_yaml_path 에서 찾을 수 없음',
-                started_at)
+                f'target_key "{goal.target_key}" 를 targets_yaml_path 에서도, TF 프레임으로도 '
+                f'찾을 수 없음: {e}', started_at)
             return result
 
         approach = TaskPose(target.x_mm, target.y_mm,
@@ -511,7 +518,8 @@ class RobotSkillNode(Node):
             # 이 그리퍼 드라이버는 폭 되읽기를 노출하지 않는다 — 명령값을
             # 그대로 measured_width_mm 에 반영한다 (실측 아님. 이전
             # tool_manager 구현과 동일한 하드웨어 제약).
-            tol = self.get_parameter('grip_width_tolerance_mm').value
+            tol = goal.width_tolerance_mm if goal.width_tolerance_mm > 0.0 else \
+                self.get_parameter('grip_width_tolerance_mm').value
             grip_verified = abs(measured - goal.expected_width_mm) <= tol
 
         feedback(4, 90.0)
