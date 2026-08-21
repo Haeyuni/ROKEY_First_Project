@@ -1,7 +1,7 @@
-# 네일 셀 웹 시스템 — Day1
+# 네일 셀 웹 시스템 — Day1+2
 
-`docs/web.md` §8.1 인도 순서 1~3(안전 배너, 강성 히트맵, 세션 시작/취소)의
-축소 불가 항목을 우선 구현했습니다.
+`docs/web.md` §8.1 인도 순서 1~5(안전 배너, 강성 히트맵, 세션 시작/취소,
+공정 진행 표시, 판정 표시)를 구현했습니다.
 
 ## 아키텍처 (하이브리드)
 
@@ -20,7 +20,7 @@ React ──REST + /ws───────▶ FastAPI ──roslibpy(같은 909
 - DB는 `docs/web.md` §5 원문(SQLite)이 아니라 **Postgres**로 결정했습니다
   (사용자 지시).
 
-## 구현 범위 (Day1)
+## 구현 범위
 
 **백엔드** (`web/backend`)
 - `GET /api/recipes` (FR-01)
@@ -33,6 +33,13 @@ React ──REST + /ws───────▶ FastAPI ──roslibpy(같은 909
   스냅샷 즉시 전송(IR-05)
 - Postgres 스키마: `sessions`/`stiffness_maps`/`verdicts`/`events`
   (web.md §5, `app/models.py`)
+- **(Day2)** `app/persistence.py` — `ValidationResult` 수신마다 저장
+  (FR-41/42, DR-01/02), `StiffnessMap`을 세션당 1건으로 upsert(FR-43),
+  `ProcessState` 전이를 이벤트로 저장(FR-44)
+- **(Day2)** RunSession 최종 result 수신 시 `sessions.result_code`/
+  `finished_at`/`abort_reason` 반영 + `/ws`에 `result` 브로드캐스트.
+  **Day1에는 이 처리가 없어서 세션이 끝나도 DB에서 "진행 중"으로 영원히
+  남아 FR-04가 이후 모든 세션 생성을 막는 결함이 있었음 — Day2에서 수정.**
 
 **프론트엔드** (`web/frontend`)
 - 안전 배너: 상단 상시 표시, `safe_to_move=false` 시 시작 버튼 비활성화,
@@ -41,10 +48,19 @@ React ──REST + /ws───────▶ FastAPI ──roslibpy(같은 909
 - 강성 히트맵: coarse/fine 크기·테두리 구분, 강성 색상 스케일, 증분 렌더링
   (FR-11~13, NFR-02)
 - WebSocket 2초 자동 재연결 (IR-06)
-- 세션 시작/취소 최소 UI (레시피·소재 선택 — 전체 폼은 Day2)
+- 세션 시작/취소 UI — 레시피·소재·형상 프로필·레이어 수·스톤 여부 (FR-02)
+- **(Day2)** `ProcessStageStepper` — 6단계(스캔/연마/브러싱/도포/경화/검사)
+  진행 표시, REWORK/PRECHECK/STONE/FINISH/ABORTED는 배지로 별도 표시(FR-10)
+- **(Day2)** `VerdictPanel` — 레이어별 3점(중앙·좌·우) PASS/FAIL/SKIP,
+  `threshold_n` 노출(FR-20/21), 재작업 대상 여부 표시(FR-23). 문구는
+  전부 "검사한 N개 지점이 기준을 만족함"으로 고정 — "손톱 전체가 경화됨"
+  같은 과대 서술 금지(FR-22)
+- **(Day2)** `SessionResultBanner` — 세션 종료 결과(`RunSession.result`) 표시
+- **(Day2)** FR-33: `last_error.severity >= SEV_SAFETY`면 세션 시작/취소
+  UI 전체를 잠금
 
-Day2/3 항목(6단계 진행 상세 표시, 3점 판정, 힘 그래프, DB 반영 완성,
-에러 코드 최종 확정 등)은 범위 밖입니다.
+Day3 항목(힘 그래프, `GET /sessions/{id}/report`, 경계 폴리곤 오버레이,
+에러 코드 한국어 문구 최종 확정, 30분 메모리 누수 점검 등)은 범위 밖입니다.
 
 ## 실행
 
@@ -97,8 +113,13 @@ NIS §10 `mock_robot_driver`(로봇 동역학까지 흉내내는 정식 mock)를
 
 - 백엔드: 전체 모듈 import 성공, FastAPI 앱 구성 성공, `/api/recipes`
   라우터 단독 스모크테스트 통과, ORM 모델 → Postgres DDL 컴파일 성공
-  (`CreateTable(...).compile(dialect=postgresql.dialect())`)
-- 프론트엔드: `npm run build` 성공 (tsc 타입체크 + vite 프로덕션 빌드)
+  (`CreateTable(...).compile(dialect=postgresql.dialect())`) — Day2 이후도
+  동일하게 재확인
+- 프론트엔드: `npm run build` 성공 (tsc 타입체크 + vite 프로덕션 빌드) —
+  Day2 이후도 동일하게 재확인
+- **`persistence.py`(verdict/map 저장, 세션 종료 반영)와 `/ws`의 `verdict`/
+  `result` 처리는 Postgres·rosbridge가 없어 실제 데이터로 실행 검증은 못
+  했습니다.** 코드 리뷰 + DDL 호환성 확인까지만 했습니다.
 - `nail_msgs` colcon 빌드는 이 샌드박스의 anaconda/시스템 python3 충돌로
   실패했습니다 (`ModuleNotFoundError: catkin_pkg`, cmake가 anaconda
   python3를 고정 참조). 웹 개발 범위 밖의 환경 이슈이므로 로컬 개발 머신에서
@@ -115,5 +136,9 @@ NIS §10 `mock_robot_driver`(로봇 동역학까지 흉내내는 정식 mock)를
   실질적으로 같은 효과지만, "정확히 3초"가 보장되는 타임아웃은 아닙니다.
 - `recipes.yaml`은 저장소 어디에도 없어 `web/backend/app/data/recipes.yaml`에
   개발용 스텁을 만들었습니다. 실제 레시피 정의가 나오면 교체하세요.
-- 세션 종료(RunSession result) → DB 반영, 판정/강성맵/이벤트 저장,
-  에러 코드 한국어 문구 최종본은 Day2/3 작업입니다.
+- **RunSession result에는 `session_id` 필드가 없습니다** (IDS §7.1). 그래서
+  `SessionResultBanner`는 특정 세션과 엄격히 연결하지 않고 "가장 최근에 온
+  결과"를 보여줍니다 — 동시에 여러 세션이 겹칠 일이 없는 이 프로젝트
+  전제(단일 운영자, FR-04로 세션 1개 제한)에서는 문제되지 않습니다.
+- `GET /api/sessions/{id}/report`, 힘 그래프, 경계 폴리곤 오버레이,
+  에러 코드 한국어 문구 최종본, 30분 메모리 누수 점검은 Day3 작업입니다.

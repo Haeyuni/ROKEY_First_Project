@@ -56,9 +56,11 @@ class RosBridgeClient:
         port: int,
         loop: asyncio.AbstractEventLoop,
         on_relay_message: Callable[[str, dict], None],
+        on_session_result: Callable[[str, dict], None],
     ) -> None:
         self._loop = loop
         self._on_relay_message = on_relay_message
+        self._on_session_result = on_session_result
         self.ros = roslibpy.Ros(host=host, port=port)
         self._topics: dict[str, roslibpy.Topic] = {}
         self._action_client: roslibpy.ActionClient | None = None
@@ -132,13 +134,20 @@ class RosBridgeClient:
         if self._action_client is None:
             raise RunSessionTimeoutError("rosbridge 미연결 — 액션 클라이언트 없음")
 
+        session_id = goal["session_id"]
         first_response = threading.Event()
 
         def _feedback(_msg: dict) -> None:
             first_response.set()
 
-        def _result(_msg: dict) -> None:
+        def _result(msg: dict) -> None:
+            # RunSession의 진짜 종료(COMPLETED/FAILED/ABORTED_SAFETY/CANCELLED).
+            # 이걸 놓치면 세션이 DB에서 영원히 "진행 중"으로 남아 FR-04
+            # (중복 세션 거부)가 이후 모든 세션 생성을 막아버린다.
             first_response.set()
+            with self._goal_lock:
+                self._active_goal_ids.pop(session_id, None)
+            self._loop.call_soon_threadsafe(self._on_session_result, session_id, msg)
 
         def _err(_msg: dict) -> None:
             first_response.set()

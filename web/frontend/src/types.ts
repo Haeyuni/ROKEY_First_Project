@@ -13,6 +13,13 @@ export interface SafetyState {
   reason: string;
 }
 
+// ErrorCode.msg 심각도 상수 (IDS §3.1).
+export const SEV_NONE = 0;
+export const SEV_WARN = 1;
+export const SEV_RETRY = 2;
+export const SEV_ABORT = 3;
+export const SEV_SAFETY = 4; // FR-33: 이 이상이면 진행 UI를 잠근다
+
 export interface ProcessState {
   session_id: string;
   stage: string;
@@ -47,14 +54,42 @@ export interface StiffnessMap {
   separation_margin: number;
 }
 
+// ValidationResult.msg (IDS §3.10). FR-20/21: 3점 판정 + 판정 시점 임계값.
+export interface ValidationResult {
+  session_id: string;
+  layer_index: number;
+  point_label: "center" | "left" | "right" | string;
+  position: Point;
+  release_force_n: number;
+  stiffness_n_per_mm: number;
+  threshold_n: number;
+  result: "PASS" | "FAIL" | "SKIP" | string;
+  measured_at: unknown;
+}
+
+// RunSession.action result (IDS §7.1).
+export interface RunSessionResult {
+  success: boolean;
+  result_code:
+    | "COMPLETED"
+    | "COMPLETED_WITH_WARN"
+    | "FAILED"
+    | "ABORTED_SAFETY"
+    | "CANCELLED"
+    | string;
+  total_rework: number;
+  warn_count: number;
+  final_error: { code: string; severity: number; detail: string };
+}
+
 export type WsEnvelope =
   | { type: "safety"; data: SafetyState }
   | { type: "state"; data: ProcessState }
   | { type: "map"; data: StiffnessMap }
-  | { type: "verdict"; data: unknown }
+  | { type: "verdict"; data: ValidationResult }
   | { type: "force"; data: unknown }
   | { type: "error"; data: unknown }
-  | { type: "result"; data: unknown };
+  | { type: "result"; data: RunSessionResult };
 
 export interface Recipe {
   id: string;
