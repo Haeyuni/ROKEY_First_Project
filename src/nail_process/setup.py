@@ -23,6 +23,7 @@ setup(
             'sanding_node = nail_process.sanding_node:main',
             'brushing_node = nail_process.brushing_node:main',
             'coating_node = nail_process.coating_node:main',
+            'curing_node = nail_process.curing_node:main',
         ],
     },
 )
