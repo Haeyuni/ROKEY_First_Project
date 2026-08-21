@@ -1127,8 +1127,11 @@ class RobotSkillNode(Node):
         else:
             self._probe_retreat(approach_pose)
 
-        pos = Point(x=target_base.x, y=target_base.y, z=target_base.z)
-        point.position = pos
+        # IDS StiffnessPoint.position 은 "nail_frame 기준, mm" 로 명시돼 있다
+        # (ProbePoint.target 의 geometry_msgs/Point 는 TF 표준대로 m 다) —
+        # 여기서만 m -> mm 로 바꾼다.
+        point.position = Point(x=target_base.x * 1000.0, y=target_base.y * 1000.0,
+                                z=target_base.z * 1000.0)
         point.stiffness_n_per_mm = stiffness or 0.0
         point.release_force_n = release_force_n
         point.contact_depth_mm = travelled
