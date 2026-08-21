@@ -175,9 +175,12 @@ class SafetyMonitorNode(Node):
         dust_on = self._dust_on
 
         try:
-            estop_raw = self._adapter.read_digital_input(estop_ch)
-            handrest_raw = self._adapter.read_digital_input(handrest_ch)
-            dust_raw = self._adapter.read_digital_input(dust_ch)
+            estop_raw = self._call_with_timeout(
+                lambda: self._adapter.read_digital_input(estop_ch), timeout_s)
+            handrest_raw = self._call_with_timeout(
+                lambda: self._adapter.read_digital_input(handrest_ch), timeout_s)
+            dust_raw = self._call_with_timeout(
+                lambda: self._adapter.read_digital_input(dust_ch), timeout_s)
             estop_pressed = estop_raw if estop_hi else (not estop_raw)
             handrest_seated = handrest_raw if handrest_hi else (not handrest_raw)
             dust_on = dust_raw if dust_hi else (not dust_raw)
