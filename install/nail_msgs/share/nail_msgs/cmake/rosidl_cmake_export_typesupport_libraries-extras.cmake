@@ -1,0 +1,1 @@
+/home/rokey/ws_cobot_pjt/ws_cobot1/build/nail_msgs/rosidl_cmake/rosidl_cmake_export_typesupport_libraries-extras.cmake

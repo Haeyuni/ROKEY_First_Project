@@ -1,0 +1,1 @@
+/home/rokey/ws_cobot_pjt/ws_cobot1/build/nail_msgs/rosidl_typesupport_fastrtps_cpp/nail_msgs/msg/rosidl_typesupport_fastrtps_cpp__visibility_control.h
