@@ -72,6 +72,19 @@ def convex_hull(points_xy):
     return lower[:-1] + upper[:-1]
 
 
+def polygon_area(polygon_xy):
+    """신발끈 공식(shoelace). 항상 양수로 반환한다."""
+    n = len(polygon_xy)
+    if n < 3:
+        return 0.0
+    area = 0.0
+    for i in range(n):
+        x1, y1 = polygon_xy[i]
+        x2, y2 = polygon_xy[(i + 1) % n]
+        area += x1 * y2 - x2 * y1
+    return abs(area) / 2.0
+
+
 def centroid(points_xy):
     if not points_xy:
         return (0.0, 0.0)
@@ -135,8 +148,14 @@ def point_to_polygon_distance(p, polygon_xy):
 
 
 def raster_fill(polygon_xy, pitch_mm, margin_mm=0.0):
-    """polygon_xy 를 (margin_mm > 0 이면 바깥으로 그만큼 확장해) 채우는
-    지그재그(라운모어) 경로. 한 줄씩 방향을 뒤집어 왕복 이송 거리를 줄인다.
+    """polygon_xy 를 채우는 지그재그(라운모어) 경로. 한 줄씩 방향을 뒤집어
+    왕복 이송 거리를 줄인다.
+
+    margin_mm > 0: 바깥으로 그만큼 확장 (예: brushing 의 coverage_margin_mm).
+    margin_mm < 0: 안쪽으로 |margin_mm| 만큼 침식 — 다각형 안쪽이면서 모든
+    변에서 |margin_mm| 이상 떨어진 점만 포함한다 (예: coating 의
+    boundary_offset_mm, 큐티클 번짐 방지). 진짜 폴리곤 오프셋(Minkowski)이
+    아니라 점 단위 거리 필터라 각진 부분에서 살짝 보수적일 수 있다.
     """
     if len(polygon_xy) < 3:
         return []
@@ -146,9 +165,12 @@ def raster_fill(polygon_xy, pitch_mm, margin_mm=0.0):
     y0, y1 = min(ys) - margin_mm, max(ys) + margin_mm
 
     def included(pt):
-        if point_in_polygon(pt[0], pt[1], polygon_xy):
-            return True
-        return margin_mm > 0.0 and point_to_polygon_distance(pt, polygon_xy) <= margin_mm
+        inside = point_in_polygon(pt[0], pt[1], polygon_xy)
+        if margin_mm == 0.0:
+            return inside
+        if margin_mm > 0.0:
+            return inside or point_to_polygon_distance(pt, polygon_xy) <= margin_mm
+        return inside and point_to_polygon_distance(pt, polygon_xy) >= -margin_mm
 
     points = []
     y = y0
