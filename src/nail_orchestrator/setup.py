@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'nail_process'
+package_name = 'nail_orchestrator'
 
 setup(
     name=package_name,
@@ -15,17 +15,12 @@ setup(
     zip_safe=True,
     maintainer='jje',
     maintainer_email='jje320594@gmail.com',
-    description='B계층 공정 노드 (NIS §6)',
+    description='session_orchestrator_node (NIS §8, C계층)',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'sanding_node = nail_process.sanding_node:main',
-            'brushing_node = nail_process.brushing_node:main',
-            'coating_node = nail_process.coating_node:main',
-            'curing_node = nail_process.curing_node:main',
-            'inspection_node = nail_process.inspection_node:main',
-            'stone_node = nail_process.stone_node:main',
+            'session_orchestrator_node = nail_orchestrator.session_orchestrator_node:main',
         ],
     },
 )

@@ -1,0 +1,35 @@
+# web_bridge_node 설정 (NIS §9). SDS §3.6 공통 규약대로 config/<node_name>.yaml
+# 하나에 담아 launch 에서 주입한다.
+#
+# 이 값들은 rosbridge_websocket 노드가 그대로 쓰는 파라미터가 아니다 — 사람이
+# 읽기 편한 형태로 여기 적어두면, web_bridge.launch.py 가 시작할 때 이 파일을
+# 읽어 rosbridge 가 실제로 요구하는 glob 문자열 형식
+# ("['/a', '/b']", 실측 확인: RobotWebTools/rosbridge_suite ros2 브랜치의
+# rosbridge_websocket.py parse_glob_string())으로 변환해 넣는다.
+
+web_bridge:
+  websocket_port: 9090
+
+  # NIS §9 "구성" 표의 5개 중계 토픽. rosbridge topics_glob 화이트리스트로
+  # 그대로 들어간다 — 여기 없는 토픽은 웹에서 구독할 수 없다.
+  relay_topics:
+    - /process/status
+    - /safety/status
+    - /validation/result
+    - /stiffness/map
+    - /force/data_ui
+
+  # 참고용 상한 표기. rosbridge 는 구독 시 클라이언트가 요청하는
+  # throttle_rate 를 그대로 따르는 클라이언트-주도 방식이라 서버가 이 값을
+  # 강제하지는 않는다 — 다만 relay_topics 5개는 전부 소스 노드 자체가 이미
+  # 20Hz 이하로 발행하므로(§3.6 표 참고) 이 상한은 설계상 자동으로 지켜진다.
+  max_relay_rate_hz: 20
+
+  # true 금지 (NIS §9 경고) — /force/data(100Hz)를 topics_glob 에 추가해
+  # 웹에 노출한다. 디버깅 전용.
+  allow_force_raw: false
+
+  # NIS 표에는 없지만 "계약을 좁게 유지한다"(§9 역할)를 실제로 강제하려면
+  # 필요한 값 — Web → ROS2 로 허용되는 유일한 액션/서비스.
+  allowed_action: /session/run
+  allowed_service: /safety/reset

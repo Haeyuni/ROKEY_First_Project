@@ -1092,8 +1092,12 @@ class RobotSkillNode(Node):
             samples.append((travelled, r.fz_n))
             if abs(r.fz_n) >= contact_threshold:
                 contacted = True
-                break
             if abs(r.fz_n) >= max_force:
+                # SDS §5.1: "probe_max_depth_mm 또는 probe_max_force_n 도달까지
+                # 계속 하강" — contact_threshold 를 넘긴 직후 멈추면 회귀에 쓸
+                # 표본이 1개뿐이라 compute_stiffness 가 거의 항상 실패한다.
+                # 접촉 이후에도 두 한계 중 하나에 닿을 때까지 계속 눌러
+                # 하강 구간 전체로 회귀한다.
                 break
 
         point = StiffnessPoint()
@@ -1138,11 +1142,16 @@ class RobotSkillNode(Node):
         else:
             self._probe_retreat(approach_pose)
 
-        # IDS StiffnessPoint.position 은 "nail_frame 기준, mm" 로 명시돼 있다
-        # (ProbePoint.target 의 geometry_msgs/Point 는 TF 표준대로 m 다) —
-        # 여기서만 m -> mm 로 바꾼다.
-        point.position = Point(x=target_base.x * 1000.0, y=target_base.y * 1000.0,
-                                z=target_base.z * 1000.0)
+        # IDS StiffnessPoint.position 은 "nail_frame 또는 nail_local_frame 기준,
+        # mm" 로 명시돼 있다 — 호출자가 goal 을 보낼 때 쓴 그 frame_id 기준이어야
+        # 한다. target_base 는 실제 이동 명령에 쓰려고 base 프레임으로 변환해둔
+        # 값이라 여기 쓰면 안 된다(잘못 쓰면 ScanBoundary 의 boundary_polygon 이
+        # base 좌표인데 frame_id="nail_frame" 이라고 잘못 라벨링된 채로 나가,
+        # 이걸 그대로 쓰는 모든 공정 노드가 엉뚱한 위치로 이동하게 된다).
+        # 하강 중 XY 는 움직이지 않으므로 접촉점의 XY 는 원래 goal.target 과
+        # 같다 — goal.frame_id 기준값을 그대로 mm 로 변환해 쓴다.
+        point.position = Point(x=goal.target.x * 1000.0, y=goal.target.y * 1000.0,
+                                z=goal.target.z * 1000.0)
         point.stiffness_n_per_mm = stiffness or 0.0
         point.release_force_n = release_force_n
         point.contact_depth_mm = travelled
