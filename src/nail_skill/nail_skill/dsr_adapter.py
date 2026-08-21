@@ -90,6 +90,14 @@ class DsrAdapter:
         self._set_tcp = dsr.set_tcp
         self._get_tcp = dsr.get_tcp
         self._posx = posx
+        # DSR_ROBOT2 는 DRL(구 로봇 언어) 함수명을 그대로 옮긴 것이므로
+        # get_digital_input(index)/get_robot_state() 이름을 신뢰한다(공식
+        # 파이썬 API 목록의 GPIO/System 분류에 실제로 존재 — safety_monitor
+        # §7.0 처리 참고). dsr_msgs2 의 RobotState 토픽 정확한 이름은 이
+        # 저장소에서 확인할 방법이 없어, 이미 검증된 동기 폴링 함수로
+        # 하트비트를 대신한다 — 응답이 오면 통신 생존으로 본다.
+        self._get_digital_input = dsr.get_digital_input
+        self._get_robot_state = dsr.get_robot_state
 
         # DSR_ROBOT2 의 각 wrapper 호출은 내부적으로 self._dr_node 를 임시
         # executor 에 물려 spin_until_future_complete 한다. 이 dr_node 를 두
@@ -237,6 +245,20 @@ class DsrAdapter:
         if pos is None:
             raise DsrAdapterError('get_current_posx 응답 없음')
         return TaskPose(pos[0], pos[1], pos[2], pos[3], pos[4], pos[5])
+
+    # --- 안전 감시용 읽기 전용 폴링 (safety_monitor, NIS §7) --------------------
+    def read_digital_input(self, channel: int) -> bool:
+        with self._lock:
+            val = self._get_digital_input(channel)
+        if val is None:
+            raise DsrAdapterError(f'get_digital_input({channel}) 응답 없음')
+        return bool(val)
+
+    def read_robot_state(self):
+        """컨트롤러가 응답하는지만 본다 — 반환값 자체는 쓰지 않는다.
+        예외 없이 리턴하면 통신 생존, 예외/타임아웃이면 comm_ok=False."""
+        with self._lock:
+            return self._get_robot_state()
 
     # --- tool / TCP ------------------------------------------------------------
     def set_tcp(self, name: str):
