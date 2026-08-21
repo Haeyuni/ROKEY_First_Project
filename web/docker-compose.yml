@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nail
+      POSTGRES_PASSWORD: nail
+      POSTGRES_DB: nail_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - nail_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nail -d nail_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  nail_pgdata:

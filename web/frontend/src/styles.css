@@ -1,0 +1,145 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", "Noto Sans KR", sans-serif;
+  background: #111418;
+  color: #e6e6e6;
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app__header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.app__main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 16px;
+}
+
+@media (max-width: 900px) {
+  .app__main {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  background: #1a1f26;
+  border: 1px solid #2a3138;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+/* FR-30: 상단 상시 배너 */
+.safety-banner {
+  padding: 10px 16px;
+  font-weight: 600;
+}
+
+.safety-banner--ok {
+  background: #1b3a24;
+  color: #6fe08a;
+}
+
+.safety-banner--blocked {
+  background: #4a1414;
+  color: #ff8a8a;
+}
+
+.safety-banner--unknown {
+  background: #3a3418;
+  color: #e0c96f;
+}
+
+.safety-banner__faults {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  font-weight: 400;
+}
+
+/* FR-34: UV 상시 경고 */
+.uv-banner {
+  background: #4a3a00;
+  color: #ffd24a;
+  padding: 8px 16px;
+  font-size: 0.9rem;
+  border-top: 1px solid #6b5300;
+}
+
+.session-start {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.session-start__message {
+  flex-basis: 100%;
+  font-size: 0.85rem;
+  color: #9ab;
+}
+
+.process-state {
+  margin-top: 12px;
+  font-size: 0.9rem;
+  color: #ccc;
+}
+
+.heatmap__canvas {
+  background: #05070a;
+  border: 1px solid #2a3138;
+  border-radius: 4px;
+  width: 100%;
+  max-width: 480px;
+  height: auto;
+}
+
+.heatmap__legend {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 0.8rem;
+  color: #aab;
+  align-items: center;
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #888;
+  margin-right: 4px;
+}
+
+.legend-dot--fine {
+  width: 10px;
+  height: 10px;
+  border: 1px solid #fff;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
+.heatmap__warning {
+  margin-top: 8px;
+  color: #ff8a8a;
+  font-size: 0.85rem;
+}
