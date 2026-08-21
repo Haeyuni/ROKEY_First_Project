@@ -1,1 +1,0 @@
-/home/rokey/ws_cobot_pjt/ws_cobot1/build/nail_msgs/rosidl_typesupport_fastrtps_c/nail_msgs/msg/detail/tool_state__rosidl_typesupport_fastrtps_c.h

@@ -1,1 +1,0 @@
-/home/rokey/ws_cobot_pjt/ws_cobot1/build/nail_msgs/rosidl_generator_c/nail_msgs/msg/error_code.h

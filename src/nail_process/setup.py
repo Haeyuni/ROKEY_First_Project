@@ -24,6 +24,7 @@ setup(
             'brushing_node = nail_process.brushing_node:main',
             'coating_node = nail_process.coating_node:main',
             'curing_node = nail_process.curing_node:main',
+            'inspection_node = nail_process.inspection_node:main',
         ],
     },
 )

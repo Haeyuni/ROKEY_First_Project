@@ -1,1 +1,0 @@
-/home/rokey/ws_cobot_pjt/ws_cobot1/build/nail_msgs/ament_cmake_core/nail_msgsConfig-version.cmake
