@@ -32,6 +32,7 @@ from tf2_ros import Buffer, TransformListener
 
 from nail_msgs.action import ContactPath, LateralContact, MoveTo, PickPlace, ProbePoint
 from nail_msgs.msg import ErrorCode, ForceSample, ResultBase, SafetyState, StiffnessPoint
+from nail_perception.geometry2d import point_in_polygon
 
 from .conversions import TaskPose, pose_to_task_pose, task_pose_to_ros_pose
 from .dsr_adapter import DsrAdapter, DsrAdapterError
@@ -637,10 +638,21 @@ class RobotSkillNode(Node):
 
         passes = max(1, goal.passes)
         n_wp = len(goal.waypoints)
+        allowed_xy = [(pt.x, pt.y) for pt in goal.allowed_polygon]
         aborted = None
         for pass_idx in range(passes):
             for wp_idx, wp in enumerate(goal.waypoints):
                 if aborted:
+                    missed.append(pass_idx * n_wp + wp_idx)
+                    continue
+                # TCP 이탈 감시: allowed_polygon 이 주어졌으면 그 밖의 waypoint 는
+                # 아예 이동하지 않고 건너뛴다 (호출자의 궤적 생성 버그에 대한
+                # 방어선 — IDS ContactPath.allowed_polygon 주석 그대로).
+                if len(allowed_xy) >= 3 and \
+                        not point_in_polygon(wp.position.x, wp.position.y, allowed_xy):
+                    self.get_logger().warn(
+                        f'ContactPath: waypoint {wp_idx} ({wp.position.x:.4f},'
+                        f'{wp.position.y:.4f}) 가 allowed_polygon 밖 — 건너뜀')
                     missed.append(pass_idx * n_wp + wp_idx)
                     continue
                 try:

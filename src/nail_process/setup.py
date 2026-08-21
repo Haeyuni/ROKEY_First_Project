@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'sanding_node = nail_process.sanding_node:main',
+            'brushing_node = nail_process.brushing_node:main',
         ],
     },
 )

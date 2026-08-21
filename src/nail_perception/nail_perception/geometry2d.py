@@ -113,6 +113,62 @@ def ray_polygon_distance(origin_xy, direction_xy, polygon_xy, want='nearest'):
     return min(hits) if want == 'nearest' else max(hits)
 
 
+def _point_segment_distance(p, a, b):
+    px, py = p
+    ax, ay = a
+    bx, by = b
+    dx, dy = bx - ax, by - ay
+    if dx == 0.0 and dy == 0.0:
+        return math.hypot(px - ax, py - ay)
+    t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    cx, cy = ax + t * dx, ay + t * dy
+    return math.hypot(px - cx, py - cy)
+
+
+def point_to_polygon_distance(p, polygon_xy):
+    n = len(polygon_xy)
+    if n == 0:
+        return float('inf')
+    return min(_point_segment_distance(p, polygon_xy[i], polygon_xy[(i + 1) % n])
+               for i in range(n))
+
+
+def raster_fill(polygon_xy, pitch_mm, margin_mm=0.0):
+    """polygon_xy 를 (margin_mm > 0 이면 바깥으로 그만큼 확장해) 채우는
+    지그재그(라운모어) 경로. 한 줄씩 방향을 뒤집어 왕복 이송 거리를 줄인다.
+    """
+    if len(polygon_xy) < 3:
+        return []
+    xs = [p[0] for p in polygon_xy]
+    ys = [p[1] for p in polygon_xy]
+    x0, x1 = min(xs) - margin_mm, max(xs) + margin_mm
+    y0, y1 = min(ys) - margin_mm, max(ys) + margin_mm
+
+    def included(pt):
+        if point_in_polygon(pt[0], pt[1], polygon_xy):
+            return True
+        return margin_mm > 0.0 and point_to_polygon_distance(pt, polygon_xy) <= margin_mm
+
+    points = []
+    y = y0
+    row = 0
+    while y <= y1 + 1e-6:
+        row_pts = []
+        x = x0
+        while x <= x1 + 1e-6:
+            pt = (x, y)
+            if included(pt):
+                row_pts.append(pt)
+            x += pitch_mm
+        if row % 2 == 1:
+            row_pts.reverse()
+        points.extend(row_pts)
+        y += pitch_mm
+        row += 1
+    return points
+
+
 def pca_major_axis_deg(points_xy):
     """점군의 1주성분 방향(도, X축 기준 반시계). 손톱 "길이축" 추정에 쓴다."""
     if len(points_xy) < 2:
