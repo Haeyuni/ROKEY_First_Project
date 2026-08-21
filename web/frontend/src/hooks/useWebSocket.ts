@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { WS_URL } from "../api";
 import type {
+  ForceSample,
   ProcessState,
   RunSessionResult,
   SafetyState,
@@ -18,6 +19,7 @@ interface RosState {
   map: StiffnessMap | null;
   verdicts: ValidationResult[];
   sessionResult: RunSessionResult | null;
+  latestForce: ForceSample | null;
 }
 
 export function useRosWebSocket(): RosState {
@@ -27,6 +29,7 @@ export function useRosWebSocket(): RosState {
   const [map, setMap] = useState<StiffnessMap | null>(null);
   const [verdicts, setVerdicts] = useState<ValidationResult[]>([]);
   const [sessionResult, setSessionResult] = useState<RunSessionResult | null>(null);
+  const [latestForce, setLatestForce] = useState<ForceSample | null>(null);
 
   // verdict는 이벤트 스트림이라 map처럼 세션 전체를 다시 안 보내준다 —
   // session_id가 바뀌면(새 세션 시작) 프론트에서 직접 리스트를 비운다.
@@ -79,8 +82,13 @@ export function useRosWebSocket(): RosState {
           case "result":
             setSessionResult(msg.data);
             break;
+          case "force":
+            // FR-15: 20Hz 원본은 그대로 상태로 흘리고, 누적/링버퍼는
+            // ForceGraph 쪽에서 useRef로 관리한다(NFR-03, 재렌더 최소화).
+            setLatestForce(msg.data);
+            break;
           default:
-            // force/error — Day3에서 소비 (힘 그래프, 에러 배너)
+            // error — 별도 채널 없음, ProcessState.last_error로 충분
             break;
         }
       };
@@ -105,5 +113,5 @@ export function useRosWebSocket(): RosState {
     };
   }, []);
 
-  return { connected, safety, processState, map, verdicts, sessionResult };
+  return { connected, safety, processState, map, verdicts, sessionResult, latestForce };
 }

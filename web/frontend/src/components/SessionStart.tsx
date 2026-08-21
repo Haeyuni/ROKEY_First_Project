@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { cancelSession, createSession, fetchRecipes } from "../api";
 import type { Recipe } from "../types";
 
@@ -11,7 +11,11 @@ interface Props {
 }
 
 // FR-01/02: 레시피·소재·형상·레이어 수를 선택해 세션을 생성한다.
-export function SessionStart({ safeToMove, locked, activeSessionId }: Props) {
+export const SessionStart = memo(function SessionStart({
+  safeToMove,
+  locked,
+  activeSessionId,
+}: Props) {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [recipeId, setRecipeId] = useState("");
   const [shapeProfileId, setShapeProfileId] = useState("default");
@@ -153,4 +157,4 @@ export function SessionStart({ safeToMove, locked, activeSessionId }: Props) {
       {message && <p className="session-start__message">{message}</p>}
     </div>
   );
-}
+});

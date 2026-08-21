@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import type { StiffnessMap, StiffnessPoint } from "../types";
 
 // scan_area_x/y_mm(16×13) + scan_margin_mm(2) 기준 여유를 둔 고정 뷰포트.
@@ -51,7 +51,8 @@ interface Props {
 
 // FR-11: 스캔 측정 점을 실시간 히트맵으로. NFR-02: 점 추가 시 전체 재렌더
 // 없이 증분 렌더링 — 이미 그린 점 개수를 ref로 추적하고 새 점만 그린다.
-export function StiffnessHeatmap({ map }: Props) {
+// memo: App의 20Hz force 갱신 때 map prop이 그대로면 다시 그리지 않는다.
+export const StiffnessHeatmap = memo(function StiffnessHeatmap({ map }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawnCountRef = useRef(0);
   const sessionRef = useRef<string | null>(null);
@@ -97,4 +98,4 @@ export function StiffnessHeatmap({ map }: Props) {
       )}
     </div>
   );
-}
+});

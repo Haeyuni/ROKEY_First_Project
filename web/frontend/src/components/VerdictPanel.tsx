@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { ValidationResult } from "../types";
 
 const RESULT_LABEL_KO: Record<string, string> = {
@@ -12,7 +13,7 @@ interface Props {
 
 // FR-20/21: 레이어별 3점(중앙·좌·우) 판정 + 판정 시점 threshold_n 노출.
 // FR-22: "손톱 전체가 경화됨"이라고 쓰지 않는다 — 3점 결과라는 한계를 문구로 명시.
-export function VerdictPanel({ verdicts }: Props) {
+export const VerdictPanel = memo(function VerdictPanel({ verdicts }: Props) {
   if (verdicts.length === 0) {
     return <p className="verdict-panel__empty">아직 판정 결과가 없습니다</p>;
   }
@@ -75,4 +76,4 @@ export function VerdictPanel({ verdicts }: Props) {
         })}
     </div>
   );
-}
+});

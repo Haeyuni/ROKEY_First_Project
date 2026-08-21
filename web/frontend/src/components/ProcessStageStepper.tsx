@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { ProcessState } from "../types";
 
 // FR-10: "6단계 공정 진행 상황" — B계층 핵심 공정 6개(NIS §2 인터페이스
@@ -18,7 +19,7 @@ interface Props {
   processState: ProcessState | null;
 }
 
-export function ProcessStageStepper({ processState }: Props) {
+export const ProcessStageStepper = memo(function ProcessStageStepper({ processState }: Props) {
   const stage = processState?.stage ?? "IDLE";
   // REWORK는 INSPECT를 다시 도는 것이므로 INSPECT를 활성 단계로 취급(NIS §8 동작).
   const lookupStage = stage === "REWORK" ? "INSPECT" : stage;
@@ -65,4 +66,4 @@ export function ProcessStageStepper({ processState }: Props) {
       )}
     </div>
   );
-}
+});

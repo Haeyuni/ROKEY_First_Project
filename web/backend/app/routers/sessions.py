@@ -17,9 +17,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_db
-from ..models import SessionRecord
+from ..models import SessionRecord, StiffnessMapRecord, VerdictRecord
 from ..ros_bridge import RunSessionTimeoutError, make_run_session_goal, new_session_id
-from ..schemas import ALLOWED_TARGET_MATERIALS, CreateSessionRequest, CreateSessionResponse
+from ..schemas import (
+    ALLOWED_TARGET_MATERIALS,
+    CreateSessionRequest,
+    CreateSessionResponse,
+    SessionReportResponse,
+    StiffnessMapOut,
+)
 
 logger = logging.getLogger("nail_web.sessions")
 
@@ -104,5 +110,49 @@ async def cancel_session(
     if not cancelled:
         raise HTTPException(status_code=409, detail="취소할 진행 중인 goal을 찾지 못했습니다")
 
-    # 실제 CANCELLED 확정은 RunSession result 수신 시점(Day2/3에서 처리).
+    # 실제 CANCELLED 확정은 RunSession result 수신 시점(persistence.finalize_session).
     return {"session_id": session_id, "status": "cancel_requested"}
+
+
+@router.get("/{session_id}/report", response_model=SessionReportResponse)
+async def get_session_report(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> SessionReportResponse:
+    """§4.4 GET /api/sessions/{id}/report.
+
+    web.md §2.2가 이력 조회 화면 자체는 범위 밖("SQLite 직접 조회"로
+    대체)으로 뒀지만, 이 엔드포인트는 그 대체 수단이 아니라 세션 하나의
+    스캔 결과 + 판정 결과를 API로 확인하기 위한 것이다(인수 기준 §9-6:
+    FAIL 판정의 파형과 임계값이 DB에 존재하는지 확인할 때 씀).
+    """
+    session = await db.get(SessionRecord, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+
+    map_row = (
+        await db.execute(
+            select(StiffnessMapRecord).where(StiffnessMapRecord.session_id == session_id)
+        )
+    ).scalar_one_or_none()
+
+    verdict_rows = (
+        await db.execute(
+            select(VerdictRecord)
+            .where(VerdictRecord.session_id == session_id)
+            .order_by(VerdictRecord.layer_index, VerdictRecord.point_label)
+        )
+    ).scalars().all()
+
+    return SessionReportResponse(
+        session_id=session.id,
+        recipe_id=session.recipe_id,
+        target_material=session.target_material,
+        layer_total=session.layer_total,
+        result_code=session.result_code,
+        abort_reason=session.abort_reason,
+        started_at=session.started_at,
+        finished_at=session.finished_at,
+        stiffness_map=StiffnessMapOut.model_validate(map_row) if map_row else None,
+        verdicts=list(verdict_rows),
+    )

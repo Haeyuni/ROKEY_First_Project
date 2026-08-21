@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { RunSessionResult } from "../types";
 
 const RESULT_LABEL_KO: Record<string, string> = {
@@ -13,7 +14,7 @@ interface Props {
 }
 
 // RunSession.action result — 세션 종료 시 1회 수신(web.md §4.3 "result" 타입).
-export function SessionResultBanner({ result }: Props) {
+export const SessionResultBanner = memo(function SessionResultBanner({ result }: Props) {
   if (!result) return null;
 
   const ok = result.result_code === "COMPLETED";
@@ -28,4 +29,4 @@ export function SessionResultBanner({ result }: Props) {
       {result.final_error?.code && ` · ${result.final_error.code}: ${result.final_error.detail}`}
     </div>
   );
-}
+});

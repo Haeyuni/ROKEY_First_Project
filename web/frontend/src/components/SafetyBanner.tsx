@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { SafetyState } from "../types";
 import { translateFault } from "../faultMessages";
 
@@ -9,7 +10,9 @@ interface Props {
 // FR-30: 모든 화면 상단 상시 표시. FR-31: safe_to_move=false면 시작 버튼
 // 비활성화(App.tsx가 이 컴포넌트가 넘겨주는 safe 값을 그대로 씀).
 // FR-32: active_faults 전부 한국어로, 다중 fault 동시 표시.
-export function SafetyBanner({ safety, connected }: Props) {
+// memo: App이 20Hz force 갱신으로 리렌더돼도 safety prop이 그대로면 다시
+// 그리지 않는다(NFR-01과 무관 — 순수 렌더 비용 절감 목적).
+export const SafetyBanner = memo(function SafetyBanner({ safety, connected }: Props) {
   if (!connected) {
     return (
       <div className="safety-banner safety-banner--unknown">
@@ -42,4 +45,4 @@ export function SafetyBanner({ safety, connected }: Props) {
       )}
     </div>
   );
-}
+});

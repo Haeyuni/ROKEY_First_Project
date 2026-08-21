@@ -1,3 +1,5 @@
+import { ErrorBanner } from "./components/ErrorBanner";
+import { ForceGraph } from "./components/ForceGraph";
 import { ProcessStageStepper } from "./components/ProcessStageStepper";
 import { SafetyBanner } from "./components/SafetyBanner";
 import { SessionResultBanner } from "./components/SessionResultBanner";
@@ -21,7 +23,8 @@ const ACTIVE_STAGES = new Set([
 ]);
 
 export default function App() {
-  const { connected, safety, processState, map, verdicts, sessionResult } = useRosWebSocket();
+  const { connected, safety, processState, map, verdicts, sessionResult, latestForce } =
+    useRosWebSocket();
 
   const activeSessionId =
     processState && ACTIVE_STAGES.has(processState.stage) ? processState.session_id : null;
@@ -45,12 +48,18 @@ export default function App() {
             activeSessionId={activeSessionId}
           />
           <ProcessStageStepper processState={processState} />
+          <ErrorBanner error={processState?.last_error} />
           <SessionResultBanner result={sessionResult} />
         </section>
 
         <section className="panel">
           <h2>강성 히트맵</h2>
           <StiffnessHeatmap map={map} />
+        </section>
+
+        <section className="panel">
+          <h2>접촉력</h2>
+          <ForceGraph latest={latestForce} />
         </section>
 
         <section className="panel panel--wide">

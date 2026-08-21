@@ -1,7 +1,8 @@
-# 네일 셀 웹 시스템 — Day1+2
+# 네일 셀 웹 시스템 — Day1+2+3
 
-`docs/web.md` §8.1 인도 순서 1~5(안전 배너, 강성 히트맵, 세션 시작/취소,
-공정 진행 표시, 판정 표시)를 구현했습니다.
+`docs/web.md` §8.1 인도 순서 1~7(안전 배너, 강성 히트맵, 세션 시작/취소,
+공정 진행 표시, 판정 표시, 저장, 힘 그래프) 전부를 구현했습니다.
+축소 순서(§8.2) 대상 중 경계 폴리곤 오버레이(FR-14, S등급)만 남았습니다.
 
 ## 아키텍처 (하이브리드)
 
@@ -40,6 +41,9 @@ React ──REST + /ws───────▶ FastAPI ──roslibpy(같은 909
   `finished_at`/`abort_reason` 반영 + `/ws`에 `result` 브로드캐스트.
   **Day1에는 이 처리가 없어서 세션이 끝나도 DB에서 "진행 중"으로 영원히
   남아 FR-04가 이후 모든 세션 생성을 막는 결함이 있었음 — Day2에서 수정.**
+- **(Day3)** `GET /api/sessions/{id}/report` — 세션 1건의 스캔 결과 +
+  판정 결과를 반환(§4.4). `report_note` 필드에 FR-22 문구를 고정으로
+  포함해 API 응답도 화면과 같은 표현 제약을 받도록 함
 
 **프론트엔드** (`web/frontend`)
 - 안전 배너: 상단 상시 표시, `safe_to_move=false` 시 시작 버튼 비활성화,
@@ -58,9 +62,22 @@ React ──REST + /ws───────▶ FastAPI ──roslibpy(같은 909
 - **(Day2)** `SessionResultBanner` — 세션 종료 결과(`RunSession.result`) 표시
 - **(Day2)** FR-33: `last_error.severity >= SEV_SAFETY`면 세션 시작/취소
   UI 전체를 잠금
+- **(Day3)** `ForceGraph` — 접촉력 실시간 그래프. 고정 크기 `Float32Array`
+  (600점) 링버퍼로 구현해 30분 세션에도 배열이 자라지 않음(NFR-03). 20Hz
+  소스 × 600점 = 정확히 30초라서, O2(그래프 표시 구간 미결사항)가 "최근
+  30초"로 버퍼 크기 자체에 의해 자연히 확정됨
+- **(Day3)** `ErrorBanner` — `ProcessState.last_error`를 한국어로 변환해
+  표시(FR-35). 별도 `error` WS 채널을 새로 만들지 않고 이미 오는
+  `state` 메시지의 필드를 그대로 씀
+- **(Day3)** `SafetyBanner`/`StiffnessHeatmap`/`VerdictPanel`/
+  `ProcessStageStepper`/`SessionResultBanner`/`SessionStart`를
+  `React.memo`로 감쌈 — `latestForce`가 20Hz로 바뀔 때마다 App 전체가
+  리렌더되는데, 이 컴포넌트들의 props는 그 갱신과 무관하므로 불필요한
+  재계산을 막기 위함
 
-Day3 항목(힘 그래프, `GET /sessions/{id}/report`, 경계 폴리곤 오버레이,
-에러 코드 한국어 문구 최종 확정, 30분 메모리 누수 점검 등)은 범위 밖입니다.
+축소 순서(§8.2) 대상인 FR-14(경계 폴리곤 오버레이)만 구현하지 않았습니다.
+O3(에러 코드 한국어 문구 최종본)은 팀 리뷰가 필요해 스텁 상태로 남아
+있습니다 — `error_codes.py`/`faultMessages.ts` 두 곳을 함께 바꾸세요.
 
 ## 실행
 
@@ -116,10 +133,13 @@ NIS §10 `mock_robot_driver`(로봇 동역학까지 흉내내는 정식 mock)를
   (`CreateTable(...).compile(dialect=postgresql.dialect())`) — Day2 이후도
   동일하게 재확인
 - 프론트엔드: `npm run build` 성공 (tsc 타입체크 + vite 프로덕션 빌드) —
-  Day2 이후도 동일하게 재확인
-- **`persistence.py`(verdict/map 저장, 세션 종료 반영)와 `/ws`의 `verdict`/
-  `result` 처리는 Postgres·rosbridge가 없어 실제 데이터로 실행 검증은 못
-  했습니다.** 코드 리뷰 + DDL 호환성 확인까지만 했습니다.
+  Day3 이후도 동일하게 재확인
+- **`persistence.py`(verdict/map 저장, 세션 종료 반영), `/ws`의 `verdict`/
+  `result`/`force` 처리, `GET /sessions/{id}/report`는 Postgres·rosbridge가
+  없어 실제 데이터로 실행 검증은 못 했습니다.** 코드 리뷰 + DDL 호환성
+  확인까지만 했습니다.
+- `ForceGraph`의 링버퍼 로직은 20Hz 실데이터 없이 정적 코드 리뷰로만
+  확인했습니다 — 30분 연속 세션에서의 실측 메모리 프로파일링은 못 했습니다.
 - `nail_msgs` colcon 빌드는 이 샌드박스의 anaconda/시스템 python3 충돌로
   실패했습니다 (`ModuleNotFoundError: catkin_pkg`, cmake가 anaconda
   python3를 고정 참조). 웹 개발 범위 밖의 환경 이슈이므로 로컬 개발 머신에서
@@ -140,5 +160,25 @@ NIS §10 `mock_robot_driver`(로봇 동역학까지 흉내내는 정식 mock)를
   `SessionResultBanner`는 특정 세션과 엄격히 연결하지 않고 "가장 최근에 온
   결과"를 보여줍니다 — 동시에 여러 세션이 겹칠 일이 없는 이 프로젝트
   전제(단일 운영자, FR-04로 세션 1개 제한)에서는 문제되지 않습니다.
-- `GET /api/sessions/{id}/report`, 힘 그래프, 경계 폴리곤 오버레이,
-  에러 코드 한국어 문구 최종본, 30분 메모리 누수 점검은 Day3 작업입니다.
+- `GET /api/sessions/{id}/report`가 반환하는 `stiffness_map.points`는
+  `StiffnessPoint[]`를 JSONB로 그대로 저장한 것을 그대로 돌려줍니다 —
+  대용량 세션에서는 응답이 커질 수 있어, 실사용 전에 페이지네이션이나
+  points 생략 옵션이 필요할 수 있습니다(Day3 스코프에서는 다루지 않음).
+
+## 인수 기준 체크리스트 (web.md §9)
+
+인프라(Postgres/rosbridge_server/빌드된 ROS2 워크스페이스)가 없어 이
+샌드박스에서는 실행하지 못했습니다. 로컬 개발 환경에서 아래 순서로
+확인하세요.
+
+| # | 항목 | 확인 방법 |
+|---|---|---|
+| 1 | 가짜 퍼블리셔로 세션 시작 → 히트맵 → 판정 → 저장 | `fake_ros_publisher.py` 실행 후 프론트에서 세션 시작, `GET /api/sessions/{id}/report`로 저장 확인 |
+| 2 | 안전 fault 주입 시 UI 잠금 + fault 전체 표시 | `/safety/status`에 `active_faults` 채워 발행 → SafetyBanner·SessionStart 잠금 확인 |
+| 3 | 브라우저 강제 종료 후 재접속 시 상태 즉시 복원 | 새로고침 후 SafetyBanner/StiffnessHeatmap/ProcessStageStepper가 스냅샷(IR-05)으로 즉시 채워지는지 확인 |
+| 4 | 세션 취소가 ROS2 액션까지 전파 | `POST /api/sessions/{id}/cancel` → orchestrator가 실제 CANCELED goal을 받는지 로그 확인 |
+| 5 | 웹 종료 시에도 ROS2 세션 정상 진행 | 프론트/백엔드 종료 후에도 orchestrator가 계속 진행하는지 확인 (rosbridge 특성상 설계상 보장, `web/README.md` 상단 아키텍처 참고) |
+| 6 | FAIL 판정의 파형과 임계값이 DB에 존재 | `verdicts.waveform`(FAIL 시 NOT NULL), `verdicts.threshold_n` 확인 |
+| 7 | 리포트 문구가 FR-22 준수 | `VerdictPanel` 캡션, `SessionReportResponse.report_note` 확인 |
+| 8 | 30분 세션에서 브라우저 메모리 누수 없음 | Chrome DevTools Memory 탭에서 30분 세션 전후 힙 비교 (`ForceGraph`는 고정 버퍼라 이론상 안전) |
+| 9 | M등급 요구사항 전 항목 충족 | web.md §3의 M 표시 항목을 위 표와 대조 |

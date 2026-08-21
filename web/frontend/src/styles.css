@@ -360,3 +360,52 @@ body {
   color: #ff8a8a;
   font-size: 0.85rem;
 }
+
+/* FR-15/NFR-03: 접촉력 그래프 */
+.force-graph__canvas {
+  background: #05070a;
+  border: 1px solid #2a3138;
+  border-radius: 4px;
+  width: 100%;
+  max-width: 480px;
+  height: auto;
+}
+
+.force-graph__meta {
+  margin-top: 6px;
+  font-size: 0.8rem;
+  color: #aab;
+}
+
+/* FR-35: 에러 코드 배너 */
+.error-banner {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.error-banner__detail {
+  color: #ccc;
+}
+
+.error-banner--info {
+  background: #1e2833;
+  color: #9ab;
+}
+
+.error-banner--warn {
+  background: #4a3a00;
+  color: #ffd24a;
+}
+
+.error-banner--abort {
+  background: #4a2a14;
+  color: #ffab6f;
+}
+
+.error-banner--safety {
+  background: #4a1414;
+  color: #ff8a8a;
+  font-weight: 600;
+}

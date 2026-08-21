@@ -12,3 +12,35 @@ export const FAULT_CODE_KO: Record<string, string> = {
 export function translateFault(code: string): string {
   return FAULT_CODE_KO[code] ?? `알 수 없는 결함 (${code})`;
 }
+
+// FR-35: 에러 코드 → 한국어 문구. 백엔드 app/error_codes.py의 ERROR_CODE_KO와
+// 같은 내용 — Day3 스텁, 최종 확정(O3)은 팀 리뷰 후 두 곳을 함께 바꾼다.
+export const ERROR_CODE_KO: Record<string, string> = {
+  "": "정상",
+  E_INVALID_GOAL: "요청값이 허용 범위를 벗어났습니다",
+  E_SAFETY_BLOCKED: "안전 조건이 충족되지 않아 진행할 수 없습니다",
+  E_PRECOND_FAILED: "사전 조건을 만족하지 못했습니다",
+  E_TIMEOUT: "작업이 제한 시간 내에 끝나지 않았습니다",
+  E_CANCELLED: "사용자가 취소했습니다",
+  E_COMM_LOST: "로봇과의 통신이 끊겼습니다",
+  E_MOTION_FAILED: "로봇 동작이 실패했습니다",
+  E_COARSE_INSUFFICIENT: "1차 스캔에서 유효한 측정점이 부족합니다",
+  E_SEPARATION_LOW: "손톱과 피부의 경계를 신뢰할 수 없습니다",
+  E_NO_SCAN: "스캔 결과가 없거나 유효하지 않습니다",
+  E_NO_CONTACT: "표면을 찾지 못했습니다",
+  E_OVERFORCE: "허용 힘을 초과했습니다",
+  E_LOW_STIFFNESS: "피부 접촉이 의심됩니다",
+  E_LATERAL_LIMIT: "연마 이동 한계를 초과했습니다 (피부 접촉 방지)",
+  E_LATERAL_JAM: "연마 중 걸림이 감지되었습니다",
+  E_TOOL_MISMATCH: "요구한 툴과 장착된 툴이 다릅니다",
+  E_GRIP_FAILED: "툴을 파지하지 못했습니다",
+  E_TOOL_DROP: "이동 중 툴을 놓쳤습니다",
+  E_REWORK_EXCEEDED: "재작업 허용 횟수를 초과했습니다",
+  E_MAP_SESSION_MISMATCH: "강성 맵이 현재 세션과 일치하지 않습니다",
+  E_STONE_MISS: "스톤 위치 오차가 허용 범위를 초과했습니다",
+};
+
+export function translateError(code: string): string {
+  if (!code) return "";
+  return ERROR_CODE_KO[code] ?? `알 수 없는 오류 (${code})`;
+}

@@ -20,6 +20,12 @@ export const SEV_RETRY = 2;
 export const SEV_ABORT = 3;
 export const SEV_SAFETY = 4; // FR-33: 이 이상이면 진행 UI를 잠근다
 
+export interface ErrorCode {
+  code: string;
+  severity: number;
+  detail: string;
+}
+
 export interface ProcessState {
   session_id: string;
   stage: string;
@@ -29,7 +35,7 @@ export interface ProcessState {
   stage_percent: number;
   session_percent: number;
   current_tool: string;
-  last_error: { code: string; severity: number; detail: string };
+  last_error: ErrorCode;
 }
 
 export interface Point {
@@ -79,7 +85,17 @@ export interface RunSessionResult {
     | string;
   total_rework: number;
   warn_count: number;
-  final_error: { code: string; severity: number; detail: string };
+  final_error: ErrorCode;
+}
+
+// ForceSample.msg (IDS §3.3). /force/data_ui, 20Hz.
+export interface ForceSample {
+  fx_n: number;
+  fy_n: number;
+  fz_n: number;
+  tx_nm: number;
+  ty_nm: number;
+  tz_nm: number;
 }
 
 export type WsEnvelope =
@@ -87,7 +103,9 @@ export type WsEnvelope =
   | { type: "state"; data: ProcessState }
   | { type: "map"; data: StiffnessMap }
   | { type: "verdict"; data: ValidationResult }
-  | { type: "force"; data: unknown }
+  | { type: "force"; data: ForceSample }
+  // "error"는 백엔드가 별도로 보내지 않는다 — ProcessState.last_error로
+  // 충분해서 중복 채널을 만들지 않았다(App.tsx의 ErrorBanner 참고).
   | { type: "error"; data: unknown }
   | { type: "result"; data: RunSessionResult };
 
