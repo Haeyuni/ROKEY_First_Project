@@ -1,0 +1,27 @@
+string  session_id
+string  recipe_id
+string  shape_profile_id
+string  target_material                 # 안전 검증용. 사람 신체 금지 (BR-029)
+
+int32   layer_total
+int32   max_rework
+bool    enable_brush
+bool    enable_stone
+---
+string RESULT_COMPLETED       = "COMPLETED"
+string RESULT_COMPLETED_WARN  = "COMPLETED_WITH_WARN"
+string RESULT_FAILED          = "FAILED"
+string RESULT_ABORTED_SAFETY  = "ABORTED_SAFETY"
+string RESULT_CANCELLED       = "CANCELLED"
+
+bool    success
+string  result_code
+nail_msgs/StiffnessMap scan_result
+nail_msgs/ValidationResult[] all_results
+nail_msgs/ErrorCode final_error
+int32   total_rework
+int32   warn_count
+builtin_interfaces/Time started_at
+builtin_interfaces/Time finished_at
+---
+nail_msgs/ProcessState state            # ProcessState 를 통째로 전달

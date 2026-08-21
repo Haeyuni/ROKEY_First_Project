@@ -1,0 +1,16 @@
+# 모든 공정 노드가 goal 수락 전에 호출한다.
+
+string STAGE_SCAN    = "SCAN"
+string STAGE_SAND    = "SAND"
+string STAGE_BRUSH   = "BRUSH"
+string STAGE_COAT    = "COAT"
+string STAGE_CURE    = "CURE"
+string STAGE_INSPECT = "INSPECT"
+string STAGE_STONE   = "STONE"
+
+string stage
+string session_id
+string required_tool
+---
+bool     ok
+string[] blocking_reasons      # 막힌 이유 전부. 하나만 주지 말 것

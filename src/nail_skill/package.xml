@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>nail_skill</name>
+  <version>0.1.0</version>
+  <description>robot_skill_node: 두산 컨트롤러를 감싸는 A계층 스킬 프리미티브 (MoveTo/PickPlace/ContactPath/LateralContact/ProbePoint)</description>
+  <maintainer email="team@example.com">nail team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>nail_msgs</depend>
+  <depend>nail_perception</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>onrobot_rg_msgs</depend>
+  <exec_depend>python3-numpy</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

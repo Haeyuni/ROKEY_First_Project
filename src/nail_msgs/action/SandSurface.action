@@ -1,0 +1,35 @@
+string  session_id
+
+string SIDE_FREE_EDGE = "free_edge"
+string SIDE_LEFT      = "left"
+string SIDE_RIGHT     = "right"
+
+string  approach_side
+float64 approach_pitch_deg              # 0 = 완전 수평
+float64 work_plane_offset_mm
+
+float64 target_force_n
+float64 max_force_n
+float64 jam_force_n
+
+int32   passes
+float64 step_over_mm
+float64 feed_speed_mms
+float64 max_duration_s
+
+float64 travel_limit_margin_mm          # 경계까지 거리에서 뺄 안전 마진
+float64 forbidden_margin_mm
+---
+nail_msgs/ResultBase base
+float64 mean_force_n
+float64 max_force_measured_n
+float64 max_travel_mm
+float64 computed_travel_limit_mm        # 이번 세션에 계산된 한계값
+float64 max_jam_force_n
+int32   passes_done
+string  abort_reason
+---
+float64 percent
+int32   current_pass
+float64 travel_mm
+nail_msgs/ForceSample current_wrench

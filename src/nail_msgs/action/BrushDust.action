@@ -1,0 +1,15 @@
+string  session_id
+float64 target_force_n
+float64 max_force_n
+int32   passes
+float64 path_pitch_mm
+float64 feed_speed_mms
+float64 coverage_margin_mm
+float64 max_duration_s
+---
+nail_msgs/ResultBase base
+int32   passes_done
+string  abort_reason
+---
+float64 percent
+int32   current_pass

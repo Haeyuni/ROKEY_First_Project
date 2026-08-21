@@ -1,0 +1,38 @@
+# 연마 전용. 표면에 평행하게 접근하여 접근축으로만 힘을 유지한다.
+#
+# ⚠️ ContactPath 와 통합하지 말 것.
+#    수평 접근은 압입이 없어 강성을 측정할 수 없으므로
+#    E_LOW_STIFFNESS 가 작동하지 않는다.
+#    피부 접촉을 막는 유일한 수단은 travel_limit_mm 이다.
+
+geometry_msgs/Vector3 approach_vector   # 단위벡터. frame_id 기준 수평
+geometry_msgs/Pose[]  waypoints         # 접근축에 수직인 평면 내 경로
+string  frame_id
+string  session_id
+
+float64 work_plane_offset_mm            # 표면 기준 작업 평면 높이
+float64 target_force_n                  # 접근축 유지력
+float64 max_force_n                     # 접근축 상한
+float64 jam_force_n                     # 진행축 걸림 판정
+float64 feed_speed_mms
+
+float64 travel_limit_mm                 # 접근축 최대 진행 거리. 0 이하면 REJECT
+float64 retreat_mm                      # 이탈 시 역방향 후퇴 거리
+
+int32   passes
+float64 max_duration_s
+---
+nail_msgs/ResultBase base
+float64 mean_force_n
+float64 max_force_measured_n
+float64 max_travel_mm                   # 실제 최대 진행. 한계 대비 여유 확인
+float64 applied_travel_limit_mm         # 적용된 한계값 (리포트 기록)
+float64 max_jam_force_n
+int32   passes_done
+string  abort_reason                    # ABORT_LATERAL_LIMIT / ABORT_LATERAL_JAM / …
+nail_msgs/ForceSample[] force_log
+---
+float64 percent
+int32   current_pass
+float64 travel_mm                       # 현재 진행 거리 → UI 게이지
+nail_msgs/ForceSample current_wrench

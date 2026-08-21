@@ -1,0 +1,1 @@
+/home/rokey/ws_cobot_pjt/ws_cobot1/build/nail_msgs/rosidl_typesupport_introspection_cpp/nail_msgs/msg/detail/action_result_base__rosidl_typesupport_introspection_cpp.hpp

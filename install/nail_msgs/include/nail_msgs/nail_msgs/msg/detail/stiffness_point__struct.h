@@ -1,0 +1,1 @@
+/home/rokey/ws_cobot_pjt/ws_cobot1/build/nail_msgs/rosidl_generator_c/nail_msgs/msg/detail/stiffness_point__struct.h

@@ -1,0 +1,1 @@
+/home/rokey/ws_cobot_pjt/ws_cobot1/build/nail_msgs/rosidl_typesupport_introspection_c/nail_msgs/action/detail/follow_contour__rosidl_typesupport_introspection_c.h

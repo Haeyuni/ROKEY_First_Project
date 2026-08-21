@@ -1,0 +1,22 @@
+# 스캔과 택프리 검사가 공유하는 최소 단위.
+
+geometry_msgs/Point target
+string  frame_id
+float64 approach_height_mm
+float64 probe_speed_mms
+float64 contact_threshold_n
+float64 max_depth_mm
+float64 max_force_n
+float64 lateral_force_limit_n
+
+bool    measure_release                 # true면 이탈 중 Fz 측정 (택프리)
+float64 release_speed_mms
+string  source_tag                      # StiffnessPoint.source 에 기록
+---
+nail_msgs/ResultBase base
+nail_msgs/StiffnessPoint point
+nail_msgs/ForceSample[] waveform        # 하강+이탈 전체 파형
+int32   regression_samples              # 회귀에 쓴 표본 수
+---
+float64 current_depth_mm
+float64 current_force_n

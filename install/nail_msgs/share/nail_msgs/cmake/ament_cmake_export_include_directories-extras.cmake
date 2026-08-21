@@ -1,0 +1,1 @@
+/home/rokey/ws_cobot_pjt/ws_cobot1/build/nail_msgs/ament_cmake_export_include_directories/ament_cmake_export_include_directories-extras.cmake

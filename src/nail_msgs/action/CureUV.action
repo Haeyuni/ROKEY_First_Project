@@ -1,0 +1,27 @@
+# UV 램프는 상시 ON 이다. 이 액션은 "언제 켜는가"가 아니라
+# "얼마나 오래 그 자리에 머무는가"로 조사량을 만든다.
+
+string  session_id
+int32   layer_index
+
+geometry_msgs/Point[] target_regions    # 비어 있으면 전체. 차 있으면 부분 재조사
+float64 standoff_mm
+float64 standoff_tolerance_mm
+int32   dwell_points
+float64 dwell_s_per_point
+float64 exposure_scale                  # 재조사 시 1.5 등
+float64 path_speed_mms
+float64 park_distance_mm
+float64 max_duration_s                  # 모션 타임아웃 (램프 아님)
+---
+nail_msgs/ResultBase base
+float64 actual_exposure_s               # 체류 시간 합계. 접근/이탈 노출 미포함
+int32   dwell_completed
+float64 mean_standoff_mm
+float64 coverage_ratio                  # 궤적 로그. 판정 기준 아님
+bool    parked                          # 대기 위치 이탈 완료
+---
+float64 percent
+int32   current_dwell_index
+float64 elapsed_dwell_s
+float64 current_standoff_mm

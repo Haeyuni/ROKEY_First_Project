@@ -1,0 +1,20 @@
+string  session_id
+int32   layer_index
+
+float64 boundary_offset_mm
+float64 target_force_n
+float64 max_force_n
+float64 path_pitch_mm
+float64 feed_speed_mms
+int32   passes
+bool    use_compliance
+float64 max_duration_s
+---
+nail_msgs/ResultBase base
+float64 mean_force_n
+float64 coverage_ratio                  # 궤적 기반 추정. 판정 기준 아님
+int32   passes_done
+string  abort_reason
+---
+float64 percent
+int32   current_pass
