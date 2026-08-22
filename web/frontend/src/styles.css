@@ -117,6 +117,105 @@ body {
   gap: 6px !important;
 }
 
+/* 디자인/큐빅 선택 카드 그룹 */
+.option-group {
+  border: none;
+  padding: 0;
+  margin: 0 0 12px;
+}
+
+.option-group:disabled {
+  opacity: 0.5;
+}
+
+.option-group__legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: 0.75rem;
+  color: #9ab;
+}
+
+.option-group__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .option-group__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.option-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #2a3138;
+  border-radius: 6px;
+  background: #0d1117;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+
+.option-card:hover {
+  border-color: #3a6394;
+}
+
+.option-card:has(input:checked) {
+  border-color: #4a90d9;
+  background: #16324a;
+}
+
+.option-card:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+.option-card input[type="radio"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.option-card input[type="radio"]:focus-visible ~ .option-card__swatch {
+  outline: 2px solid #4a90d9;
+  outline-offset: 2px;
+}
+
+.option-card__swatch {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid #2a3138;
+}
+
+.option-card__swatch--round {
+  border-radius: 50%;
+}
+
+.option-card__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.option-card__name {
+  font-size: 0.85rem;
+  color: #e6e6e6;
+}
+
+.option-card__desc {
+  font-size: 0.7rem;
+  color: #9ab;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .session-start button {
   background: #26466b;
   color: #e6e6e6;
