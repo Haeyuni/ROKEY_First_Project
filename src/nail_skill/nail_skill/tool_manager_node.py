@@ -60,6 +60,7 @@ class ToolManagerNode(Node):
         self._current_tool = ToolState.NONE
         self._current_tcp = ''
         self._grip_width_mm = 0.0
+        self._grip_verified = False
         self._pick_place_goal_handle = None
 
         self._latest_safety = None
@@ -154,7 +155,7 @@ class ToolManagerNode(Node):
         msg.grip_width_mm = self._grip_width_mm
         cfg = self._rack.get(self._current_tool)
         msg.expected_width_mm = cfg.get('expected_grip_width_mm', 0.0) if cfg else 0.0
-        msg.grip_verified = True
+        msg.grip_verified = self._grip_verified
         return msg
 
     def _publish_status(self):
@@ -169,6 +170,7 @@ class ToolManagerNode(Node):
         self._current_tool = ToolState.NONE
         self._current_tcp = ''
         self._grip_width_mm = 0.0
+        self._grip_verified = False
         self._publish_status()
 
     # --- /tool/get_info ---------------------------------------------------------
@@ -335,6 +337,7 @@ class ToolManagerNode(Node):
             self._current_tool = ToolState.NONE
             self._current_tcp = ''
             self._grip_width_mm = 0.0
+            self._grip_verified = False
             self._publish_status()
 
         if goal.target_tool == ToolState.NONE:
@@ -395,6 +398,7 @@ class ToolManagerNode(Node):
         self._current_tool = goal.target_tool
         self._current_tcp = f'tcp_{goal.target_tool}'
         self._grip_width_mm = pp_result.measured_width_mm
+        self._grip_verified = verify_grip and pp_result.grip_verified
         self._publish_status()
 
         goal_handle.succeed()
