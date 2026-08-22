@@ -72,7 +72,7 @@ class SafetyMonitorNode(Node):
 
         self._state_lock = threading.Lock()
         self._prev_estop_pressed = False
-        self._estop_pressed = False
+        self._estop_pressed = True  # fail-safe: 첫 폴링 전/실패 시 "안 눌림"으로 가정하지 않는다
         self._handrest_seated = False
         self._dust_on = False
         self._comm_ok = False
@@ -137,7 +137,7 @@ class SafetyMonitorNode(Node):
         d('heartbeat_timeout_ms', 200)
         d('di_handrest_channel', 2)
         d('di_dust_channel', 3)
-        d('require_handrest', True)
+        d('require_handrest', False)  # 현재 하드웨어에 안착 센서 미장착 — 센서 달리면 true로 되돌릴 것
         d('require_dust_for_sanding', True)
         d('require_scan_valid', True)
         d('uv_software_control', False)

@@ -366,13 +366,12 @@ def generate_launch_description():
                 '호출 빈도가 줄어 다른 노드와의 경합/FAULT_COMM_LOST 오탐이 준다 — '
                 '단 안전 상태 갱신도 그만큼 느려진다.')),
         DeclareLaunchArgument(
-            'require_handrest', default_value='true',
+            'require_handrest', default_value='false',
             description=(
                 'safety_monitor 에 전달. FAULT_NO_HANDREST 는 실시간 결함이라 '
                 'ResetSafety 로 안 풀리고 handrest 센서(DI)가 "안착"으로 바뀌어야만 '
-                '자동 해제된다. 안착 센서/핸드레스트 하드웨어 없이 ChangeTool 등 '
-                '툴 교체만 테스트하려면 false 로 꺼서 이 결함을 아예 안 보게 할 수 '
-                '있다 — 실제 손톱 작업 공정 테스트 때는 반드시 true(기본값)로 되돌릴 것.')),
+                '자동 해제된다. 현재 하드웨어에 안착 센서가 미장착이라 기본값을 '
+                'false 로 꺼둠 — 안착 센서가 실제로 달리면 true 로 되돌려서 재검증할 것.')),
         DeclareLaunchArgument(
             'sync_tcp_on_startup', default_value='true',
             description=(
