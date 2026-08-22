@@ -63,6 +63,7 @@ class ToolManagerNode(Node):
         self._pick_place_goal_handle = None
 
         self._latest_safety = None
+        self._last_safety_rx_monotonic = None
         safety_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
@@ -110,6 +111,7 @@ class ToolManagerNode(Node):
         d('dsr_prefix', 'dsr01')
         d('robot_model', 'm0609')
         d('safety_topic', '/safety/status')
+        d('safety_status_timeout_s', 0.2)
         d('node_timeout_s', 120.0)
         d('log_force_data', False)
         d('use_mock_hardware', False)
@@ -135,9 +137,14 @@ class ToolManagerNode(Node):
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg: SafetyState):
         self._latest_safety = msg
+        self._last_safety_rx_monotonic = time.monotonic()
 
     def _safe_to_move(self) -> bool:
-        return self._latest_safety is not None and self._latest_safety.safe_to_move
+        timeout_s = self.get_parameter('safety_status_timeout_s').value
+        return (self._latest_safety is not None
+                and self._latest_safety.safe_to_move
+                and self._last_safety_rx_monotonic is not None
+                and time.monotonic() - self._last_safety_rx_monotonic <= timeout_s)
 
     def _on_cancel(self, goal_handle):
         # §3.3 취소 전파: 우리가 보관 중인 하위 스킬 액션(goal_handle)을 취소한다.
