@@ -11,18 +11,19 @@ v0.2에서 UV 상시 ON으로 바뀌면서(§7.0) 소프트웨어가 램프를 �
 토픽/서비스 이름은 이 저장소 어디에도 없다(실제 두산 컨트롤러 드라이버
 설정에서만 확정된다). 이 구현은:
 
-  - Digital Input 은 `DSR_ROBOT2.get_digital_input(channel)` (공식 파이썬
-    API의 GPIO 분류에 실제로 존재)을 그대로 쓴다.
-  - "하트비트"는 정확한 RobotState 토픽 이름을 확인할 수 없어, 이미
-    검증된 동기 폴링 함수 `get_robot_state()`로 대신한다 — 매 주기 호출이
-    성공하면 통신 생존, 예외/타임아웃이면 `FAULT_COMM_LOST` 다. 실제
-    dsr_msgs2 RobotState 토픽 이름이 확인되면 그쪽(구독 기반, latency 낮음)
-    으로 바꾸는 편이 낫다.
-  - DI 극성(눌림=HIGH 인지 LOW 인지)도 배선마다 다르다. E-Stop 은 NIS
-    §7 동작 ②의 "DI **상승** 감지"라는 표현을 그대로 따라 **HIGH = 눌림**
-    으로 가정했다. 안착·더스트는 "센서 감지 = HIGH"로 가정했다.
-    `*_active_high` 파라미터로 배선이 반대면 뒤집는다 — **커미셔닝 때
-    실제로 눌러/막아 보고 반드시 확인할 것.**
+  - 안착·더스트 Digital Input 은 `DSR_ROBOT2.get_digital_input(channel)`
+    (공식 파이썬 API의 GPIO 분류에 실제로 존재)을 그대로 쓴다.
+  - E-Stop 은 애초에 Control Box DI 채널로 추측 매핑했었으나(2026-08-22
+    실기 커미셔닝) 해당 채널이 물리 버튼과 무관하게 항상 고정값을 반환하는
+    것으로 확인되어 **폐기**했다. 대신 `get_robot_state()`(원래 하트비트
+    용도로만 쓰던 동기 폴링 함수)가 그대로 노출하는 `robot_state` enum을
+    쓴다 — 실측: 평상시 3(STATE_SAFE_OFF), E-Stop 누르면 6(STATE_EMERGENCY_
+    STOP), 풀면 3으로 복귀. `_ROBOT_STATE_EMERGENCY_STOP = {6, 7}`(RobotState.msg
+    주석상 6/7 둘 다 EMERGENCY_STOP) 에 포함되면 눌림으로 판정한다. 이 호출이
+    실패/타임아웃이면 여전히 `FAULT_COMM_LOST`.
+  - 안착·더스트 DI 극성(눌림=HIGH 인지 LOW 인지)은 배선마다 다르다.
+    "센서 감지 = HIGH"로 가정했다. `*_active_high` 파라미터로 배선이
+    반대면 뒤집는다 — **커미셔닝 때 실제로 눌러/막아 보고 반드시 확인할 것.**
 
 **래치 vs 실시간 결함**: `FAULT_ESTOP`/`FAULT_COMM_LOST`/`FAULT_TOOL_DROP`
 은 물리 원인이 사라져도 `ResetSafety` 를 불러야 풀린다(§7 결함 코드 표의
@@ -52,6 +53,10 @@ from nail_skill.dsr_adapter import DsrAdapter, DsrAdapterError
 
 
 class SafetyMonitorNode(Node):
+
+    # dsr_msgs2/RobotState.msg: robot_state 6/7 = STATE_EMERGENCY_STOP (실측 확인,
+    # 2026-08-22 실기 테스트 — DI 채널 기반 판정은 배선 오류로 폐기).
+    _ROBOT_STATE_EMERGENCY_STOP = frozenset({6, 7})
 
     def __init__(self):
         super().__init__('safety_monitor')
@@ -130,7 +135,6 @@ class SafetyMonitorNode(Node):
 
         d('publish_rate_hz', 20)
         d('heartbeat_timeout_ms', 200)
-        d('di_estop_channel', 1)
         d('di_handrest_channel', 2)
         d('di_dust_channel', 3)
         d('require_handrest', True)
@@ -140,7 +144,6 @@ class SafetyMonitorNode(Node):
         d('auto_reset', False)
 
         # DI 극성 — docstring 참고, 커미셔닝 때 검증 필요
-        d('estop_active_high', True)
         d('handrest_active_high', True)
         d('dust_active_high', True)
 
@@ -167,10 +170,8 @@ class SafetyMonitorNode(Node):
     # --- ① 상태 수집 루프 (NIS §7 동작 ①②) ---------------------------------------
     def _on_publish_timer(self):
         p = self.get_parameter
-        estop_ch = p('di_estop_channel').value
         handrest_ch = p('di_handrest_channel').value
         dust_ch = p('di_dust_channel').value
-        estop_hi = p('estop_active_high').value
         handrest_hi = p('handrest_active_high').value
         dust_hi = p('dust_active_high').value
         timeout_s = p('heartbeat_timeout_ms').value / 1000.0
@@ -181,9 +182,9 @@ class SafetyMonitorNode(Node):
         dust_on = self._dust_on
 
         try:
-            estop_raw, handrest_raw, dust_raw = self._poll_hardware(
-                estop_ch, handrest_ch, dust_ch, timeout_s)
-            estop_pressed = estop_raw if estop_hi else (not estop_raw)
+            handrest_raw, dust_raw, robot_state_raw = self._poll_hardware(
+                handrest_ch, dust_ch, timeout_s)
+            estop_pressed = robot_state_raw in self._ROBOT_STATE_EMERGENCY_STOP
             handrest_seated = handrest_raw if handrest_hi else (not handrest_raw)
             dust_on = dust_raw if dust_hi else (not dust_raw)
         except Exception as e:  # noqa: BLE001 - 모든 드라이버 오류는 통신 결함으로 fail-safe
@@ -193,7 +194,7 @@ class SafetyMonitorNode(Node):
                 throttle_duration_sec=2.0)
 
         with self._state_lock:
-            # --- ② E-Stop: DI 상승(눌림 시작) 에지에서만 새로 래치한다.
+            # --- ② E-Stop: robot_state가 EMERGENCY_STOP으로 전이하는 에지에서만 새로 래치한다.
             #     현재 눌려있는 동안은 에지와 무관하게 아래 safe_to_move
             #     자체가 이미 False 다 — 래치는 "떼도 계속 막는" 역할이다.
             if estop_pressed and not self._prev_estop_pressed:
@@ -235,8 +236,9 @@ class SafetyMonitorNode(Node):
 
         self._status_pub.publish(msg)
 
-    def _poll_hardware(self, estop_ch, handrest_ch, dust_ch, timeout_s):
-        """DI 3개와 하트비트를 한 작업으로 읽고 전체 timeout을 적용한다.
+    def _poll_hardware(self, handrest_ch, dust_ch, timeout_s):
+        """DI 2개와 robot_state(하트비트 겸 E-Stop 판정)를 한 작업으로 읽고
+        전체 timeout을 적용한다.
 
         DSR 동기 호출이 내부에서 영구 대기할 수 있으므로 worker를 사용하되,
         이전 worker가 아직 살아 있으면 새 worker를 만들지 않는다. 통신 장애
@@ -246,7 +248,6 @@ class SafetyMonitorNode(Node):
 
         def run():
             try:
-                estop = self._adapter.read_digital_input(estop_ch)
                 handrest = self._adapter.read_digital_input(handrest_ch)
                 dust = self._adapter.read_digital_input(dust_ch)
                 robot_state = self._adapter.read_robot_state()
@@ -254,7 +255,7 @@ class SafetyMonitorNode(Node):
                         (isinstance(robot_state, (int, float)) and robot_state < 0):
                     raise DsrAdapterError(
                         f'get_robot_state 응답 오류 (state={robot_state})')
-                result['value'] = (estop, handrest, dust)
+                result['value'] = (handrest, dust, robot_state)
             except Exception as e:  # noqa: BLE001 - 스레드 경계 너머로 그대로 전달
                 result['error'] = e
 

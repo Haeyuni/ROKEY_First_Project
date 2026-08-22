@@ -283,7 +283,6 @@ def _launch_setup(context, *args, **kwargs):
     use_mock = LaunchConfiguration('use_mock_hardware').perform(context)
     sync_tcp_on_startup = LaunchConfiguration('sync_tcp_on_startup').perform(context)
     require_handrest = LaunchConfiguration('require_handrest').perform(context)
-    estop_active_high = LaunchConfiguration('estop_active_high').perform(context)
     heartbeat_timeout_ms = LaunchConfiguration('heartbeat_timeout_ms').perform(context)
     safety_publish_rate_hz = LaunchConfiguration('safety_publish_rate_hz').perform(context)
     dsr_prefix = LaunchConfiguration('dsr_prefix').perform(context)
@@ -316,7 +315,6 @@ def _launch_setup(context, *args, **kwargs):
             params['base_frame_id'] = base_frame_id
         if token == 'safety':
             params['require_handrest'] = require_handrest == 'true'
-            params['estop_active_high'] = estop_active_high == 'true'
             params['heartbeat_timeout_ms'] = int(heartbeat_timeout_ms)
             params['publish_rate_hz'] = int(safety_publish_rate_hz)
 
@@ -354,18 +352,9 @@ def generate_launch_description():
         DeclareLaunchArgument('dsr_prefix', default_value='dsr01',
                                description='두산 드라이버 네임스페이스 (ws_dsr 쪽과 일치해야 함)'),
         DeclareLaunchArgument(
-            'estop_active_high', default_value='true',
-            description=(
-                'safety_monitor 에 전달. di_estop_channel(기본 1)의 raw DI 값을 '
-                '"눌림"으로 해석하는 극성. 실측: 채널1 raw 값이 계속 1 인데 실제 '
-                'E-Stop 은 안 눌려있음 — 배선이 안 됐거나(플로팅) 극성이 반대일 '
-                '가능성. 극성이 반대면 false 로, 아예 배선이 안 됐다면(테스트 '
-                '한정) 마찬가지로 false 로 꺼서 이 결함을 무시하고 진행할 수 있다 '
-                '— 실제 E-Stop 배선 후에는 반드시 true(기본값)로 재검증할 것.')),
-        DeclareLaunchArgument(
             'heartbeat_timeout_ms', default_value='200',
             description=(
-                'safety_monitor 에 전달. 실측: 20Hz 주기로 DI 3개+robot_state 1개를 '
+                'safety_monitor 에 전달. 실측: 20Hz 주기로 DI 2개+robot_state 1개를 '
                 '순차 호출하는데, robot_skill_node 등 다른 노드도 동시에 같은 두산 '
                 '컨트롤러에 서비스를 호출해서 가끔 200ms(기본값)를 넘겨 '
                 'FAULT_COMM_LOST 가 반복적으로 래치된다. 500~1000 정도로 늘리면 '
