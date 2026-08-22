@@ -337,10 +337,43 @@ class RobotSkillNode(Node):
             goal_handle.abort()
             return self._result_base(False, ErrorCode.E_SAFETY_BLOCKED,
                                       f'{context}: 안전 상태 위반으로 중단', started_at)
+        if reason == 'unreachable':
+            self._log_abort(ErrorCode.E_MOTION_FAILED,
+                             f'{context}: 목표 위치 도달 실패 (NOT REACHABLE 등으로 컨트롤러가 '
+                             '이동 명령을 거부했거나 오차가 허용치를 초과)')
+            goal_handle.abort()
+            return self._result_base(False, ErrorCode.E_MOTION_FAILED,
+                                      f'{context}: 목표 위치 도달 실패', started_at)
         # timeout
         self._log_abort(ErrorCode.E_TIMEOUT, f'{context}: 타임아웃')
         goal_handle.abort()
         return self._result_base(False, ErrorCode.E_TIMEOUT, f'{context}: 타임아웃', started_at)
+
+    def _verify_position_reached(self, reason, target_pose):
+        """_monitor() 가 'ok' 를 반환해도 실제로 목표에 도달했는지 확인한다.
+
+        두산 컨트롤러가 NOT REACHABLE 등으로 이동 명령 자체를 거부하면 로봇이
+        BUSY 상태로 전이되지 않는다 — wait_motion_done() 은 '움직일 필요 없이
+        이미 도착'과 '애초에 이동을 시작도 못함'을 구분 못 해 둘 다 즉시
+        완료로 본다. 여기서 실제 위치와 목표 위치를 비교해 move_pose_tolerance_mm
+        를 넘으면 'unreachable' 로 바꿔 실패 처리한다.
+
+        반환: (reason, err_mm). reason=='ok' 가 아니었거나 위치 조회에
+        실패하면 err_mm 은 -1.0 (측정 안 됨).
+        """
+        if reason != 'ok':
+            return reason, -1.0
+        try:
+            final_pose = self._adapter.get_pose()
+        except DsrAdapterError:
+            return reason, -1.0
+        err_mm = math.dist(
+            (final_pose.x_mm, final_pose.y_mm, final_pose.z_mm),
+            (target_pose.x_mm, target_pose.y_mm, target_pose.z_mm))
+        tol_mm = self.get_parameter('move_pose_tolerance_mm').value
+        if err_mm > tol_mm:
+            return 'unreachable', err_mm
+        return reason, err_mm
 
     # =========================================================================
     # MoveTo
@@ -390,15 +423,9 @@ class RobotSkillNode(Node):
             goal_handle.publish_feedback(fb)
 
         reason = self._monitor(goal_handle, timeout_s, 10.0, on_tick)
+        reason, err_mm = self._verify_position_reached(reason, task_pose)
         result = MoveTo.Result()
-        if reason == 'ok':
-            try:
-                final_pose = self._adapter.get_pose()
-                err_mm = math.dist(
-                    (final_pose.x_mm, final_pose.y_mm, final_pose.z_mm),
-                    (task_pose.x_mm, task_pose.y_mm, task_pose.z_mm))
-            except DsrAdapterError:
-                err_mm = -1.0
+        if err_mm >= 0.0:
             result.position_error_mm = err_mm
         result.base = self._finish_from_reason(reason, goal_handle, started_at, context='MoveTo')
         return result
@@ -485,8 +512,10 @@ class RobotSkillNode(Node):
 
         def move_and_wait(pose, step, pct):
             self._adapter.start_move_line(pose, speed, accel)
-            return self._monitor(goal_handle, timeout_s, 10.0,
-                                  lambda: feedback(step, pct))
+            reason = self._monitor(goal_handle, timeout_s, 10.0,
+                                    lambda: feedback(step, pct))
+            reason, _ = self._verify_position_reached(reason, pose)
+            return reason
 
         for pose, step, pct in ((approach, 0, 10.0), (target, 1, 30.0)):
             reason = move_and_wait(pose, step, pct)

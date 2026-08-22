@@ -6,75 +6,105 @@
 # 말 것 — tool_manager 의 ChangeTool 등 이 프레임을 target_key로 쓰는
 # 모든 액션이 이 값을 그대로 믿고 이동한다.
 #
-# 필드: parent_frame, x_mm/y_mm/z_mm, roll_deg/pitch_deg/yaw_deg
-# (roll/pitch/yaw 는 parent_frame 축 기준 고정축 오일러각).
+# 필드: parent_frame, x_mm/y_mm/z_mm + 회전 (아래 둘 중 하나).
+#
+# 회전 표기 — 절대 섞어 쓰지 말 것 (숫자 3개라 겉보기엔 같아 보여도 서로
+# 다른 회전 컨벤션이다):
+#   rz1_deg / ry_deg / rz2_deg : 두산 Task 자세(A,B,C). 티치펜던트 TASK
+#     화면에 그대로 표시되는 세 숫자를 **변환 없이 그대로** 입력한다
+#     (nail_skill.conversions 의 ZYZ 컨벤션과 동일 — 실측으로 검증됨).
+#     펜던트에서 위치를 읽어 넣는 프레임(tool_rack_frame, slot_1~6 등)은
+#     전부 이 필드를 쓴다.
+#   roll_deg / pitch_deg / yaw_deg : tf2 표준 고정축 RPY. 로봇 자세를
+#     읽어서 넣는 게 아니라 순수 TF 트리 구성용으로 직접 계산해 넣는
+#     프레임에만 쓴다 (예: 지금 회전 없음(0,0,0)인 handrest_frame/
+#     nail_frame). ⚠️ 펜던트에서 읽은 A,B,C 를 여기 넣으면 안 된다 —
+#     실측 확인: position_error 는 0에 가까운데 실제 로봇 자세가 완전히
+#     다르게 나온다(두 회전 컨벤션이 다르기 때문).
+#
+# absolute: true (선택) — 이 필드가 있으면 위치/회전을 parent_frame 기준이
+# 아니라 **base_link 기준 절대값**으로 해석한다 (예: 티치펜던트를
+# TASK-BASE 좌표계로 놓고 그 자리에서 그냥 읽은 값을 그대로 입력).
+# test_bringup.launch.py 의 _static_frame_nodes() 가 기동 시 parent_frame
+# 기준 상대값으로 자동 환산해서 발행한다 — 슬롯마다 오프셋을 직접 빼는
+# 계산 안 해도 된다. slot_1~6 에 이미 적용해뒀다.
 #
 # slot_1~6 은 tool_rack_frame 의 자식으로 뒀다 — 랙을 통째로 옮기면
 # tool_rack_frame 하나만 재측정해도 슬롯 6개가 같이 따라오게 하기 위함
 # (targets.yaml 처럼 슬롯마다 절대좌표를 따로 두면 이 이점이 없어진다).
-# 실측 시에도 이 계층을 유지할 것: 랙 원점(CAD 기준점) 하나 재고,
-# 슬롯은 그 원점 기준 상대 오프셋만 넣는다.
+# absolute: true 덕분에 "부모 기준 상대 오프셋"이라는 개념을 몰라도 되지만,
+# TF 트리 구조(반드시 tool_rack_frame 의 자식)는 그대로 유지된다.
 
 frames:
   tool_rack_frame:
     parent_frame: base_link
-    x_mm: 300.0      # TODO: 실측값으로 교체
-    y_mm: -300.0     # TODO: 실측값으로 교체
-    z_mm: 0.0        # TODO: 실측값으로 교체
-    roll_deg: 0.0
-    pitch_deg: 0.0
-    yaw_deg: 0.0     # TODO: 랙이 base_link 축과 안 맞으면 실측 후 채울 것
+    x_mm: 366.08
+    y_mm: 5.38
+    z_mm: 424.85
+    rz1_deg: 67.80    # A (TASK 화면 값 그대로)
+    ry_deg: -179.90   # B
+    rz2_deg: 67.88    # C
 
   # slot_1~6: tool_rack.yaml 의 tools.<name>.slot_frame 과 이름이 정확히
-  # 일치해야 한다. 지금은 tool_rack_frame 원점에서 y축으로 60mm 간격 placeholder.
+  # 일치해야 한다. absolute: true 라서 아래 x/y/z/rz1·ry·rz2 는
+  # tool_rack_frame 기준이 아니라 base_link 기준 절대값이다 — 티치펜던트를
+  # TASK-BASE 로 놓고 그리퍼를 실제 슬롯 위치(그립 자세)로 지깅한 뒤 읽은
+  # X/Y/Z 와 A/B/C 를 그대로 입력하면 된다. tool_rack_frame 기준 상대값은
+  # launch 가 알아서 계산한다.
   slot_1:
     parent_frame: tool_rack_frame
-    x_mm: 0.0
-    y_mm: 0.0        # TODO: 실측값으로 교체
-    z_mm: 0.0        # TODO: 실측값으로 교체
-    roll_deg: 0.0
-    pitch_deg: 0.0
-    yaw_deg: 0.0
+    absolute: true
+    x_mm: 667.86
+    y_mm: 91.20
+    z_mm: 374.23
+    rz1_deg: 32.60    # A
+    ry_deg: -179.68   # B
+    rz2_deg: 32.59    # C
   slot_2:
     parent_frame: tool_rack_frame
-    x_mm: 0.0
-    y_mm: 60.0       # TODO: 실측값으로 교체
-    z_mm: 0.0        # TODO: 실측값으로 교체
-    roll_deg: 0.0
-    pitch_deg: 0.0
-    yaw_deg: 0.0
+    absolute: true
+    x_mm: 0.0        # TODO: 실측값으로 교체 (base_link 기준, TASK-BASE X)
+    y_mm: 0.0        # TODO: 실측값으로 교체 (Y)
+    z_mm: 0.0        # TODO: 실측값으로 교체 (Z)
+    rz1_deg: 0.0     # TODO: 실측값으로 교체 (A)
+    ry_deg: 0.0      # TODO: 실측값으로 교체 (B)
+    rz2_deg: 0.0     # TODO: 실측값으로 교체 (C)
   slot_3:
     parent_frame: tool_rack_frame
-    x_mm: 0.0
-    y_mm: 120.0      # TODO: 실측값으로 교체
-    z_mm: 0.0        # TODO: 실측값으로 교체
-    roll_deg: 0.0
-    pitch_deg: 0.0
-    yaw_deg: 0.0
+    absolute: true
+    x_mm: 0.0        # TODO: 실측값으로 교체 (base_link 기준, TASK-BASE X)
+    y_mm: 0.0        # TODO: 실측값으로 교체 (Y)
+    z_mm: 0.0        # TODO: 실측값으로 교체 (Z)
+    rz1_deg: 0.0     # TODO: 실측값으로 교체 (A)
+    ry_deg: 0.0      # TODO: 실측값으로 교체 (B)
+    rz2_deg: 0.0     # TODO: 실측값으로 교체 (C)
   slot_4:
     parent_frame: tool_rack_frame
-    x_mm: 0.0
-    y_mm: 180.0      # TODO: 실측값으로 교체
-    z_mm: 0.0        # TODO: 실측값으로 교체
-    roll_deg: 0.0
-    pitch_deg: 0.0
-    yaw_deg: 0.0
+    absolute: true
+    x_mm: 0.0        # TODO: 실측값으로 교체 (base_link 기준, TASK-BASE X)
+    y_mm: 0.0        # TODO: 실측값으로 교체 (Y)
+    z_mm: 0.0        # TODO: 실측값으로 교체 (Z)
+    rz1_deg: 0.0     # TODO: 실측값으로 교체 (A)
+    ry_deg: 0.0      # TODO: 실측값으로 교체 (B)
+    rz2_deg: 0.0     # TODO: 실측값으로 교체 (C)
   slot_5:
     parent_frame: tool_rack_frame
-    x_mm: 0.0
-    y_mm: 240.0      # TODO: 실측값으로 교체
-    z_mm: 0.0        # TODO: 실측값으로 교체
-    roll_deg: 0.0
-    pitch_deg: 0.0
-    yaw_deg: 0.0
+    absolute: true
+    x_mm: 0.0        # TODO: 실측값으로 교체 (base_link 기준, TASK-BASE X)
+    y_mm: 0.0        # TODO: 실측값으로 교체 (Y)
+    z_mm: 0.0        # TODO: 실측값으로 교체 (Z)
+    rz1_deg: 0.0     # TODO: 실측값으로 교체 (A)
+    ry_deg: 0.0      # TODO: 실측값으로 교체 (B)
+    rz2_deg: 0.0     # TODO: 실측값으로 교체 (C)
   slot_6:
     parent_frame: tool_rack_frame
-    x_mm: 0.0
-    y_mm: 300.0      # TODO: 실측값으로 교체
-    z_mm: 0.0        # TODO: 실측값으로 교체
-    roll_deg: 0.0
-    pitch_deg: 0.0
-    yaw_deg: 0.0
+    absolute: true
+    x_mm: 0.0        # TODO: 실측값으로 교체 (base_link 기준, TASK-BASE X)
+    y_mm: 0.0        # TODO: 실측값으로 교체 (Y)
+    z_mm: 0.0        # TODO: 실측값으로 교체 (Z)
+    rz1_deg: 0.0     # TODO: 실측값으로 교체 (A)
+    ry_deg: 0.0      # TODO: 실측값으로 교체 (B)
+    rz2_deg: 0.0     # TODO: 실측값으로 교체 (C)
 
   handrest_frame:
     parent_frame: base_link

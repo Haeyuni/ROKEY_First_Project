@@ -25,9 +25,9 @@
 
 tools:
   probe:
-    slot_frame: slot_1
+    slot_frame: slot_1 # nail
     expected_grip_width_mm: 12.0        # TODO: 실측값으로 교체
-    tcp_offset: [0, 0, 60.0, 0, 0, 0]   # TODO: 실측값으로 교체
+    tcp_offset: [668.58, 100.75, 372.13, 52.45, -179.77, 52.79]   # TODO: 실측값으로 교체
 
   sander:
     slot_frame: slot_2

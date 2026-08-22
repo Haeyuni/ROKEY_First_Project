@@ -90,11 +90,163 @@ _ALL_ORDER = ['frames', 'safety', 'skill', 'tool', 'scan', 'sanding', 'brushing'
               'coating', 'curing', 'inspection', 'stone', 'orchestrator']
 
 
+# --- frame 값 <-> 3x3 회전행렬 계산 (absolute: true 프레임의 부모 기준 상대값
+# 자동 계산용). roll/pitch/yaw 는 tf2 setRPY 와 동일한 고정축(extrinsic)
+# 컨벤션 R = Rz(yaw) @ Ry(pitch) @ Rx(roll) 을 따른다.
+def _rpy_to_matrix(roll, pitch, yaw):
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    return (
+        (cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr),
+        (sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr),
+        (-sp, cp * sr, cp * cr),
+    )
+
+
+def _zyz_to_matrix(rz1, ry, rz2):
+    """두산 posx 의 Task 자세(A,B,C) 컨벤션: R = Rz(rz1) @ Ry(ry) @ Rz(rz2).
+    nail_skill.conversions.task_pose_to_ros_pose 와 동일한 식이다 — 티치펜던트
+    TASK 화면에 그대로 표시되는 A/B/C 값을 그대로 여기 넣을 수 있게 하기
+    위함이다. ⚠️ roll/pitch/yaw(_rpy_to_matrix, tf2 표준 고정축 컨벤션)와는
+    다른 회전이다 — 펜던트에서 읽은 A,B,C 를 roll_deg/pitch_deg/yaw_deg 에
+    그대로 넣으면 숫자는 맞아도 실제 회전은 달라진다(실측으로 확인됨:
+    position_error 는 0에 가까운데 orientation 이 완전히 다르게 나옴)."""
+    def rotz(a):
+        c, s = math.cos(a), math.sin(a)
+        return ((c, -s, 0.0), (s, c, 0.0), (0.0, 0.0, 1.0))
+
+    def roty(a):
+        c, s = math.cos(a), math.sin(a)
+        return ((c, 0.0, s), (0.0, 1.0, 0.0), (-s, 0.0, c))
+
+    return _mat_mul(_mat_mul(rotz(rz1), roty(ry)), rotz(rz2))
+
+
+def _mat_to_quat(r):
+    m00, m01, m02 = r[0]
+    m10, m11, m12 = r[1]
+    m20, m21, m22 = r[2]
+    tr = m00 + m11 + m22
+    if tr > 0:
+        s = math.sqrt(tr + 1.0) * 2.0
+        w = 0.25 * s
+        x = (m21 - m12) / s
+        y = (m02 - m20) / s
+        z = (m10 - m01) / s
+    elif m00 > m11 and m00 > m22:
+        s = math.sqrt(1.0 + m00 - m11 - m22) * 2.0
+        w = (m21 - m12) / s
+        x = 0.25 * s
+        y = (m01 + m10) / s
+        z = (m02 + m20) / s
+    elif m11 > m22:
+        s = math.sqrt(1.0 + m11 - m00 - m22) * 2.0
+        w = (m02 - m20) / s
+        x = (m01 + m10) / s
+        y = 0.25 * s
+        z = (m12 + m21) / s
+    else:
+        s = math.sqrt(1.0 + m22 - m00 - m11) * 2.0
+        w = (m10 - m01) / s
+        x = (m02 + m20) / s
+        y = (m12 + m21) / s
+        z = 0.25 * s
+    return x, y, z, w
+
+
+def _mat_mul(a, b):
+    return tuple(tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3))
+                 for i in range(3))
+
+
+def _mat_vec(a, v):
+    return tuple(sum(a[i][k] * v[k] for k in range(3)) for i in range(3))
+
+
+def _mat_transpose(a):
+    return tuple(tuple(a[j][i] for j in range(3)) for i in range(3))
+
+
+def _pose_m_rad(frame):
+    """프레임 하나의 (회전행렬, 평행이동[m]) 을 만든다.
+
+    rz1_deg/ry_deg/rz2_deg 가 있으면 두산 Task 자세(A,B,C, 티치펜던트 TASK
+    화면에 그대로 표시됨) 로 해석한다 — 없으면 기존 roll_deg/pitch_deg/
+    yaw_deg(tf2 표준 고정축 RPY) 를 쓴다. 이 둘은 서로 다른 회전 표현이니
+    펜던트에서 읽은 A,B,C 는 반드시 rz1_deg/ry_deg/rz2_deg 에 넣을 것.
+    """
+    if any(k in frame for k in ('rz1_deg', 'ry_deg', 'rz2_deg')):
+        r = _zyz_to_matrix(math.radians(frame.get('rz1_deg', 0.0)),
+                            math.radians(frame.get('ry_deg', 0.0)),
+                            math.radians(frame.get('rz2_deg', 0.0)))
+    else:
+        r = _rpy_to_matrix(math.radians(frame.get('roll_deg', 0.0)),
+                            math.radians(frame.get('pitch_deg', 0.0)),
+                            math.radians(frame.get('yaw_deg', 0.0)))
+    t = (frame.get('x_mm', 0.0) / 1000.0,
+         frame.get('y_mm', 0.0) / 1000.0,
+         frame.get('z_mm', 0.0) / 1000.0)
+    return r, t
+
+
+def _compose(parent_pose, child_pose):
+    r_p, t_p = parent_pose
+    r_c, t_c = child_pose
+    r = _mat_mul(r_p, r_c)
+    t = tuple(a + b for a, b in zip(_mat_vec(r_p, t_c), t_p))
+    return r, t
+
+
+def _relative_from_absolutes(parent_abs, child_abs):
+    """parent_abs, child_abs 모두 base_link 기준 절대 포즈일 때, parent -> child
+    상대 포즈(회전행렬, 평행이동)를 역산한다."""
+    r_p, t_p = parent_abs
+    r_c, t_c = child_abs
+    r_pt = _mat_transpose(r_p)
+    r_rel = _mat_mul(r_pt, r_c)
+    t_rel = _mat_vec(r_pt, tuple(c - p for c, p in zip(t_c, t_p)))
+    return r_rel, t_rel
+
+
+_IDENTITY_POSE = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)), (0.0, 0.0, 0.0)
+
+
 def _static_frame_nodes(static_frames_file):
+    """각 프레임 항목은 기본적으로 parent_frame 기준 상대값(x_mm/y_mm/z_mm/
+    roll·pitch·yaw_deg)이다. `absolute: true` 를 추가하면 그 값을 base_link
+    기준 절대좌표(예: 티치펜던트 TASK-BASE 로 읽은 값)로 취급하고, 여기서
+    parent_frame 기준 상대값으로 자동 환산해 static_transform_publisher 에
+    넘긴다 — slot_1~6 처럼 부모(tool_rack_frame)가 있는 프레임도 "베이스
+    기준으로 읽은 값을 그대로 입력"할 수 있게 하기 위함이다.
+    """
     with open(static_frames_file) as f:
         cfg = yaml.safe_load(f) or {}
+    frame_defs = cfg.get('frames') or {}
+    absolute_poses = {'base_link': _IDENTITY_POSE}
+
+    def resolve_absolute(name):
+        if name in absolute_poses:
+            return absolute_poses[name]
+        frame = frame_defs[name]
+        parent_abs = resolve_absolute(frame['parent_frame'])
+        given = _pose_m_rad(frame)
+        pose = given if frame.get('absolute', False) else _compose(parent_abs, given)
+        absolute_poses[name] = pose
+        return pose
+
     nodes = []
-    for name, frame in (cfg.get('frames') or {}).items():
+    for name, frame in frame_defs.items():
+        abs_pose = resolve_absolute(name)
+        if frame.get('absolute', False):
+            parent_abs = absolute_poses[frame['parent_frame']]
+            r_rel, t_rel = _relative_from_absolutes(parent_abs, abs_pose)
+        else:
+            r_rel, t_rel = _pose_m_rad(frame)
+
+        x, y, z = t_rel
+        qx, qy, qz, qw = _mat_to_quat(r_rel)
+
         nodes.append(Node(
             package='tf2_ros',
             executable='static_transform_publisher',
@@ -103,12 +255,15 @@ def _static_frame_nodes(static_frames_file):
             arguments=[
                 '--frame-id', str(frame['parent_frame']),
                 '--child-frame-id', name,
-                '--x', str(frame.get('x_mm', 0.0) / 1000.0),
-                '--y', str(frame.get('y_mm', 0.0) / 1000.0),
-                '--z', str(frame.get('z_mm', 0.0) / 1000.0),
-                '--roll', str(math.radians(frame.get('roll_deg', 0.0))),
-                '--pitch', str(math.radians(frame.get('pitch_deg', 0.0))),
-                '--yaw', str(math.radians(frame.get('yaw_deg', 0.0))),
+                '--x', str(x),
+                '--y', str(y),
+                '--z', str(z),
+                # 회전은 쿼터니언으로 직접 넘긴다 — roll/pitch/yaw 로의 역변환은
+                # 짐벌락 부근에서 값이 여러 개로 갈라질 수 있어 피한다.
+                '--qx', str(qx),
+                '--qy', str(qy),
+                '--qz', str(qz),
+                '--qw', str(qw),
             ],
         ))
     return nodes
@@ -126,6 +281,11 @@ def _launch_setup(context, *args, **kwargs):
             f"알 수 없는 nodes 토큰: {unknown}. 사용 가능: {valid}, all")
 
     use_mock = LaunchConfiguration('use_mock_hardware').perform(context)
+    sync_tcp_on_startup = LaunchConfiguration('sync_tcp_on_startup').perform(context)
+    require_handrest = LaunchConfiguration('require_handrest').perform(context)
+    estop_active_high = LaunchConfiguration('estop_active_high').perform(context)
+    heartbeat_timeout_ms = LaunchConfiguration('heartbeat_timeout_ms').perform(context)
+    safety_publish_rate_hz = LaunchConfiguration('safety_publish_rate_hz').perform(context)
     dsr_prefix = LaunchConfiguration('dsr_prefix').perform(context)
     robot_model = LaunchConfiguration('robot_model').perform(context)
     rack_config_file = LaunchConfiguration('rack_config_file').perform(context)
@@ -150,9 +310,15 @@ def _launch_setup(context, *args, **kwargs):
             params['use_mock_hardware'] = use_mock == 'true'
         if token == 'tool':
             params['rack_config_file'] = rack_config_file
+            params['sync_tcp_on_startup'] = sync_tcp_on_startup == 'true'
         if token == 'skill':
             params['targets_yaml_path'] = targets_yaml_path
             params['base_frame_id'] = base_frame_id
+        if token == 'safety':
+            params['require_handrest'] = require_handrest == 'true'
+            params['estop_active_high'] = estop_active_high == 'true'
+            params['heartbeat_timeout_ms'] = int(heartbeat_timeout_ms)
+            params['publish_rate_hz'] = int(safety_publish_rate_hz)
 
         actions.append(Node(
             package=package,
@@ -187,6 +353,44 @@ def generate_launch_description():
                 '없어 true 로 줘도 실제 dsr 서비스를 호출하려 시도한다.')),
         DeclareLaunchArgument('dsr_prefix', default_value='dsr01',
                                description='두산 드라이버 네임스페이스 (ws_dsr 쪽과 일치해야 함)'),
+        DeclareLaunchArgument(
+            'estop_active_high', default_value='true',
+            description=(
+                'safety_monitor 에 전달. di_estop_channel(기본 1)의 raw DI 값을 '
+                '"눌림"으로 해석하는 극성. 실측: 채널1 raw 값이 계속 1 인데 실제 '
+                'E-Stop 은 안 눌려있음 — 배선이 안 됐거나(플로팅) 극성이 반대일 '
+                '가능성. 극성이 반대면 false 로, 아예 배선이 안 됐다면(테스트 '
+                '한정) 마찬가지로 false 로 꺼서 이 결함을 무시하고 진행할 수 있다 '
+                '— 실제 E-Stop 배선 후에는 반드시 true(기본값)로 재검증할 것.')),
+        DeclareLaunchArgument(
+            'heartbeat_timeout_ms', default_value='200',
+            description=(
+                'safety_monitor 에 전달. 실측: 20Hz 주기로 DI 3개+robot_state 1개를 '
+                '순차 호출하는데, robot_skill_node 등 다른 노드도 동시에 같은 두산 '
+                '컨트롤러에 서비스를 호출해서 가끔 200ms(기본값)를 넘겨 '
+                'FAULT_COMM_LOST 가 반복적으로 래치된다. 500~1000 정도로 늘리면 '
+                '완화된다.')),
+        DeclareLaunchArgument(
+            'safety_publish_rate_hz', default_value='20',
+            description=(
+                'safety_monitor 에 전달. 낮출수록(예: 5~10) 두산 컨트롤러 서비스 '
+                '호출 빈도가 줄어 다른 노드와의 경합/FAULT_COMM_LOST 오탐이 준다 — '
+                '단 안전 상태 갱신도 그만큼 느려진다.')),
+        DeclareLaunchArgument(
+            'require_handrest', default_value='true',
+            description=(
+                'safety_monitor 에 전달. FAULT_NO_HANDREST 는 실시간 결함이라 '
+                'ResetSafety 로 안 풀리고 handrest 센서(DI)가 "안착"으로 바뀌어야만 '
+                '자동 해제된다. 안착 센서/핸드레스트 하드웨어 없이 ChangeTool 등 '
+                '툴 교체만 테스트하려면 false 로 꺼서 이 결함을 아예 안 보게 할 수 '
+                '있다 — 실제 손톱 작업 공정 테스트 때는 반드시 true(기본값)로 되돌릴 것.')),
+        DeclareLaunchArgument(
+            'sync_tcp_on_startup', default_value='true',
+            description=(
+                'tool_manager 기동 시 rack_config_file 의 tcp_offset 을 add_tcp 로 '
+                '컨트롤러에 등록 시도할지 여부. 컨트롤러가 config_create_tcp 를 '
+                '거부하는 환경(예: 외부 제어 중 config 쓰기 차단)에서는 false 로 꺼서 '
+                '매번 뜨는 실패 로그를 없애고, 티치펜던트에 수동 등록된 TCP 를 그대로 쓴다.')),
         DeclareLaunchArgument('robot_model', default_value='m0609'),
         DeclareLaunchArgument('rack_config_file', default_value=default_rack_config,
                                description='tool_manager 슬롯 좌표/TCP 오프셋 yaml (절대경로 권장)'),

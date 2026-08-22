@@ -83,6 +83,9 @@ class ToolManagerNode(Node):
             self.get_logger().error(str(e))
             raise
 
+        if p('sync_tcp_on_startup').value:
+            self._sync_tcp_from_rack()
+
         self._pick_place_client = ActionClient(self, PickPlace, '/skill/pick_place',
                                                 callback_group=self._cb_client)
 
@@ -116,6 +119,7 @@ class ToolManagerNode(Node):
         d('use_mock_hardware', False)
         d('tool_list', ['probe', 'sander', 'brush', 'coater', 'uv', 'tweezers'])
         d('rack_config_file', 'config/tool_rack.yaml')
+        d('sync_tcp_on_startup', True)
         d('approach_height_mm', 50.0)
         d('verify_grip', True)
         d('grip_width_tolerance_mm', 1.0)
@@ -132,6 +136,25 @@ class ToolManagerNode(Node):
                 'ChangeTool 은 전부 E_INVALID_GOAL 로 거부됩니다.')
             return {}
         return data.get('tools', {}) or {}
+
+    def _sync_tcp_from_rack(self):
+        """rack_config_file 의 tcp_offset 값을 두산 컨트롤러에 그대로 등록한다.
+
+        이렇게 하면 티치펜던트에서 TCP 를 수동으로 등록/수정할 필요 없이
+        rack_config_file 하나만 갱신하면 된다 — set_tcp() 가 찾는 이름
+        (`tcp_<tool>`) 은 항상 이 파일 기준으로 (재)생성된다. 한 툴 등록이
+        실패해도 나머지 툴은 계속 시도한다 — 노드 기동 자체를 막지 않는다
+        (해당 툴의 ChangeTool 만 이후 set_tcp 단계에서 실패한다).
+        """
+        for name, cfg in self._rack.items():
+            tcp_name = f'tcp_{name}'
+            offset = cfg.get('tcp_offset', [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            try:
+                self._adapter.add_tcp(tcp_name, offset)
+            except DsrAdapterError as e:
+                self.get_logger().error(f'TCP 동기화 실패({tcp_name}): {e}')
+            else:
+                self.get_logger().info(f'TCP 동기화: {tcp_name} = {offset}')
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg: SafetyState):
