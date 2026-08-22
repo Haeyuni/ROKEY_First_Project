@@ -1,0 +1,99 @@
+# NIS-NAIL-v0.2 §11.4 "TF" 표가 요구하는 고정 프레임들.
+# static_frames.launch.py 가 그대로 읽어 각 항목마다 `tf2_ros
+# static_transform_publisher` 하나씩 띄운다 (parent_frame -> 프레임 이름).
+#
+# ⚠️ 전부 placeholder다. 실측/CAD 확정 전까지 이 좌표로 로봇을 움직이지
+# 말 것 — tool_manager 의 ChangeTool 등 이 프레임을 target_key로 쓰는
+# 모든 액션이 이 값을 그대로 믿고 이동한다.
+#
+# 필드: parent_frame, x_mm/y_mm/z_mm, roll_deg/pitch_deg/yaw_deg
+# (roll/pitch/yaw 는 parent_frame 축 기준 고정축 오일러각).
+#
+# slot_1~6 은 tool_rack_frame 의 자식으로 뒀다 — 랙을 통째로 옮기면
+# tool_rack_frame 하나만 재측정해도 슬롯 6개가 같이 따라오게 하기 위함
+# (targets.yaml 처럼 슬롯마다 절대좌표를 따로 두면 이 이점이 없어진다).
+# 실측 시에도 이 계층을 유지할 것: 랙 원점(CAD 기준점) 하나 재고,
+# 슬롯은 그 원점 기준 상대 오프셋만 넣는다.
+
+frames:
+  tool_rack_frame:
+    parent_frame: base_link
+    x_mm: 300.0      # TODO: 실측값으로 교체
+    y_mm: -300.0     # TODO: 실측값으로 교체
+    z_mm: 0.0        # TODO: 실측값으로 교체
+    roll_deg: 0.0
+    pitch_deg: 0.0
+    yaw_deg: 0.0     # TODO: 랙이 base_link 축과 안 맞으면 실측 후 채울 것
+
+  # slot_1~6: tool_rack.yaml 의 tools.<name>.slot_frame 과 이름이 정확히
+  # 일치해야 한다. 지금은 tool_rack_frame 원점에서 y축으로 60mm 간격 placeholder.
+  slot_1:
+    parent_frame: tool_rack_frame
+    x_mm: 0.0
+    y_mm: 0.0        # TODO: 실측값으로 교체
+    z_mm: 0.0        # TODO: 실측값으로 교체
+    roll_deg: 0.0
+    pitch_deg: 0.0
+    yaw_deg: 0.0
+  slot_2:
+    parent_frame: tool_rack_frame
+    x_mm: 0.0
+    y_mm: 60.0       # TODO: 실측값으로 교체
+    z_mm: 0.0        # TODO: 실측값으로 교체
+    roll_deg: 0.0
+    pitch_deg: 0.0
+    yaw_deg: 0.0
+  slot_3:
+    parent_frame: tool_rack_frame
+    x_mm: 0.0
+    y_mm: 120.0      # TODO: 실측값으로 교체
+    z_mm: 0.0        # TODO: 실측값으로 교체
+    roll_deg: 0.0
+    pitch_deg: 0.0
+    yaw_deg: 0.0
+  slot_4:
+    parent_frame: tool_rack_frame
+    x_mm: 0.0
+    y_mm: 180.0      # TODO: 실측값으로 교체
+    z_mm: 0.0        # TODO: 실측값으로 교체
+    roll_deg: 0.0
+    pitch_deg: 0.0
+    yaw_deg: 0.0
+  slot_5:
+    parent_frame: tool_rack_frame
+    x_mm: 0.0
+    y_mm: 240.0      # TODO: 실측값으로 교체
+    z_mm: 0.0        # TODO: 실측값으로 교체
+    roll_deg: 0.0
+    pitch_deg: 0.0
+    yaw_deg: 0.0
+  slot_6:
+    parent_frame: tool_rack_frame
+    x_mm: 0.0
+    y_mm: 300.0      # TODO: 실측값으로 교체
+    z_mm: 0.0        # TODO: 실측값으로 교체
+    roll_deg: 0.0
+    pitch_deg: 0.0
+    yaw_deg: 0.0
+
+  handrest_frame:
+    parent_frame: base_link
+    x_mm: 400.0      # TODO: 실측값으로 교체 (티칭 1점, NIS §11.4)
+    y_mm: 0.0        # TODO: 실측값으로 교체
+    z_mm: 0.0        # TODO: 실측값으로 교체
+    roll_deg: 0.0
+    pitch_deg: 0.0
+    yaw_deg: 0.0
+
+  # nail_frame 은 손톱이 handrest 위에서 대략 어디쯤 오는지의 CAD 추정치일
+  # 뿐이다 — scan_node 가 스캔 완료 시 nail_local_frame 을 새로 방송해
+  # 실제 경계 기준으로 덮어쓴다(NIS §6.1). 이 프레임은 "스캔을 어디서부터
+  # 시작할지"의 초기 추정용으로만 쓰인다.
+  nail_frame:
+    parent_frame: handrest_frame
+    x_mm: 0.0        # TODO: 실측값으로 교체
+    y_mm: 0.0        # TODO: 실측값으로 교체
+    z_mm: 20.0       # TODO: 실측값으로 교체 (손가락 두께 추정)
+    roll_deg: 0.0
+    pitch_deg: 0.0
+    yaw_deg: 0.0
