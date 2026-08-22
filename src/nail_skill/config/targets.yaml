@@ -28,10 +28,19 @@
 # 실기에서 MoveTo(linear=true, 저속)로 근접시켜 눈으로 확인한 뒤 갱신한다.
 
 stone_tray:
-  x_mm: 300.0     # TODO: 실측값으로 교체
-  y_mm: 200.0     # TODO: 실측값으로 교체
-  z_mm: 50.0      # TODO: 실측값으로 교체
+  x_mm: 667.86
+  y_mm: 91.20
+  z_mm: 374.23     # TODO: 실측값으로 교체
   frame_id: base_link
-  rz1_deg: 0.0
-  ry_deg: 180.0   # 그리퍼가 아래를 향하는 일반적인 자세 (TCP z축 기준). 실측 후 조정
-  rz2_deg: 0.0
+  rz1_deg: 32.60    # A
+  ry_deg: -179.68   # B
+  rz2_deg: 32.59    # C
+
+probe:
+  x_mm: 676.84
+  y_mm: -77.78
+  z_mm: 288.06
+  frame_id: base_link
+  rz1_deg: 13.69
+  ry_deg:  -179.26
+  rz2_deg: 13.26
