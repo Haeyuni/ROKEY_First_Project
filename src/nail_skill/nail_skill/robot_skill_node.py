@@ -70,6 +70,7 @@ class RobotSkillNode(Node):
         self._retreat_mm = p('retreat_mm').value
 
         self._latest_safety = None
+        self._last_safety_rx_monotonic = None
         safety_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
         best_effort_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -152,6 +153,7 @@ class RobotSkillNode(Node):
         d('base_frame_id', 'base_0')
         d('node_timeout_s', 120.0)
         d('safety_topic', '/safety/status')
+        d('safety_status_timeout_s', 0.2)
         d('log_force_data', False)
         # use_mock_hardware: NIS §3.6 공통 파라미터로 선언만 한다. 이 노드는
         # mock 분기를 두지 않는다 — 로봇 없이 검증할 때는 두산 공식 가상
@@ -200,9 +202,14 @@ class RobotSkillNode(Node):
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg: SafetyState):
         self._latest_safety = msg
+        self._last_safety_rx_monotonic = time.monotonic()
 
     def _safe_to_move(self) -> bool:
-        return self._latest_safety is not None and self._latest_safety.safe_to_move
+        timeout_s = self.get_parameter('safety_status_timeout_s').value
+        return (self._latest_safety is not None
+                and self._latest_safety.safe_to_move
+                and self._last_safety_rx_monotonic is not None
+                and time.monotonic() - self._last_safety_rx_monotonic <= timeout_s)
 
     def _on_cancel(self, goal_handle):
         return CancelResponse.ACCEPT

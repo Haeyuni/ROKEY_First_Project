@@ -76,12 +76,18 @@ class SafetyMonitorNode(Node):
         self._current_tool = ToolState.NONE
         self._scan_valid = False
         self._latest_safe_to_move = False
+        self._poll_guard = threading.Lock()
+        self._poll_thread = None
 
         transient_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                     durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
         self._cb_sub = ReentrantCallbackGroup()
         self._cb_srv = MutuallyExclusiveCallbackGroup()
+        # DSR 폴링은 동기 호출이며 한 번에 하나만 실행해야 한다. 구독과 같은
+        # Reentrant 그룹에 두면 느린 응답 중 다음 timer callback이 겹쳐
+        # 정상 통신까지 FAULT_COMM_LOST로 오판할 수 있다.
+        self._cb_poll = MutuallyExclusiveCallbackGroup()
 
         self.create_subscription(ToolState, '/tool/status', self._on_tool_status,
                                   transient_qos, callback_group=self._cb_sub)
@@ -96,7 +102,7 @@ class SafetyMonitorNode(Node):
                              self._on_reset_safety, callback_group=self._cb_srv)
 
         self.create_timer(1.0 / p('publish_rate_hz').value, self._on_publish_timer,
-                           callback_group=self._cb_sub)
+                           callback_group=self._cb_poll)
 
         if p('uv_software_control').value:
             self.get_logger().warn(
@@ -175,19 +181,16 @@ class SafetyMonitorNode(Node):
         dust_on = self._dust_on
 
         try:
-            estop_raw = self._call_with_timeout(
-                lambda: self._adapter.read_digital_input(estop_ch), timeout_s)
-            handrest_raw = self._call_with_timeout(
-                lambda: self._adapter.read_digital_input(handrest_ch), timeout_s)
-            dust_raw = self._call_with_timeout(
-                lambda: self._adapter.read_digital_input(dust_ch), timeout_s)
+            estop_raw, handrest_raw, dust_raw = self._poll_hardware(
+                estop_ch, handrest_ch, dust_ch, timeout_s)
             estop_pressed = estop_raw if estop_hi else (not estop_raw)
             handrest_seated = handrest_raw if handrest_hi else (not handrest_raw)
             dust_on = dust_raw if dust_hi else (not dust_raw)
-            self._call_with_timeout(self._adapter.read_robot_state, timeout_s)
-        except (DsrAdapterError, TimeoutError) as e:
+        except Exception as e:  # noqa: BLE001 - 모든 드라이버 오류는 통신 결함으로 fail-safe
             comm_ok = False
-            self.get_logger().error(f'[FAULT_COMM_LOST] 컨트롤러 응답 없음: {e}')
+            self.get_logger().error(
+                f'[FAULT_COMM_LOST] DI/컨트롤러 응답 없음: {e}',
+                throttle_duration_sec=2.0)
 
         with self._state_lock:
             # --- ② E-Stop: DI 상승(눌림 시작) 에지에서만 새로 래치한다.
@@ -232,24 +235,41 @@ class SafetyMonitorNode(Node):
 
         self._status_pub.publish(msg)
 
-    @staticmethod
-    def _call_with_timeout(fn, timeout_s):
-        """동기 dsr 호출을 별도 스레드에서 돌리고 timeout_s 안에 안 끝나면
-        TimeoutError 를 던진다 — get_robot_state() 가 응답 없이 걸릴 경우
-        20Hz 발행 루프 전체가 멈추는 것을 막는다."""
+    def _poll_hardware(self, estop_ch, handrest_ch, dust_ch, timeout_s):
+        """DI 3개와 하트비트를 한 작업으로 읽고 전체 timeout을 적용한다.
+
+        DSR 동기 호출이 내부에서 영구 대기할 수 있으므로 worker를 사용하되,
+        이전 worker가 아직 살아 있으면 새 worker를 만들지 않는다. 통신 장애
+        동안 매 timer tick마다 daemon thread가 누적되는 것을 막기 위함이다.
+        """
         result = {}
 
         def run():
             try:
-                result['value'] = fn()
+                estop = self._adapter.read_digital_input(estop_ch)
+                handrest = self._adapter.read_digital_input(handrest_ch)
+                dust = self._adapter.read_digital_input(dust_ch)
+                robot_state = self._adapter.read_robot_state()
+                if robot_state is None or \
+                        (isinstance(robot_state, (int, float)) and robot_state < 0):
+                    raise DsrAdapterError(
+                        f'get_robot_state 응답 오류 (state={robot_state})')
+                result['value'] = (estop, handrest, dust)
             except Exception as e:  # noqa: BLE001 - 스레드 경계 너머로 그대로 전달
                 result['error'] = e
 
-        t = threading.Thread(target=run, daemon=True)
+        with self._poll_guard:
+            if self._poll_thread is not None and self._poll_thread.is_alive():
+                raise TimeoutError('이전 DI/하트비트 조회가 아직 종료되지 않음')
+            t = threading.Thread(target=run, daemon=True, name='safety_dsr_poll')
+            self._poll_thread = t
         t.start()
         t.join(timeout_s)
         if t.is_alive():
-            raise TimeoutError(f'{timeout_s * 1000:.0f}ms 내 응답 없음')
+            raise TimeoutError(f'DI/하트비트가 {timeout_s * 1000:.0f}ms 내 응답 없음')
+        with self._poll_guard:
+            if self._poll_thread is t:
+                self._poll_thread = None
         if 'error' in result:
             raise result['error']
         return result.get('value')

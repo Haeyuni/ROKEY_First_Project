@@ -99,6 +99,7 @@ class StoneNode(Node):
         self._declare_parameters()
 
         self._latest_safety = None
+        self._last_safety_rx_monotonic = None
         safety_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
@@ -139,6 +140,7 @@ class StoneNode(Node):
     def _declare_parameters(self):
         d = self.declare_parameter
         d('safety_topic', '/safety/status')
+        d('safety_status_timeout_s', 0.2)
         d('node_timeout_s', 120.0)
         d('log_force_data', False)
         d('press_force_n', 1.5)
@@ -162,9 +164,14 @@ class StoneNode(Node):
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg):
         self._latest_safety = msg
+        self._last_safety_rx_monotonic = time.monotonic()
 
     def _safe_to_move(self):
-        return self._latest_safety is not None and self._latest_safety.safe_to_move
+        timeout_s = self.get_parameter('safety_status_timeout_s').value
+        return (self._latest_safety is not None
+                and self._latest_safety.safe_to_move
+                and self._last_safety_rx_monotonic is not None
+                and time.monotonic() - self._last_safety_rx_monotonic <= timeout_s)
 
     def _on_cancel(self, goal_handle):
         if self._active_goal_handle is not None:
