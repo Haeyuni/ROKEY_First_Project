@@ -1,33 +1,43 @@
-# robot_skill_node `targets_yaml_path` 가 읽는 타겟 좌표 테이블
-# (robot_skill_node.py `_load_targets()` / `_target_task_pose()` 가 그대로 읽음).
+# ============================================================================
+# 좌표 주소록 — robot_skill_node 가 읽는다 (`_load_targets` / `_target_task_pose`)
+# ============================================================================
 #
-# tool_rack.yaml 과 마찬가지로 ROS2 파라미터 YAML(node/ros__parameters 래핑)이
-# 아니라 순수 yaml 이다 — `yaml.safe_load()` 로 통째로 읽어 target_key 를
-# 최상위 키로 바로 찾는다. launch 에서 이 파일 "경로"를 `targets_yaml_path`
-# 파라미터로 넘긴다.
+# "이름 → 좌표" 표. 그 이상도 이하도 아니다.
 #
-# **여기에 넣으면 안 되는 것**: 툴 랙 슬롯(`slot_1`~`slot_6`)은 넣지 않는다.
-# `tool_manager` 는 `PickPlace.target_key` 에 `tool_rack.yaml` 의 `slot_frame`
-# 값을 그대로 넘기고, `_target_task_pose()` 는 target_key 가 이 파일에
-# **없을 때만** 그 값을 TF 프레임 이름으로 취급해 조회한다(§5.1/§5.2, NIS
-# §11.4 "slot_* : static_transform_publisher"). 여기 slot_* 를 미리 등록해
-# 버리면 나중에 실제 CAD 기반 static_transform_publisher 를 띄워도 이 파일이
-# 계속 우선 적용되어(먼저 조회하므로) TF 값이 조용히 무시된다 — 디버깅하기
-# 아주 어려운 종류의 버그다.
+#   PickPlace(target_key: 'sander')  →  여기서 'sander' 를 찾아서
+#                                    →  x=502.28, y=34.55, z=281.00 으로 이동
 #
-# **여기에 넣는 것**: TF 프레임으로 대신할 이유가 없는, 티칭/실측으로 확정하는
-# 단발성 목표 위치. 지금은 stone_node 가 참조하는 `stone_tray` 하나뿐
-# (§6.7, 기본 파라미터 `stone_pickup_frame: stone_tray`).
+# 여기에 없는 이름이 오면 robot_skill_node 는 그 이름을 TF 프레임으로 간주해
+# 한 번 더 찾아보고, 그것도 없으면 E_INVALID_GOAL 로 실패한다.
 #
-# 필드 (전부 robot_skill_node.py `_target_task_pose()` 가 읽는 그대로):
-#   x_mm / y_mm / z_mm : frame_id 기준 목표 위치 (mm)
-#   frame_id           : 기준 TF 프레임. 비우면 goal 이 보낸 frame_id 를 그대로 씀
-#   rz1_deg / ry_deg / rz2_deg : 선택. 없으면 TCP 기본 자세(z축 아래 방향) 유지
+# ROS2 파라미터 YAML 이 아니라 순수 yaml 이다 — 최상위 키가 곧 target_key.
+# launch 가 이 파일의 "경로"를 targets_yaml_path 파라미터로 넘긴다.
 #
-# ⚠️ 아래 좌표는 전부 placeholder다. 실측/티칭 전에는 신뢰하지 말 것 —
-# 실기에서 MoveTo(linear=true, 저속)로 근접시켜 눈으로 확인한 뒤 갱신한다.
+# ----------------------------------------------------------------------------
+# 누가 이 파일의 이름을 쓰나
+# ----------------------------------------------------------------------------
+#   tool_manager : tool_rack.yaml 의 slot_frame 값을 그대로 target_key 로 넘긴다.
+#                  → 툴 6개(probe/sander/brush/coater/uv/tweezers)의 키 이름이
+#                    tool_rack.yaml 의 slot_frame 과 **글자 그대로 같아야** 한다.
+#                    한쪽을 고치면 반드시 다른 쪽도 같이 고칠 것.
+#   stone_node   : stone_pickup_frame 파라미터(기본 'stone_tray')
+#
+# ----------------------------------------------------------------------------
+# 필드
+# ----------------------------------------------------------------------------
+#   x_mm / y_mm / z_mm  : frame_id 기준 목표 위치 (mm)
+#   frame_id            : 기준 TF 프레임. 보통 base_link. 비우면 goal 이 보낸 값 사용
+#   rz1_deg/ry_deg/rz2_deg : 목표 자세. 티치펜던트 TASK 화면의 A/B/C 를 **변환
+#                            없이 그대로** 적는다. 생략하면 TCP 기본 자세 유지.
+#
+# 값 채우는 법: 티치펜던트를 TASK-BASE 좌표계로 두고, 그리퍼를 실제 목표
+# 자세로 옮긴 뒤 화면의 X/Y/Z/A/B/C 여섯 숫자를 그대로 옮겨 적는다.
+#
+# ⚠️ 새로 넣은 좌표는 실기에서 MoveTo(linear=true, 저속)로 먼저 근접시켜
+#    눈으로 확인한 뒤 PickPlace 에 쓸 것.
 
-stone_tray:
+# ⚠️ 미티칭 — 임시로 홈위치 좌표를 넣어둔 상태다. 스톤 트레이 실제 위치로 교체할 것.
+stone_tray: # 스톤 공급 트레이
   x_mm: 667.86
   y_mm: 91.20
   z_mm: 374.23     # TODO: 실측값으로 교체
@@ -36,7 +46,56 @@ stone_tray:
   ry_deg: -179.68   # B
   rz2_deg: 32.59    # C
 
-probe:
+probe: # 탐침 - 완
+  x_mm: 676.84
+  y_mm: -77.78
+  z_mm: 288.06
+  frame_id: base_link
+  rz1_deg: 13.69
+  ry_deg: -179.26
+  rz2_deg: 13.26
+
+sander: # 네일 파일 - 완
+  x_mm: 502.28
+  y_mm: 34.55
+  z_mm: 281.00
+  frame_id: base_link
+  rz1_deg: 120.60
+  ry_deg: -179.83
+  rz2_deg: 120.09
+
+
+brush: # 붓 - 완
+  x_mm: 679.83
+  y_mm: 71.70
+  z_mm: 314.82
+  frame_id: base_link
+  rz1_deg: 26.28
+  ry_deg: -179.34
+  rz2_deg: 25.62
+
+coater: # 젤 네일 - 완
+  x_mm: 600.46
+  y_mm: 49.03
+  z_mm: 346.75
+  frame_id: base_link
+  rz1_deg: 30.35
+  ry_deg: -179.44
+  rz2_deg: 29.35
+
+uv: # 자외선 램프 - 완
+  x_mm: 330.34
+  y_mm: 40.83
+  z_mm: 306.04
+  frame_id: base_link
+  rz1_deg: 15.12
+  ry_deg: -178.77
+  rz2_deg: 13.26
+
+# ⚠️ 미티칭 — 아래 값은 probe 좌표를 복사해 둔 자리표시자다. 이대로 두면
+# ChangeTool('tweezers') 와 stone_node 테스트가 probe 슬롯으로 간다.
+# 핀셋을 랙에 걸고 티칭한 뒤 여섯 숫자를 교체할 것.
+tweezers: # 핀셋
   x_mm: 676.84
   y_mm: -77.78
   z_mm: 288.06

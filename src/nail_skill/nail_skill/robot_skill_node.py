@@ -167,6 +167,10 @@ class RobotSkillNode(Node):
         d('ft_filter_cutoff_hz', 10.0)
         # 이동 기본값
         d('approach_height_mm', 20.0)
+        # PLACE 시 목표 z 를 이만큼 올려서 놓는다(mm). 0 이면 PICK 과 정확히
+        # 같은 높이. 이동 중 툴이 그리퍼 안에서 미끄러지면 그만큼 슬롯 바닥을
+        # 눌러버리므로, 실기에서는 1~3mm 를 줘서 살짝 떨어뜨리는 편이 안전하다.
+        d('place_clearance_mm', 0.0)
         d('default_max_force_n', 5.0)
         d('motion_timeout_s', 30.0)
         d('move_max_speed_mms', 100.0)
@@ -513,6 +517,15 @@ class RobotSkillNode(Node):
                 f'찾을 수 없음: {e}', started_at)
             return result
 
+        if goal.mode == PickPlace.Goal.MODE_PLACE:
+            clearance = self.get_parameter('place_clearance_mm').value
+            if clearance > 0.0:
+                target = TaskPose(target.x_mm, target.y_mm, target.z_mm + clearance,
+                                   target.rz1_deg, target.ry_deg, target.rz2_deg)
+                self.get_logger().info(
+                    f'PickPlace place: place_clearance_mm={clearance} 적용 '
+                    f'→ z {target.z_mm - clearance:.2f} → {target.z_mm:.2f}mm')
+
         approach = TaskPose(target.x_mm, target.y_mm,
                              target.z_mm + goal.approach_height_mm,
                              target.rz1_deg, target.ry_deg, target.rz2_deg)
@@ -524,12 +537,32 @@ class RobotSkillNode(Node):
             reason, _ = self._verify_position_reached(reason, pose)
             return reason
 
-        for pose, step, pct in ((approach, 0, 10.0), (target, 1, 30.0)):
-            reason = move_and_wait(pose, step, pct)
-            if reason != 'ok':
-                result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                         context='PickPlace')
+        settle_s = self.get_parameter('gripper_settle_s').value
+
+        reason = move_and_wait(approach, 0, 10.0)
+        if reason != 'ok':
+            result.base = self._finish_from_reason(reason, goal_handle, started_at,
+                                                     context='PickPlace')
+            return result
+
+        # PICK 은 접근 높이에서 그리퍼를 **먼저 연 뒤** 하강한다. 닫힌 채로
+        # 내려가면 툴/슬롯에 부딪힌다. PLACE 는 반대로 툴을 쥔 채 내려가야
+        # 하므로 여기서 열지 않는다 (도착 후 아래에서 연다).
+        if goal.mode == PickPlace.Goal.MODE_PICK:
+            if not self._adapter.gripper_open():
+                goal_handle.abort()
+                self._log_abort(ErrorCode.E_GRIP_FAILED,
+                                 'PickPlace pick: 하강 전 그리퍼 개방 명령 실패')
+                result.base = self._result_base(False, ErrorCode.E_GRIP_FAILED,
+                                                  '하강 전 그리퍼 개방 명령 실패', started_at)
                 return result
+            time.sleep(settle_s)
+
+        reason = move_and_wait(target, 1, 30.0)
+        if reason != 'ok':
+            result.base = self._finish_from_reason(reason, goal_handle, started_at,
+                                                     context='PickPlace')
+            return result
 
         feedback(2, 60.0)
         if goal.mode == PickPlace.Goal.MODE_PICK:
@@ -537,7 +570,7 @@ class RobotSkillNode(Node):
             grip_ok = self._adapter.gripper_set_width(width)
         else:
             grip_ok = self._adapter.gripper_open()
-        time.sleep(self.get_parameter('gripper_settle_s').value)
+        time.sleep(settle_s)
 
         if not grip_ok:
             self._adapter.start_move_line(approach, speed, accel)

@@ -1,111 +1,83 @@
-# NIS-NAIL-v0.2 §11.4 "TF" 표가 요구하는 고정 프레임들.
-# static_frames.launch.py 가 그대로 읽어 각 항목마다 `tf2_ros
-# static_transform_publisher` 하나씩 띄운다 (parent_frame -> 프레임 이름).
+# ============================================================================
+# TF 트리 — "물건들이 어디 있나"를 부모-자식으로 엮은 가계도
+# ============================================================================
 #
-# ⚠️ 전부 placeholder다. 실측/CAD 확정 전까지 이 좌표로 로봇을 움직이지
-# 말 것 — tool_manager 의 ChangeTool 등 이 프레임을 target_key로 쓰는
-# 모든 액션이 이 값을 그대로 믿고 이동한다.
+# ● 이 파일이 하는 일
+#   launch 가 이 파일을 읽어서, 항목 하나당 `static_transform_publisher` 라는
+#   작은 프로그램을 하나씩 띄운다. 그러면 ROS 전체가 "handrest_frame 은
+#   base_link 에서 얼마나 떨어져 있다" 를 알게 된다.
+#   좌표를 노드에 직접 넘기는 게 아니라, TF 라는 공용 게시판에 붙여두는 것.
 #
-# 필드: parent_frame, x_mm/y_mm/z_mm + 회전 (아래 둘 중 하나).
+# ● 지금의 가계도
 #
-# 회전 표기 — 절대 섞어 쓰지 말 것 (숫자 3개라 겉보기엔 같아 보여도 서로
-# 다른 회전 컨벤션이다):
-#   rz1_deg / ry_deg / rz2_deg : 두산 Task 자세(A,B,C). 티치펜던트 TASK
-#     화면에 그대로 표시되는 세 숫자를 **변환 없이 그대로** 입력한다
-#     (nail_skill.conversions 의 ZYZ 컨벤션과 동일 — 실측으로 검증됨).
-#     펜던트에서 위치를 읽어 넣는 프레임(tool_rack_frame, slot_1~6 등)은
-#     전부 이 필드를 쓴다.
-#   roll_deg / pitch_deg / yaw_deg : tf2 표준 고정축 RPY. 로봇 자세를
-#     읽어서 넣는 게 아니라 순수 TF 트리 구성용으로 직접 계산해 넣는
-#     프레임에만 쓴다 (예: 지금 회전 없음(0,0,0)인 handrest_frame/
-#     nail_frame). ⚠️ 펜던트에서 읽은 A,B,C 를 여기 넣으면 안 된다 —
-#     실측 확인: position_error 는 0에 가까운데 실제 로봇 자세가 완전히
-#     다르게 나온다(두 회전 컨벤션이 다르기 때문).
+#     base_link                로봇 바닥. 모든 것의 기준점 (0,0,0)
+#        │
+#        ├── handrest_frame    손 받침대가 어디 있나
+#        │      │
+#        │      └── nail_frame 받침대 위 손톱이 대략 어디쯤
+#        │
+#        └── tool_rack_frame   툴 랙이 어디 있나 (※ 현재 사용처 없음 — 아래 참고)
 #
-# absolute: true (선택) — 이 필드가 있으면 위치/회전을 parent_frame 기준이
-# 아니라 **base_link 기준 절대값**으로 해석한다 (예: 티치펜던트를
-# TASK-BASE 좌표계로 놓고 그 자리에서 그냥 읽은 값을 그대로 입력).
-# test_bringup.launch.py 의 _static_frame_nodes() 가 기동 시 parent_frame
-# 기준 상대값으로 자동 환산해서 발행한다 — 슬롯마다 오프셋을 직접 빼는
-# 계산 안 해도 된다. slot_1~6 에 이미 적용해뒀다.
+#   왜 이렇게 엮나: 받침대를 옮기면 손톱도 같이 따라오게 하려고. handrest_frame
+#   한 줄만 고치면 nail_frame 은 자동으로 딸려 온다.
 #
-# slot_1~6 은 tool_rack_frame 의 자식으로 뒀다 — 랙을 통째로 옮기면
-# tool_rack_frame 하나만 재측정해도 슬롯 6개가 같이 따라오게 하기 위함
-# (targets.yaml 처럼 슬롯마다 절대좌표를 따로 두면 이 이점이 없어진다).
-# absolute: true 덕분에 "부모 기준 상대 오프셋"이라는 개념을 몰라도 되지만,
-# TF 트리 구조(반드시 tool_rack_frame 의 자식)는 그대로 유지된다.
+# ● 없으면 뭐가 깨지나
+#   nail_frame 이 핵심이다. scan_node 의 기본 frame_id 가 nail_frame 이고,
+#   스캔·코팅·경화·검사 명령이 전부 이 프레임을 기준으로 좌표를 준다.
+#   이게 없으면 §6 스캔부터 §11 검사까지 전부 "그런 프레임 없다"로 실패한다.
+#
+# ============================================================================
+# 필드 쓰는 법
+# ============================================================================
+#
+#   parent_frame       : 누구를 기준으로 한 위치인가 (부모 프레임 이름)
+#   x_mm / y_mm / z_mm : 부모로부터 얼마나 떨어져 있나 (mm)
+#   + 회전값 3개 → 아래 두 방식 중 **하나만** 골라 쓴다
+#
+# ⚠️ 회전값 두 종류를 절대 섞지 말 것. 숫자가 셋이라 똑같아 보이지만 계산
+#    방식이 완전히 다르다. 잘못 넣으면 위치는 맞는데 로봇 자세가 엉뚱해진다.
+#
+#   ① rz1_deg / ry_deg / rz2_deg
+#      = 티치펜던트 TASK 화면의 A, B, C 를 **변환 없이 그대로** 복사
+#      → 로봇을 실제로 그 자리에 가져다 놓고 화면 숫자를 읽어 넣을 때 사용
+#
+#   ② roll_deg / pitch_deg / yaw_deg
+#      = 일반적인 tf2 회전 표기 (고정축 RPY)
+#      → 로봇으로 재는 게 아니라 도면 보고 손으로 계산해 넣을 때 사용
+#      → 지금 handrest_frame / nail_frame 은 회전이 없어서(0,0,0) 신경 안 써도 됨
+#      ⚠️ 여기에 펜던트 A,B,C 를 넣으면 안 된다
+#
+#   absolute: true  (선택 필드)
+#      평소엔 x/y/z 를 "부모 기준 상대 거리"로 읽는다. 이 줄을 추가하면
+#      "base_link 기준 절대 좌표"로 읽는다 — 펜던트를 TASK-BASE 로 놓고 읽은
+#      값을 뺄셈 없이 그대로 붙여넣고 싶을 때 쓴다. 부모 기준 상대값 환산은
+#      launch(`_static_frame_nodes`)가 알아서 한다.
+#
+# ⚠️ 아래 좌표는 handrest_frame / nail_frame 이 아직 전부 추정치(placeholder)다.
+#    실측으로 교체하기 전에는 이 프레임 기준으로 로봇을 움직이지 말 것.
+#
+# ============================================================================
 
 frames:
+  # 툴 랙 전체의 기준 위치 (펜던트 실측값).
+  #
+  # ※ 현재 이 프레임을 쓰는 곳은 없다. 예전에는 slot_1~slot_6 을 이 프레임의
+  #   자식으로 두고 tool_manager 가 슬롯 위치를 TF 로 조회했지만, 지금은 툴
+  #   위치를 nail_skill/config/targets.yaml 에 직접 티칭해서 쓴다.
+  #   실측값이라 지우지 않고 남겨둔다 — 나중에 "랙을 통째로 옮기면 슬롯 6개가
+  #   같이 따라오는" 방식으로 되돌릴 때 이 값이 출발점이 된다.
   tool_rack_frame:
     parent_frame: base_link
     x_mm: 366.08
     y_mm: 5.38
     z_mm: 424.85
-    rz1_deg: 67.80    # A (TASK 화면 값 그대로)
+    rz1_deg: 67.80    # A (펜던트 TASK 화면 값 그대로)
     ry_deg: -179.90   # B
     rz2_deg: 67.88    # C
 
-  # slot_1~6: tool_rack.yaml 의 tools.<name>.slot_frame 과 이름이 정확히
-  # 일치해야 한다. absolute: true 라서 아래 x/y/z/rz1·ry·rz2 는
-  # tool_rack_frame 기준이 아니라 base_link 기준 절대값이다 — 티치펜던트를
-  # TASK-BASE 로 놓고 그리퍼를 실제 슬롯 위치(그립 자세)로 지깅한 뒤 읽은
-  # X/Y/Z 와 A/B/C 를 그대로 입력하면 된다. tool_rack_frame 기준 상대값은
-  # launch 가 알아서 계산한다.
-  slot_1:
-    parent_frame: tool_rack_frame
-    absolute: true
-    x_mm: 667.86
-    y_mm: 91.20
-    z_mm: 374.23
-    rz1_deg: 32.60    # A
-    ry_deg: -179.68   # B
-    rz2_deg: 32.59    # C
-  slot_2:
-    parent_frame: tool_rack_frame
-    absolute: true
-    x_mm: 0.0        # TODO: 실측값으로 교체 (base_link 기준, TASK-BASE X)
-    y_mm: 0.0        # TODO: 실측값으로 교체 (Y)
-    z_mm: 0.0        # TODO: 실측값으로 교체 (Z)
-    rz1_deg: 0.0     # TODO: 실측값으로 교체 (A)
-    ry_deg: 0.0      # TODO: 실측값으로 교체 (B)
-    rz2_deg: 0.0     # TODO: 실측값으로 교체 (C)
-  slot_3:
-    parent_frame: tool_rack_frame
-    absolute: true
-    x_mm: 0.0        # TODO: 실측값으로 교체 (base_link 기준, TASK-BASE X)
-    y_mm: 0.0        # TODO: 실측값으로 교체 (Y)
-    z_mm: 0.0        # TODO: 실측값으로 교체 (Z)
-    rz1_deg: 0.0     # TODO: 실측값으로 교체 (A)
-    ry_deg: 0.0      # TODO: 실측값으로 교체 (B)
-    rz2_deg: 0.0     # TODO: 실측값으로 교체 (C)
-  slot_4:
-    parent_frame: tool_rack_frame
-    absolute: true
-    x_mm: 0.0        # TODO: 실측값으로 교체 (base_link 기준, TASK-BASE X)
-    y_mm: 0.0        # TODO: 실측값으로 교체 (Y)
-    z_mm: 0.0        # TODO: 실측값으로 교체 (Z)
-    rz1_deg: 0.0     # TODO: 실측값으로 교체 (A)
-    ry_deg: 0.0      # TODO: 실측값으로 교체 (B)
-    rz2_deg: 0.0     # TODO: 실측값으로 교체 (C)
-  slot_5:
-    parent_frame: tool_rack_frame
-    absolute: true
-    x_mm: 0.0        # TODO: 실측값으로 교체 (base_link 기준, TASK-BASE X)
-    y_mm: 0.0        # TODO: 실측값으로 교체 (Y)
-    z_mm: 0.0        # TODO: 실측값으로 교체 (Z)
-    rz1_deg: 0.0     # TODO: 실측값으로 교체 (A)
-    ry_deg: 0.0      # TODO: 실측값으로 교체 (B)
-    rz2_deg: 0.0     # TODO: 실측값으로 교체 (C)
-  slot_6:
-    parent_frame: tool_rack_frame
-    absolute: true
-    x_mm: 0.0        # TODO: 실측값으로 교체 (base_link 기준, TASK-BASE X)
-    y_mm: 0.0        # TODO: 실측값으로 교체 (Y)
-    z_mm: 0.0        # TODO: 실측값으로 교체 (Z)
-    rz1_deg: 0.0     # TODO: 실측값으로 교체 (A)
-    ry_deg: 0.0      # TODO: 실측값으로 교체 (B)
-    rz2_deg: 0.0     # TODO: 실측값으로 교체 (C)
-
+  # 손 받침대. 손톱 관련 좌표의 뿌리다 — 받침대를 옮기면 여기만 고치면 된다.
+  # 채우는 법: 그리퍼 끝을 받침대의 기준점(예: 손가락이 닿는 모서리)에 대고
+  # 펜던트 X/Y/Z 를 읽어 넣는다. 회전은 받침대가 base_link 와 나란하면 0 그대로.
   handrest_frame:
     parent_frame: base_link
     x_mm: 400.0      # TODO: 실측값으로 교체 (티칭 1점, NIS §11.4)
@@ -115,10 +87,11 @@ frames:
     pitch_deg: 0.0
     yaw_deg: 0.0
 
-  # nail_frame 은 손톱이 handrest 위에서 대략 어디쯤 오는지의 CAD 추정치일
-  # 뿐이다 — scan_node 가 스캔 완료 시 nail_local_frame 을 새로 방송해
-  # 실제 경계 기준으로 덮어쓴다(NIS §6.1). 이 프레임은 "스캔을 어디서부터
-  # 시작할지"의 초기 추정용으로만 쓰인다.
+  # 손톱이 받침대 위 어디쯤 오는지의 대략적인 추정치.
+  # 정확할 필요 없다 — scan_node 가 스캔을 마치면 실제 경계를 기준으로
+  # nail_local_frame 을 새로 방송해 덮어쓴다(NIS §6.1). 이 프레임은 "스캔을
+  # 어디서부터 시작할지" 초기 추정용으로만 쓰인다.
+  # z_mm 은 받침대 표면에서 손톱까지의 높이(손가락 두께)로 보면 된다.
   nail_frame:
     parent_frame: handrest_frame
     x_mm: 0.0        # TODO: 실측값으로 교체
