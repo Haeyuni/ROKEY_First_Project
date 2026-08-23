@@ -79,27 +79,27 @@ tools:
     # set_tcp 이후 모든 이동이 66cm 어긋남).
     tcp_offset: [0, 0, 0, 0, 0, 0]
 
-  sander:                             # 네일 파일
+  sander:                             # 네일 파일: width_mm(clear)
     slot_frame: sander
-    expected_grip_width_mm: 18.0      # TODO: 손잡이 폭 실측 (현재 NIS 예시값)
-    tcp_offset: [0, 0, 92.5, 0, 0, 0] # TODO: 실측 (현재 NIS 예시값)
+    expected_grip_width_mm: 50.0      # TODO: 손잡이 폭 실측 (현재 NIS 예시값)
+    tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)
 
   brush:                              # 붓 — 분진 제거
     slot_frame: brush
     expected_grip_width_mm: 15.0      # TODO: 손잡이 폭 실측
-    tcp_offset: [0, 0, 80.0, 0, 0, 0] # TODO: 실측 (추정치)
+    tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)
 
   coater:                             # 젤 도포기
     slot_frame: coater
     expected_grip_width_mm: 16.0      # TODO: 손잡이 폭 실측
-    tcp_offset: [0, 0, 85.0, 0, 0, 0] # TODO: 실측 (추정치)
+    tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)
 
   uv:                                 # 자외선 램프 — 상시 ON, 취급 주의
     slot_frame: uv
     expected_grip_width_mm: 22.0      # TODO: 손잡이 폭 실측 (현재 NIS 예시값)
-    tcp_offset: [0, 0, 110.0, 0, 0, 0] # TODO: 실측 (현재 NIS 예시값)
+    tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)
 
   tweezers:                           # 핀셋 — 스톤 부착
     slot_frame: tweezers
     expected_grip_width_mm: 10.0      # TODO: 손잡이 폭 실측
-    tcp_offset: [0, 0, 70.0, 0, 0, 0] # TODO: 실측 (추정치)
+    tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)
