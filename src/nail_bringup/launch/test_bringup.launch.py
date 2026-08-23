@@ -352,19 +352,21 @@ def generate_launch_description():
         DeclareLaunchArgument('dsr_prefix', default_value='dsr01',
                                description='두산 드라이버 네임스페이스 (ws_dsr 쪽과 일치해야 함)'),
         DeclareLaunchArgument(
-            'heartbeat_timeout_ms', default_value='200',
+            'heartbeat_timeout_ms', default_value='800',
             description=(
                 'safety_monitor 에 전달. 실측: 20Hz 주기로 DI 2개+robot_state 1개를 '
                 '순차 호출하는데, robot_skill_node 등 다른 노드도 동시에 같은 두산 '
-                '컨트롤러에 서비스를 호출해서 가끔 200ms(기본값)를 넘겨 '
-                'FAULT_COMM_LOST 가 반복적으로 래치된다. 500~1000 정도로 늘리면 '
-                '완화된다.')),
+                '컨트롤러에 서비스를 호출해서 200ms(구 기본값)는 자주 넘겨 '
+                'FAULT_COMM_LOST 가 반복적으로 래치됐다. 800으로 실기 검증됨 — '
+                '더 심하면 1000까지 올릴 것. (safety_monitor_node.py 자체 기본값과 '
+                '별개로 이 launch 인자가 항상 파라미터로 전달되어 덮어쓰므로, 노드 쪽 '
+                '기본값만 고쳐서는 여기 값이 안 바뀐다.)')),
         DeclareLaunchArgument(
-            'safety_publish_rate_hz', default_value='20',
+            'safety_publish_rate_hz', default_value='10',
             description=(
                 'safety_monitor 에 전달. 낮출수록(예: 5~10) 두산 컨트롤러 서비스 '
                 '호출 빈도가 줄어 다른 노드와의 경합/FAULT_COMM_LOST 오탐이 준다 — '
-                '단 안전 상태 갱신도 그만큼 느려진다.')),
+                '단 안전 상태 갱신도 그만큼 느려진다. 10으로 실기 검증됨.')),
         DeclareLaunchArgument(
             'require_handrest', default_value='false',
             description=(
