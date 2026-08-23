@@ -140,7 +140,6 @@ class ToolManagerNode(Node):
         d('rack_config_file', 'config/tool_rack.yaml')
         d('sync_tcp_on_startup', True)
         d('approach_height_mm', 50.0)
-        d('verify_grip', True)
         d('grip_width_tolerance_mm', 1.0)
         d('change_timeout_s', 60.0)
         d('uv_park_facing', 'into_rack')
@@ -368,7 +367,6 @@ class ToolManagerNode(Node):
         started_at = time.monotonic()
         timeout_s = self.get_parameter('change_timeout_s').value
         approach_height = self.get_parameter('approach_height_mm').value
-        verify_grip_default = self.get_parameter('verify_grip').value
         tol_default = self.get_parameter('grip_width_tolerance_mm').value
         result = ChangeTool.Result()
 
@@ -448,9 +446,13 @@ class ToolManagerNode(Node):
             return result
 
         # --- 2) 신규 툴 파지 -----------------------------------------------------
+        # 파지 폭 검증(grip_verified)은 하드웨어에 접촉/폭 되읽기 센서가 없어
+        # 구현 불가 — robot_skill_node 도 명령값을 그대로 되돌려줄 뿐이라
+        # 신뢰할 수 없다(§1.5). 여기서는 PickPlace 자체의 성공/실패(모션·
+        # 그리퍼 명령 실패)만 판단 근거로 쓴다. 실제 파지 여부는 육안으로
+        # 확인할 것.
         feedback(1, 30.0)
         cfg = self._rack[goal.target_tool]  # goal_callback 에서 존재를 이미 확인함
-        verify_grip = goal.verify_after_grip or verify_grip_default
 
         pick_goal = PickPlace.Goal()
         pick_goal.mode = PickPlace.Goal.MODE_PICK
@@ -460,7 +462,6 @@ class ToolManagerNode(Node):
             else cfg.get('expected_grip_width_mm', 0.0)
         pick_goal.width_tolerance_mm = goal.width_tolerance_mm if goal.width_tolerance_mm > 0.0 \
             else tol_default
-        pick_goal.verify_grip = verify_grip
 
         feedback(2, 55.0)
         pp_result, err_code, err_detail = self._call_pick_place(pick_goal, goal_handle, timeout_s)
@@ -470,13 +471,10 @@ class ToolManagerNode(Node):
             result.base = self._result_base(False, ErrorCode.E_CANCELLED, err_detail, started_at)
             return result
 
-        grip_bad = err_code is not None or not pp_result.base.success or \
-            (verify_grip and not pp_result.grip_verified)
+        grip_bad = err_code is not None or not pp_result.base.success
         if grip_bad:
-            code = err_code or (pp_result.base.error.code if not pp_result.base.success
-                                 else ErrorCode.E_GRIP_FAILED)
-            detail = err_detail or (pp_result.base.error.detail if not pp_result.base.success
-                                     else f'파지 폭 검증 실패 (measured={pp_result.measured_width_mm}mm)')
+            code = err_code or pp_result.base.error.code
+            detail = err_detail or pp_result.base.error.detail
             self._log_grip_failure(code, goal.target_tool, detail)
             self._mark_tool_lost()
             goal_handle.abort()
@@ -494,12 +492,15 @@ class ToolManagerNode(Node):
             result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED, detail, started_at)
             return result
 
-        # --- 4) 파지 폭 재확인 + 상태 확정 ------------------------------------------
+        # --- 4) 상태 확정 -------------------------------------------------------
         feedback(4, 95.0)
         self._current_tool = goal.target_tool
         self._current_tcp = f'tcp_{goal.target_tool}'
         self._grip_width_mm = pp_result.measured_width_mm
-        self._grip_verified = verify_grip and pp_result.grip_verified
+        # 검증 불가(센서 없음) — PickPlace 가 성공했으니(위 grip_bad 체크
+        # 통과) 파지된 것으로 간주한다. False 로 두면 safety_monitor 가 이를
+        # 툴 낙하로 오판해 FAULT_TOOL_DROP 을 래치한다(§1.5).
+        self._grip_verified = True
         self._publish_status()
 
         goal_handle.succeed()
