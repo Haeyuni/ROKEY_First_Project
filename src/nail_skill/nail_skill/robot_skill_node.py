@@ -176,6 +176,12 @@ class RobotSkillNode(Node):
         # 충분히 높이 들어올려야 슬롯을 완전히 벗어난다. goal 의
         # approach_height_mm 보다 작으면 그 값으로 올린다(하강 방지).
         d('pick_lift_mm', 100.0)
+        # via_key 경유 시 "목표 XY 위 수평 이동"에 쓸 높이(mm, 목표 z 기준
+        # 여유분). via_key 자체의 높이를 그대로 쓰면 그 XY 에서는 너무 높아
+        # NOT REACHABLE 이 나는 경우가 실기에서 확인됨(툴마다 도달 가능한
+        # 높이 범위가 다름) — 대신 목표 z 로부터의 여유분으로 조절한다.
+        # via_key 높이보다 낮은 쪽을 쓴다(그보다 더 올라갈 필요는 없음).
+        d('pick_place_transit_clearance_mm', 100.0)
         d('default_max_force_n', 5.0)
         d('motion_timeout_s', 30.0)
         d('move_max_speed_mms', 100.0)
@@ -202,13 +208,20 @@ class RobotSkillNode(Node):
         d('lateral_jam_force_n', 4.0)
         d('lateral_retreat_mm', 10.0)
         d('lateral_search_step_mm', 0.5)
+        # F/T 센서 미장착·미작동 하드웨어 대응(운영자 확인, NIS §5.1 경고).
+        # false 면 접촉 탐색(힘 임계값 도달까지 전진)과 힘 추종(compliance/
+        # target_force)을 전부 건너뛰고, waypoints 를 좌표만으로 그대로
+        # 따라간다 — max_force_n/jam_force_n 초과 감시도 못 한다. 실기에
+        # 센서가 없어 E_LATERAL_LIMIT 이 항상 나서 켜둔 것으로,
+        # **좌표가 실제로 안전한지는 사람이 보장해야 한다.**
+        d('lateral_force_sensing_enabled', True)
         # 그리퍼
         d('grip_width_tolerance_mm', 1.0)
         d('tool_drop_width_delta_mm', 2.0)
         d('gripper_settle_s', 1.0)
         # PICK 하강 전 / PLACE 놓기 개방폭(mm). 그리퍼 완전개방('o')은 랙 슬롯
         # 간격보다 넓게 벌어져 옆 슬롯/구조물과 부딪힌다 — 실측으로 조정.
-        d('gripper_open_width_mm', 50.0)
+        d('gripper_open_width_mm', 60.0)
         d('targets_yaml_path', '')
 
     # --- 안전 -----------------------------------------------------------------
@@ -409,17 +422,32 @@ class RobotSkillNode(Node):
     def _execute_move_to(self, goal_handle):
         goal = goal_handle.request
         started_at = time.monotonic()
+        result = MoveTo.Result()
 
-        try:
-            base_pose = self._transform_pose_to_base(goal.target, goal.frame_id)
-        except Exception as e:
-            goal_handle.abort()
-            result = MoveTo.Result()
-            result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED,
-                                             f'TF 변환 실패 ({goal.frame_id}): {e}', started_at)
-            return result
-
-        task_pose = pose_to_task_pose(base_pose)
+        if goal.target_key:
+            # PickPlace 와 동일한 조회 경로 — targets.yaml 의 rz1/ry/rz2 를
+            # quaternion 변환 없이 그대로 쓴다. target/frame_id(Pose) 로 같은
+            # 자세를 보내려면 quaternion 을 직접 계산해야 하는데, ry가 ±180°
+            # 근처(짐벌락)일 때 atan2 왕복 변환이 다른 자세로 튀는 문제가
+            # 실기에서 확인됨 — target_key 는 그 변환을 안 거쳐 안전하다.
+            try:
+                task_pose = self._target_task_pose(goal.target_key, goal.frame_id)
+            except Exception as e:
+                goal_handle.abort()
+                result.base = self._result_base(
+                    False, ErrorCode.E_INVALID_GOAL,
+                    f'target_key "{goal.target_key}" 를 targets_yaml_path 에서도, TF 프레임으로도 '
+                    f'찾을 수 없음: {e}', started_at)
+                return result
+        else:
+            try:
+                base_pose = self._transform_pose_to_base(goal.target, goal.frame_id)
+            except Exception as e:
+                goal_handle.abort()
+                result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED,
+                                                 f'TF 변환 실패 ({goal.frame_id}): {e}', started_at)
+                return result
+            task_pose = pose_to_task_pose(base_pose)
         accel_ratio = goal.accel_ratio if goal.accel_ratio > 0.0 else goal.speed_ratio
         vel = max(1.0, goal.speed_ratio * self.get_parameter('move_max_speed_mms').value)
         acc = max(1.0, accel_ratio * self.get_parameter('move_max_accel_mms2').value)
@@ -443,7 +471,6 @@ class RobotSkillNode(Node):
 
         reason = self._monitor(goal_handle, timeout_s, 10.0, on_tick)
         reason, err_mm = self._verify_position_reached(reason, task_pose)
-        result = MoveTo.Result()
         if err_mm >= 0.0:
             result.position_error_mm = err_mm
         result.base = self._finish_from_reason(reason, goal_handle, started_at, context='MoveTo')
@@ -546,6 +573,46 @@ class RobotSkillNode(Node):
             return reason
 
         settle_s = self.get_parameter('gripper_settle_s').value
+
+        # target_key 에 via_key 가 지정돼 있으면 approach 전에 그 경유점부터
+        # 들른다. 실기에서 대각선 이동이 랙/구조물에 부딪히는 문제가 있었는데,
+        # 계산으로 경유점을 만들면 특이점/IK 문제로 오히려 더 위험했다
+        # (실측 확인됨) — 대신 펜던트로 직접 티칭해 검증된 좌표를 쓴다.
+        via_key = (self._load_targets().get(goal.target_key) or {}).get('via_key')
+        if via_key:
+            try:
+                via_pose = self._target_task_pose(via_key, goal.frame_id)
+            except Exception as e:
+                goal_handle.abort()
+                result.base = self._result_base(
+                    False, ErrorCode.E_INVALID_GOAL,
+                    f'via_key "{via_key}" 를 targets_yaml_path 에서도, TF 프레임으로도 '
+                    f'찾을 수 없음: {e}', started_at)
+                return result
+            reason = move_and_wait(via_pose, 0, 3.0)
+            if reason != 'ok':
+                result.base = self._finish_from_reason(reason, goal_handle, started_at,
+                                                         context='PickPlace(경유)')
+                return result
+
+            # 경유점에서 approach 로 바로 가면 XY 와 Z 가 동시에 바뀌어 여전히
+            # 대각선이 된다 — 이미 쥔 툴의 돌출부가 부딪히는 문제가 실기에서
+            # 재현됨. 목표 XY 위로 수평 이동부터 하고(아래), 그 다음
+            # approach→target 은 같은 XY 라서 자동으로 수직 하강이 된다.
+            # 이 수평 이동의 높이는 via_key 의 높이를 그대로 쓰지 않는다 —
+            # 그 XY 에서는 너무 높아 NOT REACHABLE 이 나는 경우가 실기에서
+            # 확인됨(툴마다 실제 도달 가능한 높이 범위가 다름). 대신 목표 z
+            # 로부터의 여유분(pick_place_transit_clearance_mm)과 via 높이 중
+            # 더 낮은 쪽을 쓴다.
+            transit_clearance = self.get_parameter('pick_place_transit_clearance_mm').value
+            transit_z_mm = min(via_pose.z_mm, target.z_mm + transit_clearance)
+            above_target = TaskPose(target.x_mm, target.y_mm, transit_z_mm,
+                                     target.rz1_deg, target.ry_deg, target.rz2_deg)
+            reason = move_and_wait(above_target, 0, 7.0)
+            if reason != 'ok':
+                result.base = self._finish_from_reason(reason, goal_handle, started_at,
+                                                         context='PickPlace(경유-상공)')
+                return result
 
         reason = move_and_wait(approach, 0, 10.0)
         if reason != 'ok':
@@ -934,27 +1001,55 @@ class RobotSkillNode(Node):
                                                          context='LateralContact')
                 return result
 
+        force_sensing = self.get_parameter('lateral_force_sensing_enabled').value
+
         # 2) 수평 탐색: 접촉 감지 or travel_limit_mm 초과
         travelled = 0.0
         contacted = False
-        while travelled < applied_limit:
+        if not force_sensing:
+            # 힘 센서 미작동 — travel_limit_mm 을 "여기까지 가면 접촉"으로
+            # 신뢰하고 한 번에 전진한다. 접촉 감지/과압 방어가 없으므로
+            # travel_limit_mm 자체가 안전 거리인지 사람이 보장해야 한다.
             if goal_handle.is_cancel_requested or not self._safe_to_move():
                 self._cleanup_lateral(goal_handle, approach_vec, retreat_mm)
                 reason = 'cancel' if goal_handle.is_cancel_requested else 'safety'
                 result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                         context='LateralContact 탐색')
+                                                         context='LateralContact 탐색(좌표전용)')
                 return result
-            dx, dy, dz = approach_vec.x * step_mm, approach_vec.y * step_mm, approach_vec.z * step_mm
+            dx = approach_vec.x * applied_limit
+            dy = approach_vec.y * applied_limit
+            dz = approach_vec.z * applied_limit
             self._adapter.start_move_rel_tool_xyz(dx, dy, dz, search_speed, search_speed * 2)
-            self._monitor(goal_handle, 5.0, 20.0, lambda: None)
-            travelled += step_mm
-            max_travel = max(max_travel, travelled)
-            w = self._adapter.read_wrench()
-            force_log.append(self._wrench_to_msg(w))
-            feedback(10.0, 0, travelled, w)
-            if axis_component(w) >= contact_threshold:
-                contacted = True
-                break
+            reason = self._monitor(goal_handle, timeout_s, 20.0,
+                                    lambda: feedback(10.0, 0, applied_limit))
+            if reason != 'ok':
+                self._cleanup_lateral(goal_handle, approach_vec, retreat_mm)
+                result.base = self._finish_from_reason(reason, goal_handle, started_at,
+                                                         context='LateralContact 탐색(좌표전용)')
+                return result
+            travelled = applied_limit
+            max_travel = applied_limit
+            contacted = True
+        else:
+            while travelled < applied_limit:
+                if goal_handle.is_cancel_requested or not self._safe_to_move():
+                    self._cleanup_lateral(goal_handle, approach_vec, retreat_mm)
+                    reason = 'cancel' if goal_handle.is_cancel_requested else 'safety'
+                    result.base = self._finish_from_reason(reason, goal_handle, started_at,
+                                                             context='LateralContact 탐색')
+                    return result
+                dx, dy, dz = (approach_vec.x * step_mm, approach_vec.y * step_mm,
+                              approach_vec.z * step_mm)
+                self._adapter.start_move_rel_tool_xyz(dx, dy, dz, search_speed, search_speed * 2)
+                self._monitor(goal_handle, 5.0, 20.0, lambda: None)
+                travelled += step_mm
+                max_travel = max(max_travel, travelled)
+                w = self._adapter.read_wrench()
+                force_log.append(self._wrench_to_msg(w))
+                feedback(10.0, 0, travelled, w)
+                if axis_component(w) >= contact_threshold:
+                    contacted = True
+                    break
 
         if not contacted:
             self._cleanup_lateral(goal_handle, approach_vec, retreat_mm)
@@ -970,14 +1065,17 @@ class RobotSkillNode(Node):
             return result
 
         # 3~4) target_force 까지 접근 + 컴플라이언스 (접근축만 힘 제어)
-        stiffness = [3000.0] * 6
-        stiffness[axis] = 200.0
-        self._adapter.compliance_on(stiffness)
-        force_6d = [0.0] * 6
-        force_6d[axis] = -abs(goal.target_force_n) * axis_sign
-        axis_mask = [0] * 6
-        axis_mask[axis] = 1
-        self._adapter.set_desired_force(force_6d, axis_mask)
+        # 힘 센서가 없으면 컴플라이언스/목표힘 자체가 의미 없어 건너뛴다 —
+        # 아래 waypoints 순회도 순수 좌표 이동이 된다.
+        if force_sensing:
+            stiffness = [3000.0] * 6
+            stiffness[axis] = 200.0
+            self._adapter.compliance_on(stiffness)
+            force_6d = [0.0] * 6
+            force_6d[axis] = -abs(goal.target_force_n) * axis_sign
+            axis_mask = [0] * 6
+            axis_mask[axis] = 1
+            self._adapter.set_desired_force(force_6d, axis_mask)
 
         # 5) waypoints 순회
         passes = max(1, goal.passes)
@@ -997,14 +1095,16 @@ class RobotSkillNode(Node):
 
                 def on_tick():
                     nonlocal max_force_measured, max_jam_force, travelled, max_travel
-                    w = self._adapter.read_wrench()
-                    force_log.append(self._wrench_to_msg(w))
-                    a_force = abs(axis_component(w))
-                    max_force_measured = max(max_force_measured, a_force)
-                    other = [abs(w.fx_n), abs(w.fy_n), abs(w.fz_n)]
-                    other.pop(axis)
-                    jam = max(other)
-                    max_jam_force = max(max_jam_force, jam)
+                    w = None
+                    if force_sensing:
+                        w = self._adapter.read_wrench()
+                        force_log.append(self._wrench_to_msg(w))
+                        a_force = abs(axis_component(w))
+                        max_force_measured = max(max_force_measured, a_force)
+                        other = [abs(w.fx_n), abs(w.fy_n), abs(w.fz_n)]
+                        other.pop(axis)
+                        jam = max(other)
+                        max_jam_force = max(max_jam_force, jam)
                     pct = 100.0 * (pass_idx * n_wp + wp_idx + 1) / (passes * n_wp)
                     feedback(min(99.0, pct), pass_idx, travelled, w)
 
