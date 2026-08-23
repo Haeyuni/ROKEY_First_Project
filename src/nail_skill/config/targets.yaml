@@ -51,14 +51,23 @@ rack_transit: # 랙 진입 전 경유점 - 완 (get_current_posx 실측)
   ry_deg: -178.81
   rz2_deg: 144.12
 
-stone_tray: # 스톤 공급 트레이 - 완
-  x_mm: 429.23
-  y_mm: 127.95
-  z_mm: 290.04
+stone_tray: # 스톤 공급 트레이 - 완 (get_current_posx 실측)
+  x_mm: 408.56
+  y_mm: 126.22
+  z_mm: 284.95
   frame_id: base_link
-  rz1_deg: 3.16    # A
-  ry_deg: -178.88   # B
-  rz2_deg: 3.52   # C
+  rz1_deg: 30.29    # A
+  ry_deg: -179.01   # B
+  rz2_deg: 30.43   # C
+
+stone_place: # 스톤 부착 위치 - 완 (get_current_posx 실측)
+  x_mm: 325.55
+  y_mm: -21.85
+  z_mm: 394.80
+  frame_id: base_link
+  rz1_deg: 97.94    # A
+  ry_deg: -179.06   # B
+  rz2_deg: 4.65   # C
 
 probe: # 탐침 - 완
   x_mm: 677.17
@@ -81,14 +90,14 @@ sander: # 네일 파일 - 완
   via_key: rack_transit
 
 
-brush: # 붓 - 완
-  x_mm: 679.83
-  y_mm: 71.70
-  z_mm: 284.82
+brush: # 붓 - 완 (get_current_posx 실측)
+  x_mm: 277.53
+  y_mm: 224.72
+  z_mm: 283.38
   frame_id: base_link
-  rz1_deg: 26.28
-  ry_deg: -179.34
-  rz2_deg: 25.62
+  rz1_deg: 50.74
+  ry_deg: -179.14
+  rz2_deg: 50.13
   via_key: rack_transit
 
 coater: # 젤 네일 - 완
@@ -159,23 +168,23 @@ sander_work: # 네일 파일 작업 시작 자세 - clear
   ry_deg: -179.15
   rz2_deg: 89.68
 
-brush_work: # 붓 작업 시작 자세 - 미티칭
-  x_mm: 0.0
-  y_mm: 0.0
-  z_mm: 0.0
+brush_work: # 붓 작업 시작 자세 - 완 (get_current_posx 실측)
+  x_mm: 380.71
+  y_mm: -24.76
+  z_mm: 500.20
   frame_id: base_link
-  rz1_deg: 0.0
-  ry_deg: -180.0
-  rz2_deg: 0.0
+  rz1_deg: 25.04
+  ry_deg: -178.89
+  rz2_deg: 24.58
 
-coater_work: # 젤 도포 작업 시작 자세 - 미티칭
-  x_mm: 0.0
-  y_mm: 0.0
-  z_mm: 0.0
+coater_work: # 젤 도포 작업 시작 자세 - 완 (get_current_posx 실측)
+  x_mm: 380.86
+  y_mm: -20.46
+  z_mm: 440.93
   frame_id: base_link
-  rz1_deg: 0.0
-  ry_deg: -180.0
-  rz2_deg: 0.0
+  rz1_deg: 25.59
+  ry_deg: -178.71
+  rz2_deg: 25.38
 
 uv_work: # UV 조사 작업 시작 자세 - 완 (get_current_posx 실측)
   x_mm: 376.61

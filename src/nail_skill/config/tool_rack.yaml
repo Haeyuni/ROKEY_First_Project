@@ -99,7 +99,11 @@ tools:
     expected_grip_width_mm: 22.0      # TODO: 손잡이 폭 실측 (현재 NIS 예시값)
     tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)
 
-  tweezers:                           # 핀셋 — 스톤 부착
+  tweezers:                           # 핀셋 — 스톤 부착 clear
     slot_frame: tweezers
-    expected_grip_width_mm: 10.0      # TODO: 손잡이 폭 실측
+    expected_grip_width_mm: 21.0      # 실측: 20mm. stone_node 의
+                                       # tweezers_grip_width_mm 파라미터와
+                                       # 반드시 같은 값으로 맞출 것 — 다르면
+                                       # 스톤 놓을 때 핀셋을 놓치거나
+                                       # 손잡이를 계속 짓누르게 된다.
     tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)

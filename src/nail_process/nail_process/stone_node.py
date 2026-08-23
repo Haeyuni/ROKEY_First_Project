@@ -153,6 +153,11 @@ class StoneNode(Node):
         d('approach_height_mm', 15.0)
         # NIS 표에 없는 구현 보조값 — 위 docstring 의 압착/검증 설계에 필요하다.
         d('stone_grip_width_mm', 3.0)          # PICK 목표 파지 폭 (작은 스톤)
+        # 핀셋을 "툴로서" RG2 가 쥐고 있는 폭(tool_rack.yaml 의 tweezers.
+        # expected_grip_width_mm 와 맞출 것). 스톤을 놓을 때 이 폭까지만
+        # 벌린다 — 완전개방(gripper_open_width_mm)까지 벌리면 핀셋 손잡이
+        # 자체를 놓쳐버린다.
+        d('tweezers_grip_width_mm', 20.0)
         d('press_search_margin_mm', 3.0)       # ProbePoint max_depth = approach_height + 이 값
         d('press_hold_speed_ratio', 0.1)       # 압착 깊이로 재하강할 때 속도(0~1)
         d('approach_speed_ratio', 0.3)         # 접근 이동 속도(0~1) — PickPlace 내부값과 동일
@@ -216,7 +221,8 @@ class StoneNode(Node):
 
     # --- PickPlace 클라이언트 헬퍼 ------------------------------------------------
     def _call_pick_place(self, mode, target_key, expected_width_mm, verify_grip,
-                          approach_height_mm, timeout_s, our_goal_handle, feedback_cb=None):
+                          approach_height_mm, timeout_s, our_goal_handle, feedback_cb=None,
+                          already_holding=False):
         """반환: (PickPlace.Result|None, error_code|None|'CANCELLED')."""
         if not self._pick_place_client.wait_for_server(timeout_sec=10.0):
             return None, ErrorCode.E_COMM_LOST
@@ -229,6 +235,7 @@ class StoneNode(Node):
         goal.expected_width_mm = expected_width_mm
         goal.grip_width_mm = expected_width_mm
         goal.verify_grip = verify_grip
+        goal.already_holding = already_holding
 
         send_done = threading.Event()
         state = {}
@@ -462,7 +469,7 @@ class StoneNode(Node):
                 feedback(0, 0.0)
                 pick_result, err = self._call_pick_place(
                     PickPlace.Goal.MODE_PICK, pickup_key, grip_width, True, approach_height,
-                    timeout_s, goal_handle)
+                    timeout_s, goal_handle, already_holding=True)
                 if err == 'CANCELLED':
                     abort_code, abort_detail = 'CANCELLED', '사용자 취소'
                     break
@@ -547,11 +554,14 @@ class StoneNode(Node):
                 break
 
             # --- 4단계: 그리퍼 열기 + 이탈 (PickPlace TF 폴백, docstring 참고) ------
+            # already_holding=True: 완전개방이 아니라 tweezers_grip_width_mm
+            # 까지만 벌린다 — 스톤만 놓고 핀셋 손잡이는 계속 쥔 채 유지.
             feedback(3, 75.0)
             self._broadcast_hold_frame(tx_mm, ty_mm, hold_z_mm, quat)
+            release_width = self.get_parameter('tweezers_grip_width_mm').value
             place_result, err = self._call_pick_place(
-                PickPlace.Goal.MODE_PLACE, _HOLD_FRAME, 0.0, False, approach_height,
-                timeout_s, goal_handle)
+                PickPlace.Goal.MODE_PLACE, _HOLD_FRAME, release_width, False, approach_height,
+                timeout_s, goal_handle, already_holding=True)
             if err == 'CANCELLED':
                 abort_code, abort_detail = 'CANCELLED', '사용자 취소'
                 break

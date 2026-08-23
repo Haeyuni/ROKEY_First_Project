@@ -184,8 +184,8 @@ class RobotSkillNode(Node):
         d('pick_place_transit_clearance_mm', 100.0)
         d('default_max_force_n', 5.0)
         d('motion_timeout_s', 30.0)
-        d('move_max_speed_mms', 100.0)
-        d('move_max_accel_mms2', 200.0)
+        d('move_max_speed_mms', 300.0)
+        d('move_max_accel_mms2', 600.0)
         d('move_pose_tolerance_mm', 1.0)
         # ProbePoint
         d('probe_speed_mms', 2.0)
@@ -623,9 +623,12 @@ class RobotSkillNode(Node):
         # PICK 은 접근 높이에서 그리퍼를 **먼저 연 뒤** 하강한다. 닫힌 채로
         # 내려가면 툴/슬롯에 부딪힌다. PLACE 는 반대로 툴을 쥔 채 내려가야
         # 하므로 여기서 열지 않는다 (도착 후 아래에서 연다).
+        # already_holding 이면(예: 핀셋을 쥔 채 스톤만 집기) 이 개방 자체를
+        #건너뛴다 — 완전개방하면 쥐고 있던 툴을 놓쳐버린다.
         open_width = self.get_parameter('gripper_open_width_mm').value
+        width = goal.grip_width_mm if goal.grip_width_mm > 0.0 else goal.expected_width_mm
 
-        if goal.mode == PickPlace.Goal.MODE_PICK:
+        if goal.mode == PickPlace.Goal.MODE_PICK and not goal.already_holding:
             if not self._adapter.gripper_set_width(open_width):
                 goal_handle.abort()
                 self._log_abort(ErrorCode.E_GRIP_FAILED,
@@ -643,7 +646,10 @@ class RobotSkillNode(Node):
 
         feedback(2, 60.0)
         if goal.mode == PickPlace.Goal.MODE_PICK:
-            width = goal.grip_width_mm if goal.grip_width_mm > 0.0 else goal.expected_width_mm
+            grip_ok = self._adapter.gripper_set_width(width)
+        elif goal.already_holding:
+            # 완전개방(open_width) 대신 지정된 폭까지만 벌린다 — 예: 스톤만
+            # 놓고 핀셋 손잡이는 계속 쥔 채 유지.
             grip_ok = self._adapter.gripper_set_width(width)
         else:
             grip_ok = self._adapter.gripper_set_width(open_width)
