@@ -171,6 +171,11 @@ class RobotSkillNode(Node):
         # 같은 높이. 이동 중 툴이 그리퍼 안에서 미끄러지면 그만큼 슬롯 바닥을
         # 눌러버리므로, 실기에서는 1~3mm 를 줘서 살짝 떨어뜨리는 편이 안전하다.
         d('place_clearance_mm', 0.0)
+        # PICK 파지 후 상승 높이(mm, 슬롯 목표 z 기준). approach_height_mm 은
+        # 하강 직전 접근용이라 20mm 정도로 낮은데, 툴을 뽑아낼 때는 툴 길이보다
+        # 충분히 높이 들어올려야 슬롯을 완전히 벗어난다. goal 의
+        # approach_height_mm 보다 작으면 그 값으로 올린다(하강 방지).
+        d('pick_lift_mm', 100.0)
         d('default_max_force_n', 5.0)
         d('motion_timeout_s', 30.0)
         d('move_max_speed_mms', 100.0)
@@ -201,6 +206,9 @@ class RobotSkillNode(Node):
         d('grip_width_tolerance_mm', 1.0)
         d('tool_drop_width_delta_mm', 2.0)
         d('gripper_settle_s', 1.0)
+        # PICK 하강 전 / PLACE 놓기 개방폭(mm). 그리퍼 완전개방('o')은 랙 슬롯
+        # 간격보다 넓게 벌어져 옆 슬롯/구조물과 부딪힌다 — 실측으로 조정.
+        d('gripper_open_width_mm', 50.0)
         d('targets_yaml_path', '')
 
     # --- 안전 -----------------------------------------------------------------
@@ -548,8 +556,10 @@ class RobotSkillNode(Node):
         # PICK 은 접근 높이에서 그리퍼를 **먼저 연 뒤** 하강한다. 닫힌 채로
         # 내려가면 툴/슬롯에 부딪힌다. PLACE 는 반대로 툴을 쥔 채 내려가야
         # 하므로 여기서 열지 않는다 (도착 후 아래에서 연다).
+        open_width = self.get_parameter('gripper_open_width_mm').value
+
         if goal.mode == PickPlace.Goal.MODE_PICK:
-            if not self._adapter.gripper_open():
+            if not self._adapter.gripper_set_width(open_width):
                 goal_handle.abort()
                 self._log_abort(ErrorCode.E_GRIP_FAILED,
                                  'PickPlace pick: 하강 전 그리퍼 개방 명령 실패')
@@ -569,7 +579,7 @@ class RobotSkillNode(Node):
             width = goal.grip_width_mm if goal.grip_width_mm > 0.0 else goal.expected_width_mm
             grip_ok = self._adapter.gripper_set_width(width)
         else:
-            grip_ok = self._adapter.gripper_open()
+            grip_ok = self._adapter.gripper_set_width(open_width)
         time.sleep(settle_s)
 
         if not grip_ok:
@@ -593,7 +603,19 @@ class RobotSkillNode(Node):
             grip_verified = abs(measured - goal.expected_width_mm) <= tol
 
         feedback(4, 90.0)
-        reason = move_and_wait(approach, 4, 100.0)
+        # PICK 은 툴을 슬롯에서 완전히 빼내야 하므로 approach 보다 높이 든다.
+        # PLACE 는 툴을 놓고 빠지는 것뿐이라 approach 로 그대로 복귀한다.
+        if goal.mode == PickPlace.Goal.MODE_PICK:
+            lift_mm = max(self.get_parameter('pick_lift_mm').value,
+                          goal.approach_height_mm)
+            retreat = TaskPose(target.x_mm, target.y_mm, target.z_mm + lift_mm,
+                                target.rz1_deg, target.ry_deg, target.rz2_deg)
+            self.get_logger().info(
+                f'PickPlace pick: 파지 후 상승 z {target.z_mm:.1f} → {retreat.z_mm:.1f}mm '
+                f'(pick_lift_mm={lift_mm})')
+        else:
+            retreat = approach
+        reason = move_and_wait(retreat, 4, 100.0)
         result.measured_width_mm = measured
         result.grip_verified = grip_verified
         result.base = self._finish_from_reason(reason, goal_handle, started_at,
