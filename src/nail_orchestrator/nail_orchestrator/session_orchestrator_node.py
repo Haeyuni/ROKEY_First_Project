@@ -132,6 +132,15 @@ class SessionOrchestratorNode(Node):
         d('home_frame_id', 'home_frame')
         d('home_timeout_s', 30.0)
         d('rework_exposure_scale', 1.5)
+        # ChangeTool 직후 공통 이동: 경유점(랙 쪽 안전 지점) → <툴>_work
+        # (targets.yaml). 대각선 이동으로 방금 집은 툴이 다른 것과 부딪히는
+        # 문제 대응 — robot_skill_node 의 PickPlace via_key 라우팅과 같은
+        # 이유. tool_transit_key 는 모든 툴이 공유하는 단일 경유점 이름이다
+        # (지금 targets.yaml 에서 6개 툴 전부 via_key: rack_transit 로
+        # 맞춰져 있음 — 바뀌면 이 파라미터도 같이 바꿀 것).
+        d('tool_transit_key', 'rack_transit')
+        d('tool_transit_speed_ratio', 0.3)
+        d('tool_transit_timeout_s', 30.0)
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg):
@@ -231,6 +240,34 @@ class SessionOrchestratorNode(Node):
         goal.verify_after_grip = True
         return self._call_action(self._change_tool_client, goal, our_goal_handle, timeout_s,
                                   ignore_cancel=ignore_cancel)
+
+    def _call_move_to_key(self, target_key, our_goal_handle, timeout_s):
+        goal = MoveTo.Goal()
+        goal.target_key = target_key
+        goal.frame_id = 'base_link'
+        goal.linear = True
+        ratio = self.get_parameter('tool_transit_speed_ratio').value
+        goal.speed_ratio = ratio
+        goal.accel_ratio = ratio
+        goal.timeout_s = timeout_s
+        return self._call_action(self._move_client, goal, our_goal_handle, timeout_s)
+
+    def _go_to_work(self, tool_key, our_goal_handle):
+        """ChangeTool 직후 공통 이동: 경유점(tool_transit_key) → <tool_key>_work.
+
+        반환: (True, None) 성공 / (None, err) 실패 — err 은 _finish_by_err 에
+        그대로 넘기면 된다. 대각선 이동으로 방금 집은 툴이 랙/구조물과
+        부딪히는 문제 대응(PickPlace via_key 라우팅과 동일한 이유).
+        """
+        transit_key = self.get_parameter('tool_transit_key').value
+        timeout_s = self.get_parameter('tool_transit_timeout_s').value
+        _, err = self._call_move_to_key(transit_key, our_goal_handle, timeout_s)
+        if err is not None:
+            return None, err
+        _, err = self._call_move_to_key(f'{tool_key}_work', our_goal_handle, timeout_s)
+        if err is not None:
+            return None, err
+        return True, None
 
     # --- PRECHECK (NIS §8: 안착 · 툴 랙 전수 · 통신 · E-Stop 해제) -----------------
     def _run_precheck(self, required_tools):
@@ -396,6 +433,12 @@ class SessionOrchestratorNode(Node):
                                         scan_map, total_rework)
         state['current_tool'] = ToolState.PROBE
 
+        _, err = self._go_to_work('probe', goal_handle)
+        if err is not None:
+            return self._finish_by_err(goal_handle, result, err, '경유/작업위치 이동 실패(probe)',
+                                        started_at, started_mono, state, all_results,
+                                        scan_map, total_rework)
+
         emit(ProcessState.STAGE_SCAN, 0.0)
         scan_goal = ScanBoundary.Goal()
         scan_goal.session_id = session_id
@@ -425,6 +468,12 @@ class SessionOrchestratorNode(Node):
                                         scan_map, total_rework)
         state['current_tool'] = ToolState.SANDER
 
+        _, err = self._go_to_work('sander', goal_handle)
+        if err is not None:
+            return self._finish_by_err(goal_handle, result, err, '경유/작업위치 이동 실패(sander)',
+                                        started_at, started_mono, state, all_results,
+                                        scan_map, total_rework)
+
         emit(ProcessState.STAGE_SAND, 0.0)
         sand_goal = SandSurface.Goal()
         sand_goal.session_id = session_id
@@ -448,6 +497,13 @@ class SessionOrchestratorNode(Node):
                                             started_at, started_mono, state, all_results,
                                             scan_map, total_rework)
             state['current_tool'] = ToolState.BRUSH
+
+            _, err = self._go_to_work('brush', goal_handle)
+            if err is not None:
+                return self._finish_by_err(goal_handle, result, err,
+                                            '경유/작업위치 이동 실패(brush)', started_at,
+                                            started_mono, state, all_results, scan_map,
+                                            total_rework)
 
             emit(ProcessState.STAGE_BRUSH, 0.0)
             brush_goal = BrushDust.Goal()
@@ -475,6 +531,13 @@ class SessionOrchestratorNode(Node):
                                             started_at, started_mono, state, all_results,
                                             scan_map, total_rework)
             state['current_tool'] = ToolState.COATER
+
+            _, err = self._go_to_work('coater', goal_handle)
+            if err is not None:
+                return self._finish_by_err(goal_handle, result, err,
+                                            '경유/작업위치 이동 실패(coater)', started_at,
+                                            started_mono, state, all_results, scan_map,
+                                            total_rework)
 
             emit(ProcessState.STAGE_COAT, 0.0, layer_index)
             coat_goal = CoatGel.Goal()
@@ -508,6 +571,13 @@ class SessionOrchestratorNode(Node):
                                                 state, all_results, scan_map, total_rework)
                 state['current_tool'] = ToolState.UV
 
+                _, err = self._go_to_work('uv', goal_handle)
+                if err is not None:
+                    return self._finish_by_err(goal_handle, result, err,
+                                                '경유/작업위치 이동 실패(uv)', started_at,
+                                                started_mono, state, all_results, scan_map,
+                                                total_rework)
+
                 stage_label = ProcessState.STAGE_REWORK if rework_this_layer > 0 else \
                     ProcessState.STAGE_CURE
                 emit(stage_label, 0.0, layer_index)
@@ -536,6 +606,13 @@ class SessionOrchestratorNode(Node):
                                                 started_mono, state, all_results, scan_map,
                                                 total_rework)
                 state['current_tool'] = ToolState.PROBE
+
+                _, err = self._go_to_work('probe', goal_handle)
+                if err is not None:
+                    return self._finish_by_err(goal_handle, result, err,
+                                                '경유/작업위치 이동 실패(probe)', started_at,
+                                                started_mono, state, all_results, scan_map,
+                                                total_rework)
 
                 emit(ProcessState.STAGE_INSPECT, 0.0, layer_index)
                 inspect_goal = InspectCure.Goal()
