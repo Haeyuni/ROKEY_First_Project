@@ -38,13 +38,13 @@
 
 # ⚠️ 미티칭 — 임시로 홈위치 좌표를 넣어둔 상태다. 스톤 트레이 실제 위치로 교체할 것.
 stone_tray: # 스톤 공급 트레이
-  x_mm: 667.86
-  y_mm: 91.20
-  z_mm: 374.23     # TODO: 실측값으로 교체
+  x_mm: 429.23
+  y_mm: 127.95
+  z_mm: 290.04
   frame_id: base_link
-  rz1_deg: 32.60    # A
-  ry_deg: -179.68   # B
-  rz2_deg: 32.59    # C
+  rz1_deg: 3.16    # A
+  ry_deg: -178.88   # B
+  rz2_deg: 3.52   # C
 
 probe: # 탐침 - 완
   x_mm: 676.84
@@ -92,14 +92,11 @@ uv: # 자외선 램프 - 완
   ry_deg: -178.77
   rz2_deg: 13.26
 
-# ⚠️ 미티칭 — 아래 값은 probe 좌표를 복사해 둔 자리표시자다. 이대로 두면
-# ChangeTool('tweezers') 와 stone_node 테스트가 probe 슬롯으로 간다.
-# 핀셋을 랙에 걸고 티칭한 뒤 여섯 숫자를 교체할 것.
-tweezers: # 핀셋
-  x_mm: 676.84
-  y_mm: -77.78
-  z_mm: 288.06
+tweezers: # 핀셋 - 완
+  x_mm: 616.09
+  y_mm: -133.11
+  z_mm: 317.02
   frame_id: base_link
-  rz1_deg: 13.69
-  ry_deg:  -179.26
-  rz2_deg: 13.26
+  rz1_deg: 2.99
+  ry_deg: -179.48
+  rz2_deg: 3.34
