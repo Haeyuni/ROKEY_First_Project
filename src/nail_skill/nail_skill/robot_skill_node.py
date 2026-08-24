@@ -203,8 +203,10 @@ class RobotSkillNode(Node):
         # 와 동일한 이유(§5.1 경고). false 면 접촉 탐색(힘 임계값 도달까지
         # 하강)과 힘 추종(compliance/target_force)을 전부 건너뛰고, waypoints
         # 를 좌표만으로 그대로 따라간다 — max_force_n 초과 감시도 못 한다.
-        # **waypoints 의 z 가 실제로 표면과 맞는지는 사람이 보장해야 한다.**
-        d('contact_force_sensing_enabled', True)
+        # 실기에서 F/T 센서가 힘을 아예 인식하지 못하는 것으로 확인돼(2026-08-24)
+        # 기본값을 false 로 둔다. **waypoints 의 z 가 실제로 표면과 맞는지는
+        # 사람이 보장해야 한다.**
+        d('contact_force_sensing_enabled', False)
         # LateralContact
         d('lateral_search_speed_mms', 3.0)
         d('lateral_contact_threshold_n', 0.3)
@@ -215,10 +217,11 @@ class RobotSkillNode(Node):
         # F/T 센서 미장착·미작동 하드웨어 대응(운영자 확인, NIS §5.1 경고).
         # false 면 접촉 탐색(힘 임계값 도달까지 전진)과 힘 추종(compliance/
         # target_force)을 전부 건너뛰고, waypoints 를 좌표만으로 그대로
-        # 따라간다 — max_force_n/jam_force_n 초과 감시도 못 한다. 실기에
-        # 센서가 없어 E_LATERAL_LIMIT 이 항상 나서 켜둔 것으로,
-        # **좌표가 실제로 안전한지는 사람이 보장해야 한다.**
-        d('lateral_force_sensing_enabled', True)
+        # 따라간다 — max_force_n/jam_force_n 초과 감시도 못 한다. 실기에서
+        # F/T 센서가 힘을 아예 인식하지 못해(2026-08-24 확인) true 로 두면
+        # 접촉 탐색이 항상 E_LATERAL_LIMIT 으로 실패하므로 기본값을 false 로
+        # 둔다. **좌표가 실제로 안전한지는 사람이 보장해야 한다.**
+        d('lateral_force_sensing_enabled', False)
         # 그리퍼
         d('grip_width_tolerance_mm', 1.0)
         d('tool_drop_width_delta_mm', 2.0)
