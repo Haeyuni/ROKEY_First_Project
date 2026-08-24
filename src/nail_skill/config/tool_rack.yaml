@@ -1,0 +1,105 @@
+# ============================================================================
+# 툴 카탈로그 — tool_manager 가 읽는다 (tool_manager_node.py `_load_rack_config`)
+# ============================================================================
+#
+# 이 파일은 "툴 하나하나에 대해 tool_manager 가 알아야 하는 것"을 모아둔 곳이다.
+# 여기 없는 이름은 ChangeTool goal 자체가 거부된다(E_INVALID_GOAL) — 즉 이
+# 파일이 곧 "사용 가능한 툴 목록"이다.
+#
+# ChangeTool('sander') 를 보내면 tool_manager 가 아래 3개 값을 순서대로 쓴다:
+#
+#   1) slot_frame            → PickPlace(place) 로 현재 툴 반납
+#   2) slot_frame            → PickPlace(pick)  로 sander 잡으러 감
+#   3) expected_grip_width_mm→ 그리퍼를 이 폭으로 오므림
+#   4) tcp_offset            → set_tcp('tcp_sander') 로 로봇 기준점 전환
+#
+# ROS2 파라미터 YAML(node/ros__parameters 래핑)이 아니라 순수 yaml 이다.
+# launch 가 이 파일의 "경로"를 rack_config_file 파라미터로 넘긴다.
+#
+# ----------------------------------------------------------------------------
+# 필드 3개 — 각각 뭘 넣어야 하나
+# ----------------------------------------------------------------------------
+#
+# slot_frame : 이 툴이 놓인 위치의 "이름".
+#     tool_manager 는 좌표를 모른다. 이 이름을 PickPlace.target_key 로 그대로
+#     넘기고, robot_skill_node 가 그 이름을 좌표로 바꾼다.
+#     조회 순서: ① targets.yaml 의 최상위 키에서 찾는다
+#                ② 없으면 그 이름을 TF 프레임으로 간주해 조회한다
+#     → 지금은 ① 을 쓴다. 그래서 값이 targets.yaml 의 키(sander/brush/...)와
+#       글자 그대로 같아야 한다. 여기를 고쳤으면 targets.yaml 도 같이 고칠 것.
+#
+# expected_grip_width_mm : 이 툴을 잡았을 때 그리퍼가 벌어져 있어야 할 폭 (mm).
+#     ⚠️ 검증값이 아니라 "명령값"이다 — robot_skill_node 가 이 숫자를 그대로
+#     그리퍼에 보내 오므린다(gripper_set_width). 즉 툴 손잡이의 실제 두께를
+#     넣으면 된다. 자로 손잡이 폭을 재서 넣는다.
+#     너무 작으면 툴을 못 끼우거나 무리하게 조이고, 너무 크면 헐렁하게 잡는다.
+#     ⚠️ 파지 "성공 여부"는 확인되지 않는다: RG2 드라이버가 실제 폭 되읽기를
+#     제공하지 않아 명령값이 그대로 measured_width_mm 로 돌아온다. 따라서
+#     grip_verified 는 툴을 놓쳐도 true 다 — 실기에서는 반드시 눈으로 확인할 것.
+#
+# tcp_offset : [x, y, z, rx, ry, rz]  — 앞 3개 mm, 뒤 3개 도(deg).
+#     "이 툴을 물면 로봇의 작업점이 플랜지에서 얼마나 이동하는가"
+#
+#         로봇 팔
+#            │
+#         ┌──┴──┐   ← 플랜지(tool0). 로봇이 아는 끝점 = 여기가 (0,0,0)
+#         │그리퍼│
+#         └──┬──┘
+#            │      ← 이 거리가 z
+#            ▼
+#           ┃┃      ← 실제 작업점 (툴 끝)
+#
+#     ✅ 넣는 값: 플랜지 아랫면부터 툴 끝까지의 거리.
+#        - 툴이 그리퍼 정중앙에서 똑바로 아래로 뻗음 → [0, 0, 길이, 0, 0, 0]
+#        - 툴이 옆으로 꺾여 있음 → x/y 와 회전값도 채운다
+#     ❌ 넣으면 안 되는 값: 티치펜던트 TASK 화면의 X/Y/Z/A/B/C.
+#        그건 "로봇 베이스 기준 절대 자세"라 의미가 완전히 다르다. 이걸 넣으면
+#        set_tcp 이후 모든 이동이 그 거리만큼 통째로 어긋난다.
+#
+#     구하는 법 (쉬운 순):
+#        (a) 모르면 [0,0,0,0,0,0] — "툴 없이 플랜지가 끝점" 이라는 뜻. 위치는
+#            부정확하지만 엉뚱한 곳으로 날아가지는 않는다. 안전한 시작점.
+#        (b) 자로 플랜지 아랫면 → 툴 끝 거리를 재서 z 에만 넣는다 (±2mm 수준,
+#            인터페이스 확인용으로는 충분)
+#        (c) 두산 티치펜던트의 TCP 자동 계산(4점/6점 티칭) 결과 6개 숫자를
+#            그대로 옮겨 적는다 (정밀 작업 시)
+#
+#     이 값은 tool_manager 기동 시 add_tcp('tcp_<툴이름>', offset) 으로 두산
+#     컨트롤러에 자동 등록된다(sync_tcp_on_startup, 기본 true). 펜던트에서
+#     따로 등록할 필요 없이 이 파일만 고치면 된다.
+#
+# ============================================================================
+
+# ※ probe(탐침)는 목록에서 빠졌다 — ProbePoint 스킬과 그걸 쓰던
+#   scan_node / inspection_node 가 폐지되어 집을 일이 없다. 여기 없는
+#   이름은 ChangeTool 이 E_INVALID_GOAL 로 거부한다.
+
+tools:
+  sander:                             # 네일 파일: width_mm(clear)
+    slot_frame: sander
+    expected_grip_width_mm: 50.0      # TODO: 손잡이 폭 실측 (현재 NIS 예시값)
+    tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)
+
+  brush:                              # 붓 — 분진 제거
+    slot_frame: brush
+    expected_grip_width_mm: 15.0      # TODO: 손잡이 폭 실측
+    tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)
+
+  coater:                             # 젤 도포기
+    slot_frame: coater
+    expected_grip_width_mm: 16.0      # TODO: 손잡이 폭 실측
+    tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)
+
+  uv:                                 # 자외선 램프 — 상시 ON, 취급 주의
+    slot_frame: uv
+    expected_grip_width_mm: 22.0      # TODO: 손잡이 폭 실측 (현재 NIS 예시값)
+    tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)
+
+  tweezers:                           # 핀셋 — 스톤 부착 clear
+    slot_frame: tweezers
+    expected_grip_width_mm: 21.0      # 실측: 20mm. stone_node 의
+                                       # tweezers_grip_width_mm 파라미터와
+                                       # 반드시 같은 값으로 맞출 것 — 다르면
+                                       # 스톤 놓을 때 핀셋을 놓치거나
+                                       # 손잡이를 계속 짓누르게 된다.
+    tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)

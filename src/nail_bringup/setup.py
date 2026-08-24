@@ -1,6 +1,9 @@
+import os
+from glob import glob
+
 from setuptools import find_packages, setup
 
-package_name = 'nail_perception'
+package_name = 'nail_bringup'
 
 setup(
     name=package_name,
@@ -10,12 +13,14 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='jje',
     maintainer_email='jje320594@gmail.com',
-    description='공정 노드가 공유하는 2D 다각형 기하 유틸리티 (실행 노드 없음)',
+    description='노드 단위 테스트용 launch 모음 — 하드웨어 브링업은 포함하지 않는다',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={

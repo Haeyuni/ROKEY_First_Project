@@ -2,7 +2,7 @@
 <package format="3">
   <name>nail_process</name>
   <version>0.1.0</version>
-  <description>B계층 공정 노드: sanding/brushing/coating/curing/inspection/stone (NIS §6)</description>
+  <description>B계층 공정 노드: sanding/brushing/coating/curing/stone (NIS §6)</description>
   <maintainer email="team@example.com">nail team</maintainer>
   <license>Apache-2.0</license>
 

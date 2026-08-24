@@ -2,9 +2,18 @@
 
 `LateralContact` 를 쓰는 유일한 공정 노드다. 압입을 하지 않는 수평 접근에서는
 강성 감시(`E_LOW_STIFFNESS`)가 작동하지 않으므로, 피부 접촉을 막는 방어선은
-`travel_limit_mm` 하나뿐이다 — 이 값을 강성 맵에서 기하학적으로 계산하는
+`travel_limit_mm` 하나뿐이다 — 이 값을 손톱 경계에서 기하학적으로 계산하는
 `_compute_travel_limit` 이 이 노드에서 가장 중요한 함수다 (상수로 하드코딩
 금지, SDS §12 체크리스트).
+
+★ v0.3 변경: 경계의 출처가 바뀌었다. 예전에는 scan_node 의 강성 맵
+(`GetStiffnessMap`)에서 `boundary_polygon` 을 받아왔지만, 스캔이 폐지되면서
+이제는 **티칭된 손톱 크기 파라미터**(`nail_size_x_mm` / `nail_size_y_mm`)로
+타원 경계를 직접 만든다. 즉 `travel_limit_mm` 의 신뢰도가 곧 그 티칭값의
+신뢰도다 — 측정으로 검증되지 않으니 `nail_bringup/config/static_frames.yaml`
+의 `nail_region` 을 실제 손톱보다 작게 잡아야 안전하다. 강성이 낮은 영역을
+피하는 `forbidden_polygon` 은 측정할 방법이 없어져 함께 사라졌고,
+`forbidden_margin_mm` 도 그래서 제거됐다.
 
 이 노드도 dsr_msgs2 를 import 하지 않는다 — 실제 이동은 robot_skill_node 의
 `/skill/lateral_contact` 를 호출한다 (SDS §4.1).
@@ -23,9 +32,9 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from nail_msgs.action import LateralContact, SandSurface
 from nail_msgs.msg import ErrorCode, ResultBase, SafetyState, ToolState
-from nail_msgs.srv import GetStiffnessMap, ValidatePrecondition
+from nail_msgs.srv import ValidatePrecondition
 
-from nail_perception.geometry2d import centroid, ray_polygon_distance
+from nail_perception.geometry2d import centroid, nail_boundary_polygon, ray_polygon_distance
 
 SEVERITY_BY_CODE = {
     ErrorCode.OK: ErrorCode.SEV_NONE,
@@ -34,7 +43,6 @@ SEVERITY_BY_CODE = {
     ErrorCode.E_OVERFORCE: ErrorCode.SEV_ABORT,
     ErrorCode.E_MOTION_FAILED: ErrorCode.SEV_ABORT,
     ErrorCode.E_TIMEOUT: ErrorCode.SEV_ABORT,
-    ErrorCode.E_NO_SCAN: ErrorCode.SEV_ABORT,
     ErrorCode.E_INVALID_GOAL: ErrorCode.SEV_ABORT,
     ErrorCode.E_LATERAL_LIMIT: ErrorCode.SEV_SAFETY,
     ErrorCode.E_SAFETY_BLOCKED: ErrorCode.SEV_SAFETY,
@@ -69,6 +77,7 @@ class SandingNode(Node):
         self._declare_parameters()
 
         self._latest_safety = None
+        self._last_safety_rx_monotonic = None
         safety_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
@@ -79,8 +88,6 @@ class SandingNode(Node):
                                   self._on_safety_status, safety_qos,
                                   callback_group=self._cb_client)
 
-        self._get_map_client = self.create_client(
-            GetStiffnessMap, '/scan/get_map', callback_group=self._cb_client)
         self._validate_client = self.create_client(
             ValidatePrecondition, '/safety/validate', callback_group=self._cb_client)
         self._lateral_client = ActionClient(self, LateralContact, '/skill/lateral_contact',
@@ -100,6 +107,7 @@ class SandingNode(Node):
     def _declare_parameters(self):
         d = self.declare_parameter
         d('safety_topic', '/safety/status')
+        d('safety_status_timeout_s', 0.2)
         d('node_timeout_s', 120.0)
         d('log_force_data', False)
         # 접근
@@ -115,40 +123,41 @@ class SandingNode(Node):
         d('step_over_mm', 1.5)
         d('feed_speed_mms', 8.0)
         d('max_duration_s', 60.0)
+        # 손톱 경계 ★ — launch 가 static_frames.yaml 의 nail_region 에서 주입한다.
+        # 여기 기본값은 launch 없이 `ros2 run` 으로 띄웠을 때만 쓰인다.
+        d('nail_size_x_mm', 16.0)
+        d('nail_size_y_mm', 13.0)
+        d('nail_boundary_points', 24)
         # 안전 ★
         d('travel_limit_margin_mm', 2.0)
-        d('forbidden_margin_mm', 1.5)
         d('require_dust_collector', True)
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg):
         self._latest_safety = msg
+        self._last_safety_rx_monotonic = time.monotonic()
 
     def _safe_to_move(self):
-        return self._latest_safety is not None and self._latest_safety.safe_to_move
+        timeout_s = self.get_parameter('safety_status_timeout_s').value
+        return (self._latest_safety is not None
+                and self._latest_safety.safe_to_move
+                and self._last_safety_rx_monotonic is not None
+                and time.monotonic() - self._last_safety_rx_monotonic <= timeout_s)
 
     def _on_cancel(self, goal_handle):
         if self._lateral_goal_handle is not None:
             self._lateral_goal_handle.cancel_goal_async()
         return CancelResponse.ACCEPT
 
-    # --- 서비스 폴링 헬퍼 --------------------------------------------------------
-    def _call_get_map(self, session_id, timeout_s=5.0):
-        if not self._get_map_client.wait_for_service(timeout_sec=timeout_s):
-            return False, False, None
-        req = GetStiffnessMap.Request()
-        req.session_id = session_id
-        future = self._get_map_client.call_async(req)
-        deadline = time.monotonic() + timeout_s
-        while not future.done():
-            if time.monotonic() > deadline:
-                return False, False, None
-            time.sleep(0.02)
-        resp = future.result()
-        if resp is None or not resp.found:
-            return False, False, None
-        return True, resp.map.valid, resp.map
+    # --- 손톱 경계 (v0.3: 스캔 대신 티칭값) ----------------------------------------
+    def _nail_boundary(self):
+        """nail_local_frame 기준 손톱 경계 다각형. 빈 리스트면 파라미터가 잘못된 것."""
+        return nail_boundary_polygon(
+            self.get_parameter('nail_size_x_mm').value,
+            self.get_parameter('nail_size_y_mm').value,
+            int(self.get_parameter('nail_boundary_points').value))
 
+    # --- 서비스 폴링 헬퍼 --------------------------------------------------------
     def _call_validate_precondition(self, session_id, timeout_s=5.0):
         if not self._validate_client.wait_for_service(timeout_sec=timeout_s):
             return False, ['ValidatePrecondition 서비스 연결 실패']
@@ -180,10 +189,10 @@ class SandingNode(Node):
                 self.get_logger().warn(
                     'SandSurface REJECT: E_PRECOND_FAILED (dust_extraction_on=false)')
                 return GoalResponse.REJECT
-        found, valid, _map = self._call_get_map(goal_request.session_id)
-        if not found or not valid:
+        if len(self._nail_boundary()) < 3:
             self.get_logger().warn(
-                f'SandSurface REJECT: E_NO_SCAN (found={found}, valid={valid})')
+                'SandSurface REJECT: E_INVALID_GOAL — nail_size_x_mm/nail_size_y_mm/'
+                'nail_boundary_points 파라미터가 유효하지 않아 손톱 경계를 만들 수 없음')
             return GoalResponse.REJECT
         ok, reasons = self._call_validate_precondition(goal_request.session_id)
         if not ok:
@@ -210,23 +219,22 @@ class SandingNode(Node):
         return base, (vx, vy, vz)
 
     # --- travel_limit_mm ★ (SDS §5.3 compute_travel_limit) -----------------------
-    def _compute_travel_limit(self, start_xy, base_xy, boundary_xy, forbidden_xy, margin_mm,
-                               forbidden_margin_mm):
-        eps = 0.05  # start_xy 는 boundary_polygon 경계 위 — t=0 자기교차 회피용 미세 오프셋
-        probe_origin = _add_scaled(start_xy, base_xy, eps)
-        d_boundary = ray_polygon_distance(probe_origin, base_xy, boundary_xy, 'nearest')
-        d_forbidden = None
-        if len(forbidden_xy) >= 3:
-            raw = ray_polygon_distance(probe_origin, base_xy, forbidden_xy, 'nearest')
-            if raw is not None:
-                d_forbidden = raw - forbidden_margin_mm
-        candidates = [d + eps for d in (d_boundary, d_forbidden) if d is not None]
-        if not candidates:
+    def _compute_travel_limit(self, start_xy, base_xy, boundary_xy, margin_mm):
+        """진입점에서 접근 방향으로 얼마나 더 들어가도 되는가 (mm).
+
+        경계 안에서 접근 방향으로 반직선을 쏴 반대편 경계까지의 거리를 재고,
+        거기서 `travel_limit_margin_mm` 을 뺀다. 상수 하드코딩 금지 —
+        이 값이 손이 아니라 손톱만 갈리게 하는 유일한 방어선이다.
+        """
+        eps = 0.05  # start_xy 는 경계 위 — t=0 자기교차 회피용 미세 오프셋
+        ray_origin = _add_scaled(start_xy, base_xy, eps)
+        d_boundary = ray_polygon_distance(ray_origin, base_xy, boundary_xy, 'nearest')
+        if d_boundary is None:
             return None
-        return min(candidates) - margin_mm
+        return d_boundary + eps - margin_mm
 
     def _entry_point(self, base_xy, boundary_xy):
-        """boundary_polygon 무게중심에서 -approach_vector 방향으로 쏴 만나는
+        """손톱 경계 무게중심에서 -approach_vector 방향으로 쏴 만나는
         경계 위 점 = 접근이 시작되는 손톱 가장자리 (free_edge 쪽 등)."""
         c = centroid(boundary_xy)
         neg = (-base_xy[0], -base_xy[1])
@@ -252,24 +260,17 @@ class SandingNode(Node):
         feed_speed = self._val(goal.feed_speed_mms, 'feed_speed_mms')
         max_duration = self._val(goal.max_duration_s, 'max_duration_s')
         margin_mm = self._val(goal.travel_limit_margin_mm, 'travel_limit_margin_mm')
-        forbidden_margin = self._val(goal.forbidden_margin_mm, 'forbidden_margin_mm')
 
-        # --- 맵 재확인 (goal_callback 과 execute 사이의 갱신 가능성에 대비) ----------
-        found, valid, stiffness_map = self._call_get_map(goal.session_id)
-        if not found or not valid:
-            detail = f'GetStiffnessMap: found={found} valid={valid}'
-            self._log_abort(ErrorCode.E_NO_SCAN, detail)
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_NO_SCAN, detail, started_at)
-            return result
-
-        boundary_xy = [(pt.x, pt.y) for pt in stiffness_map.region.boundary_polygon]
-        forbidden_xy = [(pt.x, pt.y) for pt in stiffness_map.region.forbidden_polygon]
+        # --- 손톱 경계 (파라미터 재확인 — 실기에서 param set 으로 바뀔 수 있다) -------
+        boundary_xy = self._nail_boundary()
         if len(boundary_xy) < 3:
-            detail = 'boundary_polygon 점 3개 미만 — 경계 미확정'
-            self._log_abort(ErrorCode.E_NO_SCAN, detail)
+            detail = ('손톱 경계 생성 실패 — nail_size_x_mm='
+                      f"{self.get_parameter('nail_size_x_mm').value}, nail_size_y_mm="
+                      f"{self.get_parameter('nail_size_y_mm').value}, nail_boundary_points="
+                      f"{self.get_parameter('nail_boundary_points').value}")
+            self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
             goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_NO_SCAN, detail, started_at)
+            result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
             return result
 
         base_xy, approach_vec_3d = self._approach_vector(approach_side, pitch_deg)
@@ -283,7 +284,7 @@ class SandingNode(Node):
 
         # --- travel_limit_mm ★ ----------------------------------------------------
         travel_limit_mm = self._compute_travel_limit(
-            start_xy, base_xy, boundary_xy, forbidden_xy, margin_mm, forbidden_margin)
+            start_xy, base_xy, boundary_xy, margin_mm)
         if travel_limit_mm is None or travel_limit_mm <= 0.0:
             detail = (f'travel_limit_mm={travel_limit_mm} <= 0 — 접근 방향("{approach_side}") '
                       f'또는 travel_limit_margin_mm({margin_mm}) 재검토 필요. '

@@ -8,6 +8,10 @@
 를 호출한다 (SDS §4.1). ContactPath 는 여러 waypoint 를 한 번에 받아 내부에서
 passes 를 반복하므로, 이 노드는 경로(라운모어 지그재그) 생성과 goal 조립만
 담당한다.
+
+★ v0.3 변경: 경로를 채울 손톱 경계를 예전에는 scan_node 의 강성 맵
+(`GetStiffnessMap`)에서 받아왔지만, 스캔이 폐지되면서 이제는 티칭된 손톱
+크기 파라미터(`nail_size_x_mm` / `nail_size_y_mm`)로 타원을 직접 만든다.
 """
 import threading
 import time
@@ -22,9 +26,9 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from nail_msgs.action import BrushDust, ContactPath
 from nail_msgs.msg import ErrorCode, ResultBase, SafetyState, ToolState
-from nail_msgs.srv import GetStiffnessMap, ValidatePrecondition
+from nail_msgs.srv import ValidatePrecondition
 
-from nail_perception.geometry2d import raster_fill
+from nail_perception.geometry2d import nail_boundary_polygon, raster_fill
 
 SEVERITY_BY_CODE = {
     ErrorCode.OK: ErrorCode.SEV_NONE,
@@ -49,6 +53,7 @@ class BrushingNode(Node):
         self._declare_parameters()
 
         self._latest_safety = None
+        self._last_safety_rx_monotonic = None
         safety_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
@@ -59,8 +64,6 @@ class BrushingNode(Node):
                                   self._on_safety_status, safety_qos,
                                   callback_group=self._cb_client)
 
-        self._get_map_client = self.create_client(
-            GetStiffnessMap, '/scan/get_map', callback_group=self._cb_client)
         self._validate_client = self.create_client(
             ValidatePrecondition, '/safety/validate', callback_group=self._cb_client)
         self._contact_client = ActionClient(self, ContactPath, '/skill/contact_path',
@@ -80,6 +83,7 @@ class BrushingNode(Node):
     def _declare_parameters(self):
         d = self.declare_parameter
         d('safety_topic', '/safety/status')
+        d('safety_status_timeout_s', 0.2)
         d('node_timeout_s', 120.0)
         d('log_force_data', False)
         d('target_force_n', 0.5)
@@ -89,36 +93,38 @@ class BrushingNode(Node):
         d('feed_speed_mms', 20.0)
         d('coverage_margin_mm', 2.0)
         d('max_duration_s', 30.0)
+        # 손톱 경계 ★ — launch 가 static_frames.yaml 의 nail_region 에서 주입한다.
+        # 여기 기본값은 launch 없이 `ros2 run` 으로 띄웠을 때만 쓰인다.
+        d('nail_size_x_mm', 16.0)
+        d('nail_size_y_mm', 13.0)
+        d('nail_boundary_points', 24)
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg):
         self._latest_safety = msg
+        self._last_safety_rx_monotonic = time.monotonic()
 
     def _safe_to_move(self):
-        return self._latest_safety is not None and self._latest_safety.safe_to_move
+        timeout_s = self.get_parameter('safety_status_timeout_s').value
+        return (self._latest_safety is not None
+                and self._latest_safety.safe_to_move
+                and self._last_safety_rx_monotonic is not None
+                and time.monotonic() - self._last_safety_rx_monotonic <= timeout_s)
 
     def _on_cancel(self, goal_handle):
         if self._contact_goal_handle is not None:
             self._contact_goal_handle.cancel_goal_async()
         return CancelResponse.ACCEPT
 
-    # --- 서비스 폴링 헬퍼 --------------------------------------------------------
-    def _call_get_map(self, session_id, timeout_s=5.0):
-        if not self._get_map_client.wait_for_service(timeout_sec=timeout_s):
-            return False, False, None
-        req = GetStiffnessMap.Request()
-        req.session_id = session_id
-        future = self._get_map_client.call_async(req)
-        deadline = time.monotonic() + timeout_s
-        while not future.done():
-            if time.monotonic() > deadline:
-                return False, False, None
-            time.sleep(0.02)
-        resp = future.result()
-        if resp is None or not resp.found:
-            return False, False, None
-        return True, resp.map.valid, resp.map
+    # --- 손톱 경계 (v0.3: 스캔 대신 티칭값) ----------------------------------------
+    def _nail_boundary(self):
+        """nail_local_frame 기준 손톱 경계 다각형. 빈 리스트면 파라미터가 잘못된 것."""
+        return nail_boundary_polygon(
+            self.get_parameter('nail_size_x_mm').value,
+            self.get_parameter('nail_size_y_mm').value,
+            int(self.get_parameter('nail_boundary_points').value))
 
+    # --- 서비스 폴링 헬퍼 --------------------------------------------------------
     def _call_validate_precondition(self, session_id, timeout_s=5.0):
         if not self._validate_client.wait_for_service(timeout_sec=timeout_s):
             return False, ['ValidatePrecondition 서비스 연결 실패']
@@ -169,20 +175,15 @@ class BrushingNode(Node):
         coverage_margin = self._val(goal.coverage_margin_mm, 'coverage_margin_mm')
         max_duration = self._val(goal.max_duration_s, 'max_duration_s')
 
-        found, valid, stiffness_map = self._call_get_map(goal.session_id)
-        if not found or not valid:
-            detail = f'GetStiffnessMap: found={found} valid={valid} — 경로를 만들 경계가 없음'
-            self._log_abort(ErrorCode.E_PRECOND_FAILED, detail)
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_PRECOND_FAILED, detail, started_at)
-            return result
-
-        boundary_xy = [(pt.x, pt.y) for pt in stiffness_map.region.boundary_polygon]
+        boundary_xy = self._nail_boundary()
         if len(boundary_xy) < 3:
-            detail = 'boundary_polygon 점 3개 미만 — 경계 미확정'
-            self._log_abort(ErrorCode.E_PRECOND_FAILED, detail)
+            detail = ('손톱 경계 생성 실패 — nail_size_x_mm='
+                      f"{self.get_parameter('nail_size_x_mm').value}, nail_size_y_mm="
+                      f"{self.get_parameter('nail_size_y_mm').value}, nail_boundary_points="
+                      f"{self.get_parameter('nail_boundary_points').value}")
+            self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
             goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_PRECOND_FAILED, detail, started_at)
+            result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
             return result
 
         path_xy = raster_fill(boundary_xy, path_pitch, coverage_margin)

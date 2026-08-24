@@ -2,7 +2,7 @@
 <package format="3">
   <name>nail_skill</name>
   <version>0.1.0</version>
-  <description>robot_skill_node: 두산 컨트롤러를 감싸는 A계층 스킬 프리미티브 (MoveTo/PickPlace/ContactPath/LateralContact/ProbePoint)</description>
+  <description>robot_skill_node: 두산 컨트롤러를 감싸는 A계층 스킬 프리미티브 (MoveTo/PickPlace/ContactPath/LateralContact)</description>
   <maintainer email="team@example.com">nail team</maintainer>
   <license>Apache-2.0</license>
 

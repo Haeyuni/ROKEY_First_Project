@@ -10,6 +10,17 @@
 방법은 대기 위치로 물러나는 것뿐이고, 그래서 모든 종료 경로(성공/실패/취소/
 타임아웃)에서 반드시 대기 위치 이탈을 시도한 뒤 `parked` 를 채운다.
 `parked=false` 로 끝나는 경로가 있다면 그것 자체가 안전 결함이다.
+
+★ v0.3 변경 두 가지:
+1. 조사할 영역(체류 지점을 뿌릴 범위)을 예전에는 scan_node 의 강성 맵
+   (`GetStiffnessMap`)에서 받아왔지만, 스캔이 폐지되면서 이제는 티칭된
+   손톱 크기 파라미터(`nail_size_x_mm` / `nail_size_y_mm`)로 타원을 직접
+   만든다.
+2. **재조사(REWORK) 개념이 사라졌다.** 경화 여부를 판정하던 inspection_node
+   가 폐지돼 "어디가 덜 굳었는지"를 알 방법이 없다 — `target_regions` 로
+   일부만 다시 굽는 경로와 `exposure_scale` 배율이 함께 제거됐고, 이제 이
+   노드는 항상 전체 영역을 `dwell_points` 개 지점으로 한 번 조사한다.
+   조사량이 모자라면 `dwell_s_per_point` 를 올려서 맞출 것.
 """
 import math
 import threading
@@ -25,16 +36,17 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from nail_msgs.action import CureUV, MoveTo
 from nail_msgs.msg import ErrorCode, ResultBase, SafetyState, ToolState
-from nail_msgs.srv import GetStiffnessMap, ValidatePrecondition
+from nail_msgs.srv import ValidatePrecondition
 
-from nail_perception.geometry2d import centroid, polygon_area, raster_fill
+from nail_perception.geometry2d import (
+    centroid, nail_boundary_polygon, polygon_area, raster_fill,
+)
 
 SEVERITY_BY_CODE = {
     ErrorCode.OK: ErrorCode.SEV_NONE,
     ErrorCode.E_CANCELLED: ErrorCode.SEV_NONE,
     ErrorCode.E_MOTION_FAILED: ErrorCode.SEV_ABORT,
     ErrorCode.E_TIMEOUT: ErrorCode.SEV_ABORT,
-    ErrorCode.E_NO_SCAN: ErrorCode.SEV_ABORT,
     ErrorCode.E_PRECOND_FAILED: ErrorCode.SEV_ABORT,
     ErrorCode.E_SAFETY_BLOCKED: ErrorCode.SEV_SAFETY,
 }
@@ -57,6 +69,7 @@ class CuringNode(Node):
         self._declare_parameters()
 
         self._latest_safety = None
+        self._last_safety_rx_monotonic = None
         safety_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
@@ -67,8 +80,6 @@ class CuringNode(Node):
                                   self._on_safety_status, safety_qos,
                                   callback_group=self._cb_client)
 
-        self._get_map_client = self.create_client(
-            GetStiffnessMap, '/scan/get_map', callback_group=self._cb_client)
         self._validate_client = self.create_client(
             ValidatePrecondition, '/safety/validate', callback_group=self._cb_client)
         self._move_client = ActionClient(self, MoveTo, '/skill/move_to',
@@ -88,16 +99,15 @@ class CuringNode(Node):
     def _declare_parameters(self):
         d = self.declare_parameter
         d('safety_topic', '/safety/status')
+        d('safety_status_timeout_s', 0.2)
         d('node_timeout_s', 120.0)
         d('log_force_data', False)
         d('uv_always_on', True)  # v0.2 고정. false 미지원 — 값을 바꿔도 동작 안 변함
         d('standoff_mm', 15.0)
         d('standoff_tolerance_mm', 3.0)
-        d('exposure_s', 30.0)
         d('path_speed_mms', 3.0)
         d('dwell_points', 5)
         d('dwell_s_per_point', 6.0)
-        d('rework_exposure_scale', 1.5)
         d('entry_direction', 'from_side')
         d('park_distance_mm', 120.0)
         d('max_duration_s', 120.0)
@@ -106,36 +116,38 @@ class CuringNode(Node):
         # path_speed_mms -> ratio 환산에 쓸 가정값을 로컬로 둔다. 실제
         # move_max_speed_mms 와 다르면 조사 이송 속도가 어긋난다.
         d('assumed_move_max_speed_mms', 100.0)
+        # 손톱 경계 ★ — launch 가 static_frames.yaml 의 nail_region 에서 주입한다.
+        # 여기 기본값은 launch 없이 `ros2 run` 으로 띄웠을 때만 쓰인다.
+        d('nail_size_x_mm', 16.0)
+        d('nail_size_y_mm', 13.0)
+        d('nail_boundary_points', 24)
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg):
         self._latest_safety = msg
+        self._last_safety_rx_monotonic = time.monotonic()
 
     def _safe_to_move(self):
-        return self._latest_safety is not None and self._latest_safety.safe_to_move
+        timeout_s = self.get_parameter('safety_status_timeout_s').value
+        return (self._latest_safety is not None
+                and self._latest_safety.safe_to_move
+                and self._last_safety_rx_monotonic is not None
+                and time.monotonic() - self._last_safety_rx_monotonic <= timeout_s)
 
     def _on_cancel(self, goal_handle):
         if self._move_goal_handle is not None:
             self._move_goal_handle.cancel_goal_async()
         return CancelResponse.ACCEPT
 
-    # --- 서비스 폴링 헬퍼 --------------------------------------------------------
-    def _call_get_map(self, session_id, timeout_s=5.0):
-        if not self._get_map_client.wait_for_service(timeout_sec=timeout_s):
-            return False, False, None
-        req = GetStiffnessMap.Request()
-        req.session_id = session_id
-        future = self._get_map_client.call_async(req)
-        deadline = time.monotonic() + timeout_s
-        while not future.done():
-            if time.monotonic() > deadline:
-                return False, False, None
-            time.sleep(0.02)
-        resp = future.result()
-        if resp is None or not resp.found:
-            return False, False, None
-        return True, resp.map.valid, resp.map
+    # --- 손톱 경계 (v0.3: 스캔 대신 티칭값) ----------------------------------------
+    def _nail_boundary(self):
+        """nail_local_frame 기준 손톱 경계 다각형. 빈 리스트면 파라미터가 잘못된 것."""
+        return nail_boundary_polygon(
+            self.get_parameter('nail_size_x_mm').value,
+            self.get_parameter('nail_size_y_mm').value,
+            int(self.get_parameter('nail_boundary_points').value))
 
+    # --- 서비스 폴링 헬퍼 --------------------------------------------------------
     def _call_validate_precondition(self, session_id, timeout_s=5.0):
         if not self._validate_client.wait_for_service(timeout_sec=timeout_s):
             return False, ['ValidatePrecondition 서비스 연결 실패']
@@ -162,9 +174,10 @@ class CuringNode(Node):
         if not self._safe_to_move():
             self.get_logger().warn('CureUV REJECT: E_SAFETY_BLOCKED')
             return GoalResponse.REJECT
-        found, valid, _map = self._call_get_map(goal_request.session_id)
-        if not found or not valid:
-            self.get_logger().warn(f'CureUV REJECT: E_NO_SCAN (found={found}, valid={valid})')
+        if len(self._nail_boundary()) < 3:
+            self.get_logger().warn(
+                'CureUV REJECT: E_INVALID_GOAL — nail_size_x_mm/nail_size_y_mm/'
+                'nail_boundary_points 파라미터가 유효하지 않아 조사 영역을 만들 수 없음')
             return GoalResponse.REJECT
         ok, reasons = self._call_validate_precondition(goal_request.session_id)
         if not ok:
@@ -178,12 +191,24 @@ class CuringNode(Node):
 
     # --- 체류 지점 산출 ----------------------------------------------------------
     def _generate_dwell_points(self, boundary_xy, n_points):
-        """전체 영역 커버 — 대략 균등 간격으로 n_points 개를 뽑는다."""
+        """전체 영역 커버 — 대략 균등 간격으로 n_points 개를 뽑는다.
+
+        `sqrt(area/n)` 격자는 다각형 모서리가 잘려나가 목표보다 적게 나올 수
+        있다 (16x13mm 타원 + n=5 에서 4개만 나오는 것이 확인됨). 조사 지점
+        개수가 곧 총 노출량이므로 요청한 개수는 채워야 한다 — 후보가 모자라면
+        격자를 좁혀 다시 뜬다.
+        """
         area = polygon_area(boundary_xy)
         if area <= 1e-6 or n_points <= 0:
             return [centroid(boundary_xy)]
-        approx_pitch = math.sqrt(area / n_points)
-        candidates = raster_fill(boundary_xy, max(0.5, approx_pitch), 0.0)
+        pitch = math.sqrt(area / n_points)
+        candidates = []
+        for _ in range(6):  # 매번 0.75배 — 6회면 pitch 가 1/5 로 줄어든다
+            pitch = max(0.5, pitch)
+            candidates = raster_fill(boundary_xy, pitch, 0.0)
+            if len(candidates) >= n_points or pitch <= 0.5:
+                break
+            pitch *= 0.75
         if not candidates:
             return [centroid(boundary_xy)]
         if len(candidates) <= n_points:
@@ -215,36 +240,25 @@ class CuringNode(Node):
 
         standoff = self._val(goal.standoff_mm, 'standoff_mm')
         dwell_points_n = int(self._val(goal.dwell_points, 'dwell_points'))
-        dwell_s = self._val(goal.dwell_s_per_point, 'dwell_s_per_point') * \
-            (goal.exposure_scale if goal.exposure_scale > 0.0 else 1.0)
+        dwell_s = self._val(goal.dwell_s_per_point, 'dwell_s_per_point')
         path_speed = self._val(goal.path_speed_mms, 'path_speed_mms')
         park_distance = self._val(goal.park_distance_mm, 'park_distance_mm')
         max_duration = self._val(goal.max_duration_s, 'max_duration_s')
         speed_ratio = min(1.0, max(0.05, path_speed /
                                     self.get_parameter('assumed_move_max_speed_mms').value))
 
-        found, valid, stiffness_map = self._call_get_map(goal.session_id)
-        if not found or not valid:
-            detail = f'GetStiffnessMap: found={found} valid={valid}'
-            self._log_abort(ErrorCode.E_NO_SCAN, detail)
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_NO_SCAN, detail, started_at)
-            return result
-
-        boundary_xy = [(pt.x, pt.y) for pt in stiffness_map.region.boundary_polygon]
+        boundary_xy = self._nail_boundary()
         if len(boundary_xy) < 3:
-            detail = 'boundary_polygon 점 3개 미만 — 경계 미확정'
-            self._log_abort(ErrorCode.E_NO_SCAN, detail)
+            detail = ('조사 영역 생성 실패 — nail_size_x_mm='
+                      f"{self.get_parameter('nail_size_x_mm').value}, nail_size_y_mm="
+                      f"{self.get_parameter('nail_size_y_mm').value}, nail_boundary_points="
+                      f"{self.get_parameter('nail_boundary_points').value}")
+            self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
             goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_NO_SCAN, detail, started_at)
+            result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
             return result
 
-        # target_regions: StiffnessPoint/BoundaryRegion 계열과 동일하게 mm 규약
-        # (inspection_node 의 fail_points 도 이 계열에서 나온다).
-        if len(goal.target_regions) > 0:
-            dwell_xy = [(pt.x, pt.y) for pt in goal.target_regions]
-        else:
-            dwell_xy = self._generate_dwell_points(boundary_xy, dwell_points_n)
+        dwell_xy = self._generate_dwell_points(boundary_xy, dwell_points_n)
 
         center = centroid(boundary_xy)
         ex, ey = self._entry_offset_xy(self.get_parameter('entry_direction').value)

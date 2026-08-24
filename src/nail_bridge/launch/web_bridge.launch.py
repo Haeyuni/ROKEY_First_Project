@@ -29,13 +29,13 @@ ros2 브랜치, `rosbridge_server/scripts/rosbridge_websocket.py` 직접 확인)
 
 **`topics_pub_glob=[]`인 이유**: NIS §9 "Web → ROS2" 표에는 Action(실행/
 취소)과 Service 뿐, 웹이 토픽에 직접 publish 하는 경로가 없다. 화이트리스트
-5개 토픽은 전부 "ROS2 → Web" 방향(중계)이므로, publish 쪽은 통째로 막고
-subscribe 쪽만 그 5개로 연다.
+토픽은 전부 "ROS2 → Web" 방향(중계)이므로, publish 쪽은 통째로 막고
+subscribe 쪽만 `relay_topics` 로 연다.
 
 **`max_relay_rate_hz` 를 서버가 강제하지 않는 이유**: rosbridge 의 rate
 제한은 구독 요청 시 클라이언트가 보내는 `throttle_rate` 필드를 그대로
 따르는 클라이언트-주도 방식이다 — 서버 쪽 상한을 강제하는 파라미터가 없다.
-다만 화이트리스트 5개 토픽은 소스 자체가 이미 20Hz 이하로 발행하므로
+다만 화이트리스트 토픽은 소스 자체가 이미 20Hz 이하로 발행하므로
 (`/force/data_ui` 는 robot_skill_node 의 `force_ui_rate_hz` 기본 20,
 `/safety/status` 는 safety_monitor 의 `publish_rate_hz` 기본 20, 나머지는
 이벤트/변경 기반으로 더 느리다) 이 상한은 설계상 이미 지켜진다 — 여기서

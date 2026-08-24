@@ -1,5 +1,0 @@
-string session_id              # 불일치 시 found=false + E_MAP_SESSION_MISMATCH
----
-bool                    found
-nail_msgs/StiffnessMap  map
-nail_msgs/ErrorCode     error

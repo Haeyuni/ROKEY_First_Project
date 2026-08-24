@@ -7,7 +7,6 @@ bool comm_ok
 bool handrest_seated
 bool dust_extraction_on
 bool tool_grip_ok
-bool scan_valid
 
 string FAULT_ESTOP        = "FAULT_ESTOP"
 string FAULT_COMM_LOST    = "FAULT_COMM_LOST"

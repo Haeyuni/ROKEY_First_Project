@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>nail_bringup</name>
+  <version>0.1.0</version>
+  <description>
+    노드 단위 테스트 편의용 launch 모음. 하드웨어 인프라(dsr_bringup2 등)는
+    포함하지 않는다 — ws_dsr 쪽에서 별도로 띄운 뒤 이 launch 로 nail_* 노드를
+    조합해 올린다.
+  </description>
+  <maintainer email="jje320594@gmail.com">jje</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>nail_safety</exec_depend>
+  <exec_depend>nail_skill</exec_depend>
+  <exec_depend>nail_perception</exec_depend>
+  <exec_depend>nail_process</exec_depend>
+  <exec_depend>nail_orchestrator</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

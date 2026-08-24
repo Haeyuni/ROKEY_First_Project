@@ -89,6 +89,12 @@ class DsrAdapter:
         self._get_current_posx = dsr.get_current_posx
         self._set_tcp = dsr.set_tcp
         self._get_tcp = dsr.get_tcp
+        self._add_tcp = dsr.add_tcp
+        self._del_tcp = dsr.del_tcp
+        self._set_robot_mode = dsr.set_robot_mode
+        self._get_robot_mode = dsr.get_robot_mode
+        self._ROBOT_MODE_MANUAL = dsr.ROBOT_MODE_MANUAL
+        self._ROBOT_MODE_AUTONOMOUS = dsr.ROBOT_MODE_AUTONOMOUS
         self._posx = posx
         # DSR_ROBOT2 는 DRL(구 로봇 언어) 함수명을 그대로 옮긴 것이므로
         # get_digital_input(index)/get_robot_state() 이름을 신뢰한다(공식
@@ -262,14 +268,46 @@ class DsrAdapter:
 
     # --- tool / TCP ------------------------------------------------------------
     def set_tcp(self, name: str):
+        """add_tcp 와 마찬가지로 AUTONOMOUS(ROS 외부제어) 상태에서는 거부되는
+        것으로 보여 MANUAL <-> AUTONOMOUS 를 오간다 (실측 기반, add_tcp 쪽
+        docstring 참고). 실패해도 반드시 AUTONOMOUS 로 복귀시킨다."""
         with self._lock:
-            ret = self._set_tcp(name)
+            self._set_robot_mode(self._ROBOT_MODE_MANUAL)
+            try:
+                ret = self._set_tcp(name)
+            finally:
+                self._set_robot_mode(self._ROBOT_MODE_AUTONOMOUS)
         if ret != 0:
             raise DsrAdapterError(f"set_tcp('{name}') 실패")
 
     def get_tcp(self) -> str:
         with self._lock:
             return self._get_tcp()
+
+    def add_tcp(self, name: str, offset):
+        """컨트롤러에 TCP 좌표계를 (재)등록한다 — 값의 출처는 호출자(랙 설정
+        파일 등)이며, 이 함수는 그대로 두산 컨트롤러에 반영만 한다.
+
+        같은 이름이 이미 있으면 두산 쪽 add_tcp 가 실패로 응답하는 것으로
+        보여 먼저 del_tcp 로 지운다 — 없는 이름을 지우는 건 실패해도 무해하니
+        결과를 무시한다. 이렇게 해야 설정 파일의 값이 바뀐 뒤 노드를 재시작할
+        때마다 컨트롤러 쪽 값도 항상 최신으로 갱신된다.
+
+        config_create_tcp/config_delete_tcp 는 로봇이 ROS(AUTONOMOUS) 제어
+        상태에서는 거부되는 것으로 보여(실측: 동일 호출이 MANUAL 에서만
+        성공), 호출 전후로 MANUAL <-> AUTONOMOUS 를 오간다. 실패해도 반드시
+        AUTONOMOUS 로 복귀시켜야 한다 — 그대로 두면 이후 이동 명령(amovel 등)이
+        전부 막힌다.
+        """
+        with self._lock:
+            self._set_robot_mode(self._ROBOT_MODE_MANUAL)
+            try:
+                self._del_tcp(name)
+                ret = self._add_tcp(name, offset)
+            finally:
+                self._set_robot_mode(self._ROBOT_MODE_AUTONOMOUS)
+        if ret != 0:
+            raise DsrAdapterError(f"add_tcp('{name}') 실패")
 
     # --- gripper (OnRobot RG, /onrobot/sendCommand) ---------------------------
     def _send_gripper_command(self, command: str, timeout_sec: float = 10.0) -> bool:
