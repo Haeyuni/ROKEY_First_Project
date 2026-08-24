@@ -142,9 +142,49 @@ class DsrAdapter:
 
     def _setup_gripper_client(self):
         from onrobot_rg_msgs.srv import SetCommand
+        from sensor_msgs.msg import JointState
         self._SetCommand = SetCommand
         self._gripper_client = self._node.create_client(
             SetCommand, '/onrobot/sendCommand')
+
+        # /onrobot/sendCommand 는 Modbus 전송 성공만 확인하고 즉시
+        # success=True 를 반환한다(OnRobotRGControllerServer.sendCommandCallback,
+        # ws_dsr) — 실제 모션 완료를 보장하지 않는다. 게다가 RG2 자체
+        # 프로토콜상 그리퍼가 busy(모션 중)일 때 온 새 명령은 조용히
+        # 무시된다. 그 결과 직전 사이클의 grip 이 아직 안 끝난 채로 다음
+        # open 명령이 도착하면, 명령은 무시되고 서비스는 성공을 반환하는데
+        # 그리퍼는 실제로 열리지 않은 채 하강해버리는 문제가 실기에서
+        # 재현됨. /joint_states 의 그리퍼 조인트 effort 는 busy 일 때만
+        # 0 이 아니게 채워지므로(같은 파일 getStatus 참고) 이걸로 실제
+        # busy 상태를 직접 확인한다.
+        self._gripper_joint_state = None
+        self._gripper_joint_state_lock = threading.Lock()
+        self._node.create_subscription(
+            JointState, '/joint_states', self._on_joint_states, 10)
+
+    def _on_joint_states(self, msg):
+        for name, effort in zip(msg.name, msg.effort):
+            if 'finger_joint' in name:
+                with self._gripper_joint_state_lock:
+                    self._gripper_joint_state = (name, effort)
+                return
+
+    def _wait_gripper_idle(self, timeout_sec: float) -> bool:
+        """그리퍼가 busy 가 아닐 때까지 대기. /joint_states 에 그리퍼 조인트가
+        아직 안 잡히면(조인트 merge 노드 미기동 등) 판단 불가로 보고 True 를
+        반환한다 — 이 경우 호출부의 gripper_settle_s sleep 이 유일한
+        안전장치가 된다."""
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            with self._gripper_joint_state_lock:
+                state = self._gripper_joint_state
+            if state is None:
+                return True
+            _, effort = state
+            if effort == 0.0:
+                return True
+            time.sleep(0.02)
+        return False
 
     def destroy(self):
         self._dr_node.destroy_node()
@@ -314,6 +354,12 @@ class DsrAdapter:
         if self._gripper_client is None or not self._gripper_client.wait_for_service(timeout_sec=5.0):
             self._node.get_logger().error('/onrobot/sendCommand 서비스 연결 실패')
             return False
+        # RG2 는 busy 상태에서 온 새 명령을 조용히 무시한다 — 직전 모션이
+        # 아직 안 끝났으면 먼저 기다려 이번 명령이 씹히는 걸 막는다.
+        if not self._wait_gripper_idle(timeout_sec):
+            self._node.get_logger().warn(
+                '/onrobot/sendCommand: 직전 그리퍼 모션이 아직 안 끝남(busy) '
+                '— 이번 명령이 무시될 수 있음')
         req = self._SetCommand.Request()
         req.command = command
         future = self._gripper_client.call_async(req)
@@ -327,7 +373,16 @@ class DsrAdapter:
                 return False
             time.sleep(0.02)
         result = future.result()
-        return bool(result is not None and result.success)
+        if not (result is not None and result.success):
+            return False
+        # 서비스는 Modbus 전송 성공만 의미할 뿐 모션 완료를 보장하지 않는다
+        # (위 주석 참고) — busy 플래그가 뜰 시간(퍼블리시 50Hz 최소 1주기)을
+        # 준 뒤 실제로 idle 로 돌아올 때까지 기다려 진짜 완료를 확인한다.
+        time.sleep(0.05)
+        if not self._wait_gripper_idle(timeout_sec):
+            self._node.get_logger().error('/onrobot/sendCommand: 그리퍼 모션 완료 대기 타임아웃')
+            return False
+        return True
 
     def gripper_open(self) -> bool:
         return self._send_gripper_command('o')
