@@ -255,8 +255,11 @@ class SessionOrchestratorNode(Node):
     def _go_to_work(self, tool_key, our_goal_handle):
         """ChangeTool 직후 공통 이동: 경유점(tool_transit_key) → <tool_key>_work.
 
-        반환: (True, None) 성공 / (None, err) 실패 — err 은 _finish_by_err 에
-        그대로 넘기면 된다. 대각선 이동으로 방금 집은 툴이 랙/구조물과
+        반환: (work_result, None) 성공 / (None, err) 실패 — err 은
+        _finish_by_err 에 그대로 넘기면 된다. work_result.base.final_pose 는
+        <tool_key>_work 도착 후 실제 위치(base_link) — handrest_frame/
+        nail_frame TF 를 없앤 뒤로는 이 값을 스캔 원점으로 재사용한다(아래
+        _scan_origin_from 참고). 대각선 이동으로 방금 집은 툴이 랙/구조물과
         부딪히는 문제 대응(PickPlace via_key 라우팅과 동일한 이유).
         """
         transit_key = self.get_parameter('tool_transit_key').value
@@ -264,10 +267,22 @@ class SessionOrchestratorNode(Node):
         _, err = self._call_move_to_key(transit_key, our_goal_handle, timeout_s)
         if err is not None:
             return None, err
-        _, err = self._call_move_to_key(f'{tool_key}_work', our_goal_handle, timeout_s)
+        work_result, err = self._call_move_to_key(f'{tool_key}_work', our_goal_handle, timeout_s)
         if err is not None:
             return None, err
-        return True, None
+        return work_result, None
+
+    @staticmethod
+    def _scan_origin_from(move_result):
+        """MoveTo 결과의 final_pose(m) → ScanBoundary origin_x/y/z_mm.
+
+        origin_z_mm 은 probe_work 도착 높이를 그대로 쓴다 — 실제 표면보다
+        높이 떠 있는 자세일 수 있으니(§ "작업 시작 자세"), probe_depth_mm
+        만큼 파고들어도 접촉을 못 찾으면(E_NO_CONTACT) probe_work 좌표를
+        표면에 더 가깝게 재측정하거나 probe_depth_mm 을 늘릴 것.
+        """
+        pos = move_result.base.final_pose.position
+        return pos.x * 1000.0, pos.y * 1000.0, pos.z * 1000.0
 
     # --- PRECHECK (NIS §8: 안착 · 툴 랙 전수 · 통신 · E-Stop 해제) -----------------
     def _run_precheck(self, required_tools):
@@ -433,7 +448,7 @@ class SessionOrchestratorNode(Node):
                                         scan_map, total_rework)
         state['current_tool'] = ToolState.PROBE
 
-        _, err = self._go_to_work('probe', goal_handle)
+        probe_work_result, err = self._go_to_work('probe', goal_handle)
         if err is not None:
             return self._finish_by_err(goal_handle, result, err, '경유/작업위치 이동 실패(probe)',
                                         started_at, started_mono, state, all_results,
@@ -442,6 +457,11 @@ class SessionOrchestratorNode(Node):
         emit(ProcessState.STAGE_SCAN, 0.0)
         scan_goal = ScanBoundary.Goal()
         scan_goal.session_id = session_id
+        # handrest_frame/nail_frame TF 제거됨 — probe_work 도착 위치(실측)를
+        # 스캔 원점으로 그대로 쓴다. base_link 기준으로 직접 스캔한다.
+        scan_goal.frame_id = 'base_link'
+        scan_goal.origin_x_mm, scan_goal.origin_y_mm, scan_goal.origin_z_mm = \
+            self._scan_origin_from(probe_work_result)
 
         def on_scan_fb(fb_msg):
             emit(ProcessState.STAGE_SCAN, fb_msg.feedback.overall_percent)

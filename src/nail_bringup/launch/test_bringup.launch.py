@@ -50,13 +50,13 @@ ros2 launch nail_bringup test_bringup.launch.py nodes:=safety,skill,tool,sanding
 자동으로 따라 붙지 않음). 무엇이 켜져 있고 무엇이 꺼져 있는지 항상 명시적으로
 알 수 있게 하기 위한 설계다 — REJECT(E_NO_SCAN 등)도 유효한 테스트 케이스다.
 
-## `frames` 토큰 — NIS §11.4 고정 TF (tool_rack_frame/slot_*/handrest_frame/nail_frame)
+## `frames` 토큰 — NIS §11.4 고정 TF (지금은 tool_rack_frame만 남음)
 
 `config/static_frames.yaml` 을 읽어 프레임마다 `tf2_ros
-static_transform_publisher` 를 하나씩 띄운다. **이 좌표는 전부
-placeholder다.** `ChangeTool`/슬롯 대상 `PickPlace` 를 동작만 시켜보고
-싶을 때 켜되, 실측/CAD 확정 전에는 이 프레임으로 로봇을 실제로 움직이지
-말 것 — `static_frames.yaml` 상단 경고를 반드시 읽을 것.
+static_transform_publisher` 를 하나씩 띄운다. `handrest_frame`/`nail_frame`
+은 제거됨(운영자 결정, 정적 사전 티칭 방식을 안 씀) — scan_node 의 기본
+frame_id 도 `base_link`로 바뀌었으니 `ScanBoundary` 호출 시 frame_id 를
+반드시 명시할 것.
 """
 import math
 

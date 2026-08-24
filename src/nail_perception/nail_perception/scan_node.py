@@ -94,7 +94,10 @@ class ScanNode(Node):
         d('scan_area_x_mm', 16.0)
         d('scan_area_y_mm', 13.0)
         d('scan_margin_mm', 2.0)
-        d('frame_id', 'nail_frame')
+        # nail_frame TF 제거됨(운영자 결정) — 기본값을 base_link 로 바꿈.
+        # base_link 원점은 작업 영역과 무관하니, 호출자가 frame_id 를
+        # 반드시 명시할 것(예: 실측한 target_key 좌표를 참조하는 별도 프레임).
+        d('frame_id', 'base_link')
         # 1단계
         d('coarse_pitch_mm', 3.0)
         d('coarse_retry_pitch_mm', 2.0)
@@ -108,11 +111,14 @@ class ScanNode(Node):
         # 판정
         d('separation_margin_min', 2.0)
         d('invalid_point_max_ratio', 0.2)
-        # 프로브
-        d('probe_depth_mm', 0.5)
+        # 프로브. origin_z_mm 이 probe_work 도착 높이(호버링, 표면 아님)를
+        # 그대로 쓰기 때문에 0.5mm 로는 표면을 못 찾는다 — 실기 확인됨.
+        # 10mm 로 넉넉히 잡아 실제 표면까지 안전하게 탐색한다(접근/하강 둘
+        # 다 힘으로 멈추므로 깊게 잡아도 안전).
+        d('probe_depth_mm', 10.0)
         d('probe_max_force_n', 2.0)
         d('probe_timeout_s', 6.0)
-        d('probe_no_contact_retry', 2)  # SDS §7.3 retry.probe_no_contact
+        d('probe_no_contact_retry', 0)  # SDS §7.3 retry.probe_no_contact
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg):
@@ -164,7 +170,7 @@ class ScanNode(Node):
         return GoalResponse.ACCEPT
 
     # --- ProbePoint 클라이언트 헬퍼 ----------------------------------------------
-    def _call_probe_point(self, x_mm, y_mm, frame_id, depth_mm, max_force_n, source_tag,
+    def _call_probe_point(self, x_mm, y_mm, z_mm, frame_id, depth_mm, max_force_n, source_tag,
                            timeout_s, our_goal_handle):
         """반환: (StiffnessPoint | None, error_code | None).
 
@@ -174,7 +180,7 @@ class ScanNode(Node):
             return None, ErrorCode.E_COMM_LOST
 
         goal = ProbePointAction.Goal()
-        goal.target = Point(x=x_mm / 1000.0, y=y_mm / 1000.0, z=0.0)
+        goal.target = Point(x=x_mm / 1000.0, y=y_mm / 1000.0, z=z_mm / 1000.0)
         goal.frame_id = frame_id
         goal.max_depth_mm = depth_mm
         goal.max_force_n = max_force_n
@@ -221,12 +227,12 @@ class ScanNode(Node):
             return result.point, result.base.error.code
         return result.point, None
 
-    def _probe_with_retry(self, x_mm, y_mm, frame_id, depth_mm, max_force_n, source_tag,
+    def _probe_with_retry(self, x_mm, y_mm, z_mm, frame_id, depth_mm, max_force_n, source_tag,
                            timeout_s, our_goal_handle, max_retry):
         """SDS §7.3 retry.probe_no_contact — E_NO_CONTACT 만 재시도한다."""
         attempt = 0
         while True:
-            point, err = self._call_probe_point(x_mm, y_mm, frame_id, depth_mm, max_force_n,
+            point, err = self._call_probe_point(x_mm, y_mm, z_mm, frame_id, depth_mm, max_force_n,
                                                  source_tag, timeout_s, our_goal_handle)
             if err == 'CANCELLED':
                 return None, 'CANCELLED'
@@ -276,6 +282,7 @@ class ScanNode(Node):
         p = self.get_parameter
 
         frame_id = goal.frame_id or p('frame_id').value
+        origin_x, origin_y, origin_z = goal.origin_x_mm, goal.origin_y_mm, goal.origin_z_mm
         area_x = self._val(goal.area_x_mm, 'scan_area_x_mm')
         area_y = self._val(goal.area_y_mm, 'scan_area_y_mm')
         margin = self._val(goal.margin_mm, 'scan_margin_mm')
@@ -322,8 +329,8 @@ class ScanNode(Node):
                 if halt:
                     return grid, points, halt
                 point, err = self._probe_with_retry(
-                    x, y, frame_id, depth_mm, max_force_n, StiffnessPoint.SRC_COARSE,
-                    probe_timeout_s, goal_handle, no_contact_retry)
+                    x + origin_x, y + origin_y, origin_z, frame_id, depth_mm, max_force_n,
+                    StiffnessPoint.SRC_COARSE, probe_timeout_s, goal_handle, no_contact_retry)
                 if err == 'CANCELLED':
                     return grid, points, 'CANCELLED'
                 points[key] = point
@@ -430,8 +437,8 @@ class ScanNode(Node):
                 return self._abort_result(goal_handle, halt, '정밀 스캔 중 취소/안전 위반',
                                            started_at)
             point, err = self._probe_with_retry(
-                x, y, frame_id, depth_mm, max_force_n, StiffnessPoint.SRC_FINE,
-                probe_timeout_s, goal_handle, no_contact_retry)
+                x + origin_x, y + origin_y, origin_z, frame_id, depth_mm, max_force_n,
+                StiffnessPoint.SRC_FINE, probe_timeout_s, goal_handle, no_contact_retry)
             if err == 'CANCELLED':
                 return self._abort_result(goal_handle, 'CANCELLED', '정밀 스캔 중 취소',
                                            started_at)

@@ -75,28 +75,8 @@ frames:
     ry_deg: -179.90   # B
     rz2_deg: 67.88    # C
 
-  # 손 받침대. 손톱 관련 좌표의 뿌리다 — 받침대를 옮기면 여기만 고치면 된다.
-  # 채우는 법: 그리퍼 끝을 받침대의 기준점(예: 손가락이 닿는 모서리)에 대고
-  # 펜던트 X/Y/Z 를 읽어 넣는다. 회전은 받침대가 base_link 와 나란하면 0 그대로.
-  handrest_frame:
-    parent_frame: base_link
-    x_mm: 400.0      # TODO: 실측값으로 교체 (티칭 1점, NIS §11.4)
-    y_mm: 0.0        # TODO: 실측값으로 교체
-    z_mm: 0.0        # TODO: 실측값으로 교체
-    roll_deg: 0.0
-    pitch_deg: 0.0
-    yaw_deg: 0.0
-
-  # 손톱이 받침대 위 어디쯤 오는지의 대략적인 추정치.
-  # 정확할 필요 없다 — scan_node 가 스캔을 마치면 실제 경계를 기준으로
-  # nail_local_frame 을 새로 방송해 덮어쓴다(NIS §6.1). 이 프레임은 "스캔을
-  # 어디서부터 시작할지" 초기 추정용으로만 쓰인다.
-  # z_mm 은 받침대 표면에서 손톱까지의 높이(손가락 두께)로 보면 된다.
-  nail_frame:
-    parent_frame: handrest_frame
-    x_mm: 0.0        # TODO: 실측값으로 교체
-    y_mm: 0.0        # TODO: 실측값으로 교체
-    z_mm: 20.0       # TODO: 실측값으로 교체 (손가락 두께 추정)
-    roll_deg: 0.0
-    pitch_deg: 0.0
-    yaw_deg: 0.0
+  # handrest_frame / nail_frame 제거됨 — 정적으로 미리 티칭해두는 방식을
+  # 안 쓰기로 함(운영자 결정). scan_node 의 기본 frame_id 도 'base_link'로
+  # 바꿔뒀다. ScanBoundary 를 호출할 때 frame_id 를 반드시 명시할 것 —
+  # 안 주면 스캔 격자가 base_link 원점(로봇 베이스, 작업 영역과 무관한
+  # 위치) 중심으로 잡혀 스캔이 완전히 엉뚱한 곳을 찍는다.

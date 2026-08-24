@@ -1,5 +1,15 @@
 string  session_id
 string  frame_id
+# frame_id 기준 스캔 격자 중심(mm). handrest_frame/nail_frame 같은 사전
+# 티칭된 TF가 더 이상 없으므로 **호출자가 실측 좌표로 반드시 채울 것** —
+# 비워두면(0,0) frame_id='base_link' 기준 로봇 베이스 원점이 격자 중심이
+# 되어 작업 영역과 전혀 무관한 곳을 스캔하게 된다.
+float64 origin_x_mm
+float64 origin_y_mm
+# 표면(탐색 시작) 높이. 실측 확인됨: 비워두면(0) frame_id='base_link'
+# 기준 z=0(로봇 베이스 높이) 이 되어 실제 작업 높이(보통 수백mm)보다
+# 한참 아래를 목표로 삼아 접근 중 충돌한다 — 반드시 채울 것.
+float64 origin_z_mm
 
 # 스캔 영역
 float64 area_x_mm
