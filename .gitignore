@@ -195,3 +195,4 @@ __marimo__/
 
 # Web frontend (web/frontend)
 node_modules/
+.claude/settings.local.json
