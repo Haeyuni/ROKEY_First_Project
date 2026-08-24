@@ -34,8 +34,12 @@ from nail_msgs.action import ContactPath, LateralContact, MoveTo, PickPlace, Pro
 from nail_msgs.msg import ErrorCode, ForceSample, ResultBase, SafetyState, StiffnessPoint
 from nail_perception.geometry2d import point_in_polygon
 
-from .conversions import TaskPose, pose_to_task_pose, task_pose_to_ros_pose
+from nail_perception.surface3d import normal_to_zyz_deg
+
+from .conversions import (TaskPose, pose_to_task_pose, task_pose_to_ros_pose,
+                          tool_z_axis_base)
 from .dsr_adapter import DsrAdapter, DsrAdapterError
+from .probe_analysis import ProbeSample, compute_features
 from .regression import compute_stiffness
 
 SEVERITY_BY_CODE = {
@@ -192,7 +196,40 @@ class RobotSkillNode(Node):
         d('probe_contact_threshold_n', 0.3)
         d('probe_max_depth_mm', 1.0)
         d('probe_max_force_n', 3.0)
-        d('probe_regression_min_samples', 10)
+        # 하강 중 폴링 주기. 스텝-정지-측정 대신 한 번의 연속 이동을 걸고
+        # 자세와 힘을 함께 읽는다. 두산 서비스 호출 3회/주기라 50Hz 부근이
+        # 실질 상한이고, 그 정도면 2mm/s 하강에서 0.04mm 간격 표본이 된다.
+        d('probe_sample_hz', 40.0)
+        # is_moving() 을 몇 표본마다 부를지. 이 노드는 이미 100Hz 로 힘을
+        # 퍼블리시하고 있고 두산 API 호출은 전부 락 하나로 직렬화되므로,
+        # 매 주기 3회씩(자세·힘·모션상태) 부르면 컨트롤러가 포화한다.
+        # 이동 완료는 대부분 "자세가 더 이상 안 변한다"로 공짜로 알 수 있으니
+        # 서비스 호출은 백스톱으로만 남긴다.
+        d('probe_motion_poll_every', 5)
+        d('probe_stall_samples', 6)
+        d('probe_tare_samples', 12)
+        # 접촉 문턱을 노이즈의 몇 σ 로 잡을지. 고정 문턱만 쓰면 센서 드리프트가
+        # 큰 날 통째로 오작동한다.
+        d('probe_contact_sigma', 4.0)
+        # 회귀에 필요한 최소 접촉 표본. 이보다 적으면 강성을 포기하고 계단
+        # 압입값을 대표값으로 쓴다 — 단단한 면에서는 그게 정상이다.
+        d('probe_regression_min_samples', 6)
+        d('probe_lateral_force_limit_n', 2.0)
+        d('probe_slip_ratio_limit', 0.45)
+        d('probe_slip_drop_n', 0.15)
+        # 유지 / 계단 압입 / 부분 제하
+        d('probe_dwell_s', 0.30)
+        d('probe_dither_mm', 0.05)
+        d('probe_dither_dwell_s', 0.30)
+        d('probe_dither_speed_mms', 0.5)
+        d('probe_dither_force_headroom', 1.8)
+        d('probe_unload_fraction', 0.25)
+        d('probe_unload_max_mm', 0.6)
+        d('probe_phase_timeout_s', 20.0)
+        # 표면 법선으로 툴 자세를 트는 것은 TCP 가 프로브 팁 기준일 때만
+        # 안전하다. tool_rack 의 tcp_offset 이 전부 0 인 현 상태에서 켜면
+        # 팁이 툴 길이만큼 휩쓸린다 — 기본 false.
+        d('probe_allow_reorient', False)
         d('release_speed_mms', 1.0)
         d('probe_search_step_mm', 0.1)
         # ContactPath
@@ -1182,6 +1219,22 @@ class RobotSkillNode(Node):
 
     # =========================================================================
     # ProbePoint — 스캔·택프리 검사 공유 최소 단위 (SDS §5.1)
+    #
+    # v0.3 에서 측정 방식을 통째로 바꿨다. 이유는 셋이다.
+    #
+    # 1. **표본이 없었다.** 0.1mm 씩 끊어 내려가며 스텝마다 한 번 읽는
+    #    구조라, 스캔 기본값(max_depth 0.5mm)이면 하강 표본이 최대 5개다.
+    #    회귀 최소 표본은 10개였으므로 강성은 사실상 항상 실패했다. 이제는
+    #    한 번의 연속 이동 중에 고속으로 샘플링한다.
+    # 2. **명령 하강량은 압입량이 아니다.** 접촉 후에는 로봇이 밀리는 만큼이
+    #    빠지는데 그걸 그대로 깊이로 썼다. 이제 매 표본마다 실제 자세를 읽어
+    #    툴 축에 투영한다.
+    # 3. **하강 곡선만으로는 단단한 면에서 아무것도 못 뽑는다.** 힘 상한까지
+    #    압입이 0.1mm 도 안 되기 때문이다. 위치를 고정한 채 재는 유지·계단·
+    #    제하 구간을 추가해, 압입 구간이 없어도 나오는 특징을 확보한다.
+    #
+    # 판정은 여전히 여기서 하지 않는다 — 숫자만 돌려주고 손톱/피부 판단은
+    # scan_node 가 한다 (NIS §5.1).
     # =========================================================================
     def _on_goal_probe_point(self, goal_request):
         if goal_request.max_depth_mm <= 0.0:
@@ -1192,66 +1245,232 @@ class RobotSkillNode(Node):
             return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
+    # --- 저수준 헬퍼 -------------------------------------------------------------
+    def _probe_tare(self, n_samples, period_s):
+        """접근 자세에서 힘 영점과 **노이즈 수준(1σ)** 을 함께 잰다.
+
+        노이즈를 같이 재는 게 핵심이다. 접촉 문턱을 고정값(0.3N)으로 두면
+        센서 상태가 나빠진 날 통째로 오작동한다 — 실측 Fz 바이어스가 -12N
+        수준이라 드리프트만으로도 고정 문턱을 넘나든다. 4σ 로 잡으면 문턱이
+        그날 상태를 따라간다.
+        """
+        from .dsr_adapter import Wrench
+        rows = []
+        for _ in range(max(3, int(n_samples))):
+            w = self._adapter.read_wrench()
+            rows.append((w.fx_n, w.fy_n, w.fz_n, w.tx_nm, w.ty_nm, w.tz_nm))
+            time.sleep(period_s)
+        n = len(rows)
+        mean = [sum(col) / n for col in zip(*rows)]
+        fz = [r[2] for r in rows]
+        var = sum((v - mean[2]) ** 2 for v in fz) / max(1, n - 1)
+        return Wrench(*mean), math.sqrt(var)
+
+    def _probe_travel(self, goal_handle, ctx, delta_mm, speed_mms, *,
+                      bucket, stop_above_n=None, stop_below_n=None,
+                      lateral_limit_n=None, timeout_s=15.0):
+        """delta_mm > 0 이면 툴 -Z 하강, < 0 이면 이탈. 이동 **중에** 고속 샘플링.
+
+        기존처럼 "조금 움직이고 멈춰서 한 번 읽기"를 반복하지 않는다. 한 번의
+        연속 이동을 걸어두고 자세와 힘을 함께 폴링하므로, 같은 시간에 표본이
+        열 배 이상 나오고 접촉 순간의 꺾임이 파형에 남는다.
+
+        반환: 'ok'(이동 완료) / 'force'(상한 도달) / 'released'(하한 도달)
+              / 'lateral' / 'cancel' / 'safety' / 'timeout'
+        """
+        if abs(delta_mm) < 1e-4:
+            return 'ok'
+        self._adapter.start_move_rel_tool_z(-delta_mm, speed_mms, speed_mms * 2)
+
+        period = 1.0 / max(self.get_parameter('probe_sample_hz').value, 1.0)
+        deadline = time.monotonic() + timeout_s
+        time.sleep(min(0.05, period))  # BUSY 로 전이되기 전 조기 종료 판정 방지
+
+        poll_every = max(1, int(self.get_parameter('probe_motion_poll_every').value))
+        stall_limit = max(2, int(self.get_parameter('probe_stall_samples').value))
+        stall = 0
+        prev_travel = None
+        moved_once = False
+        tick = 0
+
+        reason = 'ok'
+        while True:
+            loop_started = time.monotonic()
+            tick += 1
+            if goal_handle.is_cancel_requested:
+                reason = 'cancel'
+                break
+            if not self._safe_to_move():
+                reason = 'safety'
+                break
+            if loop_started > deadline:
+                reason = 'timeout'
+                break
+
+            try:
+                pose = self._adapter.get_pose()
+                w = self._adapter.read_wrench()
+            except DsrAdapterError:
+                reason = 'timeout'
+                break
+
+            travel = ctx['tool_z'][0] * (ctx['p0'][0] - pose.x_mm) + \
+                ctx['tool_z'][1] * (ctx['p0'][1] - pose.y_mm) + \
+                ctx['tool_z'][2] * (ctx['p0'][2] - pose.z_mm)
+            rel = ctx['relative'](w)
+            sample = ProbeSample(loop_started - ctx['t0'], travel, pose.z_mm,
+                                 rel.fx_n, rel.fy_n, rel.fz_n)
+            bucket.append(sample)
+            ctx['waveform'].append(self._wrench_to_msg(w))
+            ctx['last_travel'] = travel
+            ctx['last_z'] = pose.z_mm
+
+            f_axial = abs(rel.fz_n)
+            f_lat = math.hypot(rel.fx_n, rel.fy_n)
+            ctx['feedback'](travel, rel.fz_n)
+
+            if lateral_limit_n is not None and f_lat > lateral_limit_n:
+                reason = 'lateral'
+                break
+            if stop_above_n is not None and f_axial >= stop_above_n:
+                reason = 'force'
+                break
+            if stop_below_n is not None and f_axial <= stop_below_n:
+                reason = 'released'
+                break
+
+            # 이동 완료 판정: 먼저 자세 변화로(공짜), 백스톱으로만 컨트롤러에
+            # 물어본다. 접촉으로 막힌 경우는 위 힘 조건에서 이미 빠져나간다.
+            if prev_travel is not None and abs(travel - prev_travel) >= 1e-3:
+                moved_once = True
+                stall = 0
+            elif moved_once:
+                stall += 1
+            # 아직 한 번도 안 움직였다면 세지 않는다 — 컨트롤러가 이동을
+            # 시작하기 전 가속 구간을 "정지"로 오인하면 하강이 즉시 끝난다.
+            prev_travel = travel
+            if stall >= stall_limit:
+                reason = 'ok'
+                break
+            if tick % poll_every == 0 and not self._adapter.is_moving():
+                reason = 'ok'
+                break
+
+            time.sleep(max(0.0, period - (time.monotonic() - loop_started)))
+
+        if reason != 'ok':
+            self._adapter.stop()
+            settle = time.monotonic() + 2.0
+            try:
+                while self._adapter.is_moving() and time.monotonic() < settle:
+                    time.sleep(0.02)
+            except DsrAdapterError:
+                pass
+        return reason
+
+    def _probe_hold(self, goal_handle, ctx, duration_s, bucket):
+        """위치를 고정한 채 힘만 샘플링한다 (응력 완화 측정).
+
+        압입량이 변하지 않으므로 여기서 나오는 힘 감소는 순수하게 재질의
+        점탄성이다 — 경사면 미끄러짐이나 깊이 추정 오차가 섞이지 않는 유일한
+        구간이라, 단단한 표면에서 가장 믿을 만한 축이 된다.
+        """
+        if duration_s <= 0.0:
+            return 'ok'
+        period = 1.0 / max(self.get_parameter('probe_sample_hz').value, 1.0)
+        end = time.monotonic() + duration_s
+        travel = ctx['last_travel']
+        while time.monotonic() < end:
+            loop_started = time.monotonic()
+            if goal_handle.is_cancel_requested:
+                return 'cancel'
+            if not self._safe_to_move():
+                return 'safety'
+            try:
+                w = self._adapter.read_wrench()
+            except DsrAdapterError:
+                return 'timeout'
+            rel = ctx['relative'](w)
+            bucket.append(ProbeSample(loop_started - ctx['t0'], travel,
+                                      ctx['last_z'], rel.fx_n, rel.fy_n, rel.fz_n))
+            ctx['waveform'].append(self._wrench_to_msg(w))
+            ctx['feedback'](travel, rel.fz_n)
+            time.sleep(max(0.0, period - (time.monotonic() - loop_started)))
+        return 'ok'
+
+    def _probe_approach_pose(self, goal, target_base, current, approach_height):
+        """접근 자세. approach_normal 이 주어지고 재지향이 허용된 경우에만 자세를 튼다.
+
+        기본은 **현재 자세 유지**다. TCP 오프셋이 프로브 팁에 맞춰져 있지
+        않으면(이 저장소의 tool_rack 은 전부 0 이다) 자세만 트는 순간 팁이
+        툴 길이만큼 옆으로 휩쓸려 엉뚱한 곳을 찍는다. 경사면 대응은 자세를
+        트는 대신 힘 벡터로 법선을 추정하고 미끄러짐을 검출하는 쪽으로 한다.
+        """
+        rz1, ry, rz2 = current.rz1_deg, current.ry_deg, current.rz2_deg
+        n = goal.approach_normal
+        if self.get_parameter('probe_allow_reorient').value and \
+                math.sqrt(n.x * n.x + n.y * n.y + n.z * n.z) > 1e-6:
+            rz1, ry, rz2 = normal_to_zyz_deg((n.x, n.y, n.z), yaw_ref_deg=rz2)
+            self.get_logger().warn(
+                f'ProbePoint: 표면 법선 정렬 사용 (rz1={rz1:.1f} ry={ry:.1f}) — '
+                'TCP 가 프로브 팁 기준인지 반드시 확인할 것')
+        return TaskPose(target_base.x * 1000.0, target_base.y * 1000.0,
+                        target_base.z * 1000.0 + approach_height, rz1, ry, rz2)
+
+    def _fill_point(self, point, feat, goal, source_tag):
+        point.source = source_tag or StiffnessPoint.SRC_FINE
+        # IDS: position 은 호출자가 goal 을 보낼 때 쓴 frame_id 기준이어야 한다.
+        # 하강 중 XY 는 움직이지 않으므로 접촉점 XY 는 goal.target 과 같다.
+        # 실측 접촉 높이는 base 프레임이라 여기 섞지 않고 contact_z_mm 에 따로
+        # 싣는다 — scan_node 는 그 값들에 평면을 맞춰 잔차만 쓰므로, 프레임
+        # 사이의 상수 오프셋과 기울기는 평면 적합이 흡수한다.
+        point.position = Point(x=goal.target.x * 1000.0, y=goal.target.y * 1000.0,
+                               z=goal.target.z * 1000.0)
+        point.stiffness_n_per_mm = feat.stiffness_n_per_mm
+        point.incremental_stiffness_n_per_mm = feat.incremental_stiffness_n_per_mm
+        point.linearity_r2 = feat.linearity_r2
+        point.power_exponent = feat.power_exponent
+        point.relaxation_ratio = feat.relaxation_ratio
+        point.hysteresis_ratio = feat.hysteresis_ratio
+        point.release_force_n = feat.adhesion_force_n
+        point.contact_depth_mm = feat.indentation_mm
+        point.contact_z_mm = feat.contact_z_mm
+        point.contact_travel_mm = feat.contact_travel_mm
+        point.surface_tilt_deg = feat.surface_tilt_deg
+        point.lateral_force_n = feat.lateral_force_n
+        point.slip_ratio = feat.slip_ratio
+        point.slip_events = int(feat.slip_events)
+        point.stiffness_valid = bool(feat.stiffness_valid)
+        point.curve_valid = bool(feat.curve_valid)
+        point.hold_valid = bool(feat.hold_valid)
+        point.reject_reason = feat.reject_reason
+        point.valid = bool(feat.valid)
+        return point
+
     def _execute_probe_point(self, goal_handle):
         goal = goal_handle.request
         started_at = time.monotonic()
         result = ProbePoint.Result()
+        p = self.get_parameter
+
+        def val(goal_value, param_name):
+            return goal_value if goal_value and goal_value > 0.0 else p(param_name).value
+
+        approach_speed = val(goal.probe_speed_mms, 'probe_speed_mms')
+        max_depth = val(goal.max_depth_mm, 'probe_max_depth_mm')
+        max_force = val(goal.max_force_n, 'probe_max_force_n')
+        lateral_limit = val(goal.lateral_force_limit_n, 'probe_lateral_force_limit_n')
+        approach_height = val(goal.approach_height_mm, 'approach_height_mm')
+        slip_limit = val(goal.slip_ratio_limit, 'probe_slip_ratio_limit')
+        height_only = (goal.profile == ProbePoint.Goal.PROFILE_HEIGHT)
+        dwell_s = 0.0 if height_only else val(goal.dwell_s, 'probe_dwell_s')
+        dither_mm = 0.0 if height_only else val(goal.dither_mm, 'probe_dither_mm')
+        dither_dwell_s = 0.0 if height_only else val(goal.dither_dwell_s, 'probe_dither_dwell_s')
+        unload_fraction = 0.0 if height_only else val(goal.unload_fraction,
+                                                     'probe_unload_fraction')
+
         waveform = []
-
-        approach_speed = goal.probe_speed_mms if goal.probe_speed_mms > 0.0 else \
-            self.get_parameter('probe_speed_mms').value
-        contact_threshold = goal.contact_threshold_n if goal.contact_threshold_n > 0.0 else \
-            self.get_parameter('probe_contact_threshold_n').value
-        max_depth = goal.max_depth_mm if goal.max_depth_mm > 0.0 else \
-            self.get_parameter('probe_max_depth_mm').value
-        max_force = goal.max_force_n if goal.max_force_n > 0.0 else \
-            self.get_parameter('probe_max_force_n').value
-        lateral_limit = goal.lateral_force_limit_n if goal.lateral_force_limit_n > 0.0 else 2.0
-        min_samples = self.get_parameter('probe_regression_min_samples').value
-        step_mm = self.get_parameter('probe_search_step_mm').value
-        approach_height = goal.approach_height_mm if goal.approach_height_mm > 0.0 else \
-            self.get_parameter('approach_height_mm').value
-
-        try:
-            target_base = self._transform_point_to_base(goal.target, goal.frame_id)
-        except Exception as e:
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED,
-                                              f'TF 변환 실패: {e}', started_at)
-            return result
-
-        try:
-            current = self._adapter.get_pose()
-        except DsrAdapterError as e:
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED,
-                                              f'현재 자세 조회 실패: {e}', started_at)
-            return result
-
-        approach_pose = TaskPose(target_base.x * 1000.0, target_base.y * 1000.0,
-                                  target_base.z * 1000.0 + approach_height,
-                                  current.rz1_deg, current.ry_deg, current.rz2_deg)
-
-        self._adapter.start_move_line(approach_pose, approach_speed * 4, approach_speed * 8)
-        reason = self._monitor(goal_handle, self.get_parameter('motion_timeout_s').value, 10.0,
-                                lambda: None)
-        if reason != 'ok':
-            result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                     context='ProbePoint 접근')
-            return result
-
-        try:
-            tare = self._adapter.read_wrench()
-        except DsrAdapterError as e:
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED,
-                                              f'힘 센서 조회 실패: {e}', started_at)
-            return result
-
-        def relative(w):
-            from .dsr_adapter import Wrench
-            return Wrench(w.fx_n - tare.fx_n, w.fy_n - tare.fy_n, w.fz_n - tare.fz_n,
-                          w.tx_nm - tare.tx_nm, w.ty_nm - tare.ty_nm, w.tz_nm - tare.tz_nm)
+        load, dwell, dither, unload = [], [], [], []
 
         def feedback(depth_mm, force_n):
             fb = ProbePoint.Feedback()
@@ -1259,106 +1478,169 @@ class RobotSkillNode(Node):
             fb.current_force_n = force_n
             goal_handle.publish_feedback(fb)
 
-        samples = []
-        travelled = 0.0
-        contacted = False
-        n_steps = max(1, int(math.ceil(max_depth / step_mm)))
-        for _ in range(n_steps):
-            if goal_handle.is_cancel_requested or not self._safe_to_move():
-                self._probe_retreat(approach_pose)
-                reason = 'cancel' if goal_handle.is_cancel_requested else 'safety'
-                result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                         context='ProbePoint 하강')
-                return result
-            self._adapter.start_move_rel_tool_z(-step_mm, approach_speed, approach_speed * 2)
-            self._monitor(goal_handle, 5.0, 20.0, lambda: None)
-            travelled += step_mm
-            w = self._adapter.read_wrench()
-            waveform.append(self._wrench_to_msg(w))
-            r = relative(w)
-            feedback(travelled, r.fz_n)
-
-            if math.hypot(r.fx_n, r.fy_n) > lateral_limit:
-                self._probe_retreat(approach_pose)
-                goal_handle.abort()
-                result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED,
-                                                  '탐색 중 측면 힘 초과', started_at)
-                result.waveform = waveform
-                return result
-
-            samples.append((travelled, r.fz_n))
-            if abs(r.fz_n) >= contact_threshold:
-                contacted = True
-            if abs(r.fz_n) >= max_force:
-                # SDS §5.1: "probe_max_depth_mm 또는 probe_max_force_n 도달까지
-                # 계속 하강" — contact_threshold 를 넘긴 직후 멈추면 회귀에 쓸
-                # 표본이 1개뿐이라 compute_stiffness 가 거의 항상 실패한다.
-                # 접촉 이후에도 두 한계 중 하나에 닿을 때까지 계속 눌러
-                # 하강 구간 전체로 회귀한다.
-                break
-
-        point = StiffnessPoint()
-        point.source = goal.source_tag or StiffnessPoint.SRC_FINE
-        point.valid = False
-
-        if not contacted:
-            self._probe_retreat(approach_pose)
-            self._log_abort(ErrorCode.E_NO_CONTACT,
-                             f'ProbePoint: {max_depth}mm 하강 후 접촉 미검출 '
-                             f'(target base=({target_base.x*1000:.1f},{target_base.y*1000:.1f}))')
+        def fail(code, detail):
             goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_NO_CONTACT,
-                                              '최대 깊이 내 접촉 미검출', started_at)
-            result.point = point
+            result.base = self._result_base(False, code, detail, started_at)
             result.waveform = waveform
             return result
 
-        stiffness, r2, n_used = compute_stiffness(samples, contact_threshold, min_samples)
-        result.regression_samples = n_used
+        try:
+            target_base = self._transform_point_to_base(goal.target, goal.frame_id)
+        except Exception as e:
+            return fail(ErrorCode.E_MOTION_FAILED, f'TF 변환 실패: {e}')
 
-        release_force_n = 0.0
+        try:
+            current = self._adapter.get_pose()
+        except DsrAdapterError as e:
+            return fail(ErrorCode.E_MOTION_FAILED, f'현재 자세 조회 실패: {e}')
+
+        approach_pose = self._probe_approach_pose(goal, target_base, current, approach_height)
+        self._adapter.start_move_line(approach_pose, approach_speed * 4, approach_speed * 8)
+        reason = self._monitor(goal_handle, p('motion_timeout_s').value, 10.0, lambda: None)
+        if reason != 'ok':
+            result.base = self._finish_from_reason(reason, goal_handle, started_at,
+                                                   context='ProbePoint 접근')
+            return result
+
+        try:
+            tare, noise_n = self._probe_tare(p('probe_tare_samples').value,
+                                             1.0 / max(p('probe_sample_hz').value, 1.0))
+            start_pose = self._adapter.get_pose()
+        except DsrAdapterError as e:
+            return fail(ErrorCode.E_MOTION_FAILED, f'힘 센서 조회 실패: {e}')
+
+        # 접촉 문턱은 고정값과 노이즈 4σ 중 큰 쪽. goal 이 값을 주면 그것도 하한이 된다.
+        contact_threshold = max(
+            goal.contact_threshold_n if goal.contact_threshold_n > 0.0
+            else p('probe_contact_threshold_n').value,
+            p('probe_contact_sigma').value * noise_n)
+
+        def relative(w):
+            from .dsr_adapter import Wrench
+            return Wrench(w.fx_n - tare.fx_n, w.fy_n - tare.fy_n, w.fz_n - tare.fz_n,
+                          w.tx_nm - tare.tx_nm, w.ty_nm - tare.ty_nm, w.tz_nm - tare.tz_nm)
+
+        ctx = {
+            'p0': (start_pose.x_mm, start_pose.y_mm, start_pose.z_mm),
+            'tool_z': tool_z_axis_base(start_pose),
+            'relative': relative,
+            'waveform': waveform,
+            'feedback': feedback,
+            'last_travel': 0.0,
+            'last_z': start_pose.z_mm,
+            't0': time.monotonic(),
+        }
+
+        def retreat_and(code, detail):
+            self._probe_retreat(approach_pose)
+            self._log_abort(code, detail)
+            return fail(code, detail)
+
+        # --- 1) 하강: 힘 상한까지 한 번에, 이동 중 고속 샘플링 ----------------------
+        move_reason = self._probe_travel(
+            goal_handle, ctx, max_depth, approach_speed, bucket=load,
+            stop_above_n=max_force, lateral_limit_n=lateral_limit,
+            timeout_s=p('probe_phase_timeout_s').value)
+
+        if move_reason in ('cancel', 'safety', 'timeout'):
+            self._probe_retreat(approach_pose)
+            result.base = self._finish_from_reason(
+                {'cancel': 'cancel', 'safety': 'safety'}.get(move_reason, 'timeout'),
+                goal_handle, started_at, context='ProbePoint 하강')
+            result.waveform = waveform
+            return result
+        if move_reason == 'lateral':
+            return retreat_and(ErrorCode.E_LATERAL_LIMIT,
+                               f'ProbePoint: 하강 중 측면 힘 {lateral_limit}N 초과 — '
+                               f'경사면에서 팁이 밀리고 있음 (target base='
+                               f'({target_base.x*1000:.1f},{target_base.y*1000:.1f}))')
+
+        peak_travel = ctx['last_travel']
+
+        # --- 2) 유지 → 3) 계단 압입 → 4) 계단 유지 -----------------------------------
+        phase_reason = 'ok'
+        if dwell_s > 0.0:
+            phase_reason = self._probe_hold(goal_handle, ctx, dwell_s, dwell)
+        if phase_reason == 'ok' and dither_mm > 0.0:
+            dither_ceiling = max_force * p('probe_dither_force_headroom').value
+            phase_reason = self._probe_travel(
+                goal_handle, ctx, dither_mm, p('probe_dither_speed_mms').value,
+                bucket=dither, stop_above_n=dither_ceiling,
+                lateral_limit_n=lateral_limit, timeout_s=p('probe_phase_timeout_s').value)
+            if phase_reason in ('ok', 'force') and dither_dwell_s > 0.0:
+                phase_reason = self._probe_hold(goal_handle, ctx, dither_dwell_s, dither)
+        if phase_reason in ('cancel', 'safety'):
+            self._probe_retreat(approach_pose)
+            result.base = self._finish_from_reason(phase_reason, goal_handle, started_at,
+                                                   context='ProbePoint 유지/계단')
+            result.waveform = waveform
+            return result
+
+        # --- 5) 제하 ---------------------------------------------------------------
         if goal.measure_release:
-            release_speed = goal.release_speed_mms if goal.release_speed_mms > 0.0 else \
-                self.get_parameter('release_speed_mms').value
-            min_fz = 0.0
-            retract_total = travelled + self.get_parameter('retreat_mm').value
-            retracted = 0.0
-            while retracted < retract_total:
-                if goal_handle.is_cancel_requested or not self._safe_to_move():
-                    break
-                step = min(step_mm, retract_total - retracted)
-                self._adapter.start_move_rel_tool_z(step, release_speed, release_speed * 2)
-                self._monitor(goal_handle, 5.0, 20.0, lambda: None)
-                retracted += step
-                w = self._adapter.read_wrench()
-                waveform.append(self._wrench_to_msg(w))
-                r = relative(w)
-                min_fz = min(min_fz, r.fz_n)
-                feedback(max(travelled - retracted, 0.0), r.fz_n)
-            release_force_n = min_fz
+            # 택프리 검사: 완전히 떼면서 최저 축력을 본다 (음수면 점착).
+            release_speed = val(goal.release_speed_mms, 'release_speed_mms')
+            self._probe_travel(goal_handle, ctx,
+                               -(ctx['last_travel'] + p('retreat_mm').value),
+                               release_speed, bucket=unload,
+                               timeout_s=p('probe_phase_timeout_s').value)
+        elif unload_fraction > 0.0:
+            # 부분 제하: 거리가 아니라 **힘**으로 끊는다. 압입량이 재질마다
+            # 수십 배 다르므로 고정 거리로 떼면 단단한 면에서는 완전히 떨어지고
+            # 부드러운 면에서는 거의 안 떨어진다.
+            self._probe_travel(goal_handle, ctx, -min(peak_travel, p('probe_unload_max_mm').value),
+                               p('probe_dither_speed_mms').value, bucket=unload,
+                               stop_below_n=unload_fraction * max_force,
+                               timeout_s=p('probe_phase_timeout_s').value)
+            self._probe_retreat(approach_pose)
         else:
             self._probe_retreat(approach_pose)
 
-        # IDS StiffnessPoint.position 은 "nail_frame 또는 nail_local_frame 기준,
-        # mm" 로 명시돼 있다 — 호출자가 goal 을 보낼 때 쓴 그 frame_id 기준이어야
-        # 한다. target_base 는 실제 이동 명령에 쓰려고 base 프레임으로 변환해둔
-        # 값이라 여기 쓰면 안 된다(잘못 쓰면 ScanBoundary 의 boundary_polygon 이
-        # base 좌표인데 frame_id="nail_frame" 이라고 잘못 라벨링된 채로 나가,
-        # 이걸 그대로 쓰는 모든 공정 노드가 엉뚱한 위치로 이동하게 된다).
-        # 하강 중 XY 는 움직이지 않으므로 접촉점의 XY 는 원래 goal.target 과
-        # 같다 — goal.frame_id 기준값을 그대로 mm 로 변환해 쓴다.
-        point.position = Point(x=goal.target.x * 1000.0, y=goal.target.y * 1000.0,
-                                z=goal.target.z * 1000.0)
-        point.stiffness_n_per_mm = stiffness or 0.0
-        point.release_force_n = release_force_n
-        point.contact_depth_mm = travelled
-        point.lateral_force_n = math.hypot(samples[-1][1], 0.0) if samples else 0.0
-        point.valid = stiffness is not None and r2 >= 0.5
+        # --- 6) 파형 → 특징 ---------------------------------------------------------
+        feat = compute_features(
+            load, dwell, dither, unload,
+            noise_n=noise_n, min_rise_n=contact_threshold,
+            min_stiffness_samples=int(p('probe_regression_min_samples').value),
+            slip_ratio_limit=slip_limit,
+            slip_drop_n=p('probe_slip_drop_n').value)
+
+        result.waveform = waveform
+        result.regression_samples = feat.n_contact_samples
+        result.load_end_index = len(load)
+        result.dwell_end_index = len(load) + len(dwell)
+        result.dither_end_index = len(load) + len(dwell) + len(dither)
+        result.tare_noise_n = noise_n
+
+        point = StiffnessPoint()
+        self._fill_point(point, feat, goal, goal.source_tag)
+        result.point = point
+
+        if not feat.valid:
+            if feat.reject_reason == 'ALREADY_IN_CONTACT':
+                hint = (f'접근 자세에서 이미 눌려 있어 접촉 시점을 잡을 수 없음 — '
+                        f'접근 높이({approach_height}mm)를 올릴 것')
+            else:
+                hint = (f'{max_depth}mm 하강 후에도 표면 없음 — 하강 예산을 늘리거나 '
+                        f'안착 위치를 확인할 것')
+            self._log_abort(ErrorCode.E_NO_CONTACT,
+                            f'ProbePoint: {hint} ({feat.reject_reason}, '
+                            f'노이즈 {noise_n:.3f}N, 문턱 {contact_threshold:.3f}N, '
+                            f'target base=({target_base.x*1000:.1f},'
+                            f'{target_base.y*1000:.1f}))')
+            goal_handle.abort()
+            result.base = self._result_base(False, ErrorCode.E_NO_CONTACT, hint, started_at)
+            return result
+
+        if feat.reject_reason == 'SLIPPED':
+            # 실패가 아니다 — 기하 특징(contact_z)은 살아 있으므로 점을 넘긴다.
+            # 힘 특징을 쓸지 말지는 플래그를 보고 scan_node 가 정한다.
+            self.get_logger().warn(
+                f'ProbePoint: 접선/법선 비 {feat.slip_ratio:.2f} (한계 {slip_limit}), '
+                f'급락 {feat.slip_events}회 — 힘 특징 폐기, 접촉 높이만 사용 '
+                f'(추정 표면 기울기 {feat.surface_tilt_deg:.1f}°)')
 
         goal_handle.succeed()
         result.base = self._result_base(True, ErrorCode.OK, '', started_at)
-        result.point = point
-        result.waveform = waveform
         return result
 
     def _probe_retreat(self, approach_pose):

@@ -20,6 +20,20 @@ int32   cluster_hard_count
 int32   cluster_soft_count
 string  reject_reason                 # valid=false 사유
 
+# --- v0.3 다특징 판별 메타 ---------------------------------------------------------
+string  classifier_method             # "fused" | "stiffness"
+float64 discriminant_threshold        # 융합 판별축 상의 임계값
+string[] feature_names                # 융합에 실제로 쓰인 축
+float64[] feature_margins             # 축별 1차원 분리도 (튜닝의 근거)
+float64[] feature_weights             # 축별 가중치
+float64 height_step_mm                # 손톱/피부 평균 높이차
+# 단차 / 배경 잔차. 재질이 같아 힘 축이 죽은 경우 이 값이 경계 신뢰도다 —
+# separation_margin 은 강성 군집화용 척도라 기하 축에는 맞지 않는다.
+float64 height_step_snr
+int32   spatial_flips                 # 공간 일관성 보정으로 뒤집힌 점 수
+float64 work_plane_tilt_deg           # 사전 측정한 작업면 기울기
+float64 work_plane_rms_mm             # 평면 적합 잔차. 크면 평면 가정 실패
+
 nail_msgs/BoundaryRegion region
 
 builtin_interfaces/Time created_at

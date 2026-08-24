@@ -127,3 +127,17 @@ def vector_unit(v):
     if n < 1e-9:
         return (0.0, 0.0, 0.0)
     return (v.x / n, v.y / n, v.z / n)
+
+
+def tool_z_axis_base(task_pose: TaskPose):
+    """툴 +Z 축을 base 프레임 단위벡터로. ZYZ 오일러 R = Rz(rz1)Ry(ry)Rz(rz2)
+    의 3열이라 rz2(툴 자전)와 무관하다.
+
+    프로브 하강량을 **명령값이 아니라 실측 자세**로 재기 위해 필요하다.
+    명령 하강량은 접촉 후 로봇이 밀리는 만큼을 포함하지 않으므로 압입량으로
+    쓰면 안 되고, 단순 유클리드 거리는 이탈 구간에서 부호를 잃는다.
+    travel = dot(p0 - p, tool_z) 로 재면 하강이 +, 이탈이 - 로 일관된다.
+    """
+    rz1 = math.radians(task_pose.rz1_deg)
+    ry = math.radians(task_pose.ry_deg)
+    return (math.cos(rz1) * math.sin(ry), math.sin(rz1) * math.sin(ry), math.cos(ry))
