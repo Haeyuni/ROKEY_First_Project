@@ -102,16 +102,14 @@ frames:
   #    재면 된다.
   #
   # 아래 x/y/z 는 2026-08-24, 위 절차 그대로(툴 없이 그리퍼만 든 채 손톱
-  # 정중앙 표면에 근접) 재실측한 값이다. robot_skill_node 가 안 떠 있어
-  # get_current_posx 대신 `tf2(base_link->tool0)` 로 읽었다 — 플랜지/TCP
-  # 기준이라는 한계는 이전과 동일. get_current_posx 로 재확인 권장.
-  #    확인: `ros2 run tf2_ros tf2_echo base_link nail_local_frame`
+  # 정중앙 표면에 근접) get_current_posx 로 재확인한 값이다(이전 tf2
+  # 기반 값과 ~1mm 이내로 일치). yaw_deg 는 아직 미티칭 — 실측 후 채울 것.
   nail_local_frame:
     parent_frame: base_link
     absolute: true
-    x_mm: 377.33
-    y_mm: -22.16
-    z_mm: 396.70
+    x_mm: 376.51
+    y_mm: -21.38
+    z_mm: 396.15
     roll_deg: 0.0
     pitch_deg: 0.0
     yaw_deg: 0.0
