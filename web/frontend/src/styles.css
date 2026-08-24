@@ -1,0 +1,392 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", "Noto Sans KR", sans-serif;
+  background: #111418;
+  color: #e6e6e6;
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app__header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.app__main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 16px;
+}
+
+@media (max-width: 900px) {
+  .app__main {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  background: #1a1f26;
+  border: 1px solid #2a3138;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.panel--wide {
+  grid-column: 1 / -1;
+}
+
+/* FR-30: 상단 상시 배너 */
+.safety-banner {
+  padding: 10px 16px;
+  font-weight: 600;
+}
+
+.safety-banner--ok {
+  background: #1b3a24;
+  color: #6fe08a;
+}
+
+.safety-banner--blocked {
+  background: #4a1414;
+  color: #ff8a8a;
+}
+
+.safety-banner--unknown {
+  background: #3a3418;
+  color: #e0c96f;
+}
+
+.safety-banner__faults {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  font-weight: 400;
+}
+
+/* FR-34: UV 상시 경고 */
+.uv-banner {
+  background: #4a3a00;
+  color: #ffd24a;
+  padding: 8px 16px;
+  font-size: 0.9rem;
+  border-top: 1px solid #6b5300;
+}
+
+.session-start__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 8px;
+}
+
+.session-start__row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: #9ab;
+}
+
+.session-start__row select,
+.session-start__row input[type="text"],
+.session-start__row input[type="number"] {
+  background: #0d1117;
+  border: 1px solid #2a3138;
+  color: #e6e6e6;
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+.session-start__row input[type="number"] {
+  width: 64px;
+}
+
+.session-start__checkbox {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px !important;
+}
+
+/* 디자인/큐빅 선택 카드 그룹 */
+.option-group {
+  border: none;
+  padding: 0;
+  margin: 0 0 12px;
+}
+
+.option-group:disabled {
+  opacity: 0.5;
+}
+
+.option-group__legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: 0.75rem;
+  color: #9ab;
+}
+
+.option-group__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .option-group__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.option-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #2a3138;
+  border-radius: 6px;
+  background: #0d1117;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+
+.option-card:hover {
+  border-color: #3a6394;
+}
+
+.option-card:has(input:checked) {
+  border-color: #4a90d9;
+  background: #16324a;
+}
+
+.option-card:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+.option-card input[type="radio"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.option-card input[type="radio"]:focus-visible ~ .option-card__swatch {
+  outline: 2px solid #4a90d9;
+  outline-offset: 2px;
+}
+
+.option-card__swatch {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid #2a3138;
+}
+
+.option-card__swatch--round {
+  border-radius: 50%;
+}
+
+.option-card__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.option-card__name {
+  font-size: 0.85rem;
+  color: #e6e6e6;
+}
+
+.option-card__desc {
+  font-size: 0.7rem;
+  color: #9ab;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-start button {
+  background: #26466b;
+  color: #e6e6e6;
+  border: 1px solid #3a6394;
+  border-radius: 4px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.session-start button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.session-start__message {
+  font-size: 0.85rem;
+  color: #9ab;
+}
+
+.session-start__locked {
+  background: #4a1414;
+  color: #ff8a8a;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  margin-bottom: 8px;
+}
+
+/* FR-10: 6단계 공정 스텝퍼 */
+.stepper {
+  margin-top: 16px;
+}
+
+.stepper__list {
+  display: flex;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  gap: 4px;
+}
+
+.stepper__item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: #666;
+}
+
+.stepper__dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #2a3138;
+  border: 2px solid #2a3138;
+}
+
+.stepper__item--active .stepper__dot {
+  background: #4a90d9;
+  border-color: #4a90d9;
+}
+
+.stepper__item--active {
+  color: #4a90d9;
+  font-weight: 600;
+}
+
+.stepper__item--done .stepper__dot {
+  background: #2f6b3f;
+  border-color: #2f6b3f;
+}
+
+.stepper__item--done {
+  color: #6fe08a;
+}
+
+.stepper__item--aborted .stepper__dot {
+  background: #6b2020;
+  border-color: #6b2020;
+}
+
+.stepper__item--aborted {
+  color: #ff8a8a;
+}
+
+.stepper__meta {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 0.85rem;
+  color: #ccc;
+  flex-wrap: wrap;
+}
+
+.stepper__badge {
+  background: #2a3138;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+}
+
+.stepper__badge--warn {
+  background: #4a3a00;
+  color: #ffd24a;
+}
+
+.stepper__badge--ok {
+  background: #1b3a24;
+  color: #6fe08a;
+}
+
+.stepper__badge--error {
+  background: #4a1414;
+  color: #ff8a8a;
+}
+
+/* 세션 종료 결과 배너 */
+.session-result {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.session-result--ok {
+  background: #1b3a24;
+  color: #6fe08a;
+}
+
+.session-result--warn {
+  background: #4a3a00;
+  color: #ffd24a;
+}
+
+.session-result--fail {
+  background: #4a1414;
+  color: #ff8a8a;
+}
+
+/* FR-35: 에러 코드 배너 */
+.error-banner {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.error-banner__detail {
+  color: #ccc;
+}
+
+.error-banner--info {
+  background: #1e2833;
+  color: #9ab;
+}
+
+.error-banner--warn {
+  background: #4a3a00;
+  color: #ffd24a;
+}
+
+.error-banner--abort {
+  background: #4a2a14;
+  color: #ffab6f;
+}
+
+.error-banner--safety {
+  background: #4a1414;
+  color: #ff8a8a;
+  font-weight: 600;
+}

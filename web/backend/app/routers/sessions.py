@@ -1,0 +1,141 @@
+"""FR-02~06: 세션 생성/취소.
+
+세션 시작 판단(레시피 유효성, 형상, 안전 전제조건 등)은 전적으로
+session_orchestrator가 소유한다(web.md §1.3 "웹은 관측자다"). 여기서 하는
+검증은 orchestrator에 보내기 *전에* 걸러도 되는, 웹 계층에서 확정 가능한
+두 가지(FR-03 허용 소재, FR-04 중복 세션) 뿐이다.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import datetime as dt
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..db import get_db
+from ..models import SessionRecord
+from ..ros_bridge import RunSessionTimeoutError, make_run_session_goal, new_session_id
+from ..schemas import (
+    ALLOWED_TARGET_MATERIALS,
+    CreateSessionRequest,
+    CreateSessionResponse,
+    SessionReportResponse,
+)
+
+logger = logging.getLogger("nail_web.sessions")
+
+router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+
+
+@router.post("", response_model=CreateSessionResponse, status_code=201)
+async def create_session(
+    body: CreateSessionRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> CreateSessionResponse:
+    # FR-03: 허용 목록 밖 target_material은 400.
+    if body.target_material not in ALLOWED_TARGET_MATERIALS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"target_material은 {ALLOWED_TARGET_MATERIALS} 중 하나여야 합니다",
+        )
+
+    # FR-04: 진행 중(result_code IS NULL) 세션이 있으면 409.
+    active = await db.execute(
+        select(SessionRecord).where(SessionRecord.result_code.is_(None)).limit(1)
+    )
+    if active.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=409, detail="이미 진행 중인 세션이 있습니다")
+
+    session_id = new_session_id()
+    record = SessionRecord(
+        id=session_id,
+        recipe_id=body.recipe_id,
+        shape_profile_id=body.shape_profile_id,
+        target_material=body.target_material,
+        layer_total=body.layer_total,
+        started_at=dt.datetime.now(dt.timezone.utc),
+    )
+    db.add(record)
+    await db.commit()
+
+    goal = make_run_session_goal(
+        session_id=session_id,
+        recipe_id=body.recipe_id,
+        shape_profile_id=body.shape_profile_id,
+        target_material=body.target_material,
+        layer_total=body.layer_total,
+        max_rework=body.max_rework,
+        enable_brush=body.enable_brush,
+        enable_stone=body.enable_stone,
+    )
+
+    ros_bridge = request.app.state.ros_bridge
+    timeout_s = request.app.state.settings.run_session_timeout_s
+    try:
+        # roslibpy.send_goal은 threading.Event로 블로킹 대기하므로 이벤트
+        # 루프를 막지 않게 스레드로 넘긴다.
+        await asyncio.to_thread(ros_bridge.run_session, goal, timeout_s)
+    except RunSessionTimeoutError as exc:
+        logger.error("RunSession goal 응답 없음 (session_id=%s): %s", session_id, exc)
+        record.result_code = "FAILED"
+        record.abort_reason = f"ORCH_UNAVAILABLE: {exc}"
+        record.finished_at = dt.datetime.now(dt.timezone.utc)
+        await db.commit()
+        # FR-06: 액션 서버 미기동/무응답 시 503.
+        raise HTTPException(status_code=503, detail="세션 오케스트레이터가 응답하지 않습니다") from exc
+
+    return CreateSessionResponse(session_id=session_id)
+
+
+@router.post("/{session_id}/cancel", status_code=202)
+async def cancel_session(
+    session_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    record = await db.get(SessionRecord, session_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+    if record.result_code is not None:
+        raise HTTPException(status_code=409, detail="이미 종료된 세션입니다")
+
+    ros_bridge = request.app.state.ros_bridge
+    cancelled = await asyncio.to_thread(ros_bridge.cancel_session, session_id)
+    if not cancelled:
+        raise HTTPException(status_code=409, detail="취소할 진행 중인 goal을 찾지 못했습니다")
+
+    # 실제 CANCELLED 확정은 RunSession result 수신 시점(persistence.finalize_session).
+    return {"session_id": session_id, "status": "cancel_requested"}
+
+
+@router.get("/{session_id}/report", response_model=SessionReportResponse)
+async def get_session_report(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> SessionReportResponse:
+    """§4.4 GET /api/sessions/{id}/report.
+
+    web.md §2.2가 이력 조회 화면 자체는 범위 밖("SQLite 직접 조회"로
+    대체)으로 뒀지만, 이 엔드포인트는 그 대체 수단이 아니라 세션 하나의
+    기본 정보를 API로 확인하기 위한 것이다. probe(강성 맵)·검증(판정) 단계
+    제거로 그 결과 필드는 더 이상 없다.
+    """
+    session = await db.get(SessionRecord, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+
+    return SessionReportResponse(
+        session_id=session.id,
+        recipe_id=session.recipe_id,
+        target_material=session.target_material,
+        layer_total=session.layer_total,
+        result_code=session.result_code,
+        abort_reason=session.abort_reason,
+        started_at=session.started_at,
+        finished_at=session.finished_at,
+    )
