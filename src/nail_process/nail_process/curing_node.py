@@ -348,32 +348,41 @@ class CuringNode(Node):
                     abort_code, abort_detail = ErrorCode.E_TIMEOUT, \
                         f'max_duration_s({max_duration}) 초과'
                     break
+                # 수동 waypoints 모드는 movej(관절 보간, linear=False)로
+                # 지점만 순회한다 — movel 대신 써달라는 요청. 기본(경계 기반)
+                # 모드는 계속 movel 을 쓴다.
                 reason, mv_result = self._move(target_pose, speed_ratio, goal_handle,
                                                 max(1.0, deadline - time.monotonic()),
-                                                frame_id=dwell_frame_id)
+                                                frame_id=dwell_frame_id,
+                                                linear=not use_custom_waypoints)
                 if reason != 'ok':
                     abort_code, abort_detail = self._reason_to_code(reason, mv_result)
                     break
 
-                dwell_elapsed = 0.0
-                tick = 0.1
-                while dwell_elapsed < dwell_s:
-                    if goal_handle.is_cancel_requested:
-                        abort_code, abort_detail = 'CANCELLED', '사용자 취소'
-                        break
-                    if not self._safe_to_move():
-                        abort_code, abort_detail = ErrorCode.E_SAFETY_BLOCKED, \
-                            'safe_to_move=false — 즉시 이탈'
-                        break
-                    if time.monotonic() > deadline:
-                        abort_code, abort_detail = ErrorCode.E_TIMEOUT, \
-                            f'max_duration_s({max_duration}) 초과'
-                        break
-                    time.sleep(tick)
-                    dwell_elapsed += tick
-                    actual_exposure_s += tick
-                    feedback(100.0 * (idx + dwell_elapsed / dwell_s) / n, idx, dwell_elapsed,
-                             standoff)
+                if use_custom_waypoints:
+                    # 수동 waypoints 모드는 체류 없이 바로 다음 지점으로 —
+                    # 요청에 따라 dwell_s_per_point 를 적용하지 않는다.
+                    feedback(100.0 * (idx + 1) / n, idx, 0.0, standoff)
+                else:
+                    dwell_elapsed = 0.0
+                    tick = 0.1
+                    while dwell_elapsed < dwell_s:
+                        if goal_handle.is_cancel_requested:
+                            abort_code, abort_detail = 'CANCELLED', '사용자 취소'
+                            break
+                        if not self._safe_to_move():
+                            abort_code, abort_detail = ErrorCode.E_SAFETY_BLOCKED, \
+                                'safe_to_move=false — 즉시 이탈'
+                            break
+                        if time.monotonic() > deadline:
+                            abort_code, abort_detail = ErrorCode.E_TIMEOUT, \
+                                f'max_duration_s({max_duration}) 초과'
+                            break
+                        time.sleep(tick)
+                        dwell_elapsed += tick
+                        actual_exposure_s += tick
+                        feedback(100.0 * (idx + dwell_elapsed / dwell_s) / n, idx, dwell_elapsed,
+                                 standoff)
                 if abort_code is not None:
                     break
                 dwell_completed += 1
@@ -428,11 +437,11 @@ class CuringNode(Node):
 
     # --- MoveTo 클라이언트 헬퍼 (§3.3 취소 전파) -----------------------------------
     def _move(self, pose, speed_ratio, our_goal_handle, timeout_s, ignore_cancel=False,
-              frame_id='nail_local_frame'):
+              frame_id='nail_local_frame', linear=True):
         goal = MoveTo.Goal()
         goal.target = pose
         goal.frame_id = frame_id
-        goal.linear = True
+        goal.linear = linear
         goal.speed_ratio = speed_ratio
         goal.accel_ratio = speed_ratio
         goal.timeout_s = timeout_s
