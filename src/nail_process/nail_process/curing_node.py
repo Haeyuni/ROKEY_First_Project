@@ -112,16 +112,17 @@ class CuringNode(Node):
         d('entry_direction', 'from_side')
         d('park_distance_mm', 120.0)
         # goal.waypoints 가 비어 있을 때(=session_orchestrator 의 CureUV 호출
-        # 포함) 자동으로 쓸 기본 수동 왕복 경로 — uv_work_r/uv_work/
-        # uv_work_l(targets.yaml) 의 base_link 절대좌표를 변환 없이 그대로
-        # 쓴다(2026-08-24). sanding_node의 default_waypoints/oscillations 와
-        # 동일 패턴 — TaskPose와 동일한 x_mm,y_mm,z_mm,rz1_deg,ry_deg,rz2_deg
-        # 6개씩 묶어 점 개수만큼 이어붙인 float64[]. 비우면(길이<12) 기존처럼
-        # nail_size_x_mm/y_mm 기반 dwell 지점 계산으로 대체한다.
+        # 포함) 자동으로 쓸 기본 수동 왕복 경로 — uv_work_l/uv_work/
+        # uv_work_r(targets.yaml) 의 base_link 절대좌표를 변환 없이 그대로
+        # 쓴다(2026-08-24, left 먼저 → right 순으로 변경). sanding_node의
+        # default_waypoints/oscillations 와 동일 패턴 — TaskPose와 동일한
+        # x_mm,y_mm,z_mm,rz1_deg,ry_deg,rz2_deg 6개씩 묶어 점 개수만큼
+        # 이어붙인 float64[]. 비우면(길이<12) 기존처럼 nail_size_x_mm/y_mm
+        # 기반 dwell 지점 계산으로 대체한다.
         d('default_waypoints', [
-            520.38, 75.54, 353.14, 38.79, -138.43, 19.12,
-            376.61, 65.83, 401.75, 88.60, -159.24, 88.43,
             210.66, 20.91, 359.81, 162.35, -141.34, 153.80,
+            376.61, 65.83, 401.75, 88.60, -159.24, 88.43,
+            520.38, 75.54, 353.14, 38.79, -138.43, 19.12,
         ])
         d('oscillations', 1)
         d('max_duration_s', 120.0)
