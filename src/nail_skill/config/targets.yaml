@@ -183,14 +183,16 @@ coater_work: # 젤 도포 작업 시작 자세 - 완 (get_current_posx 실측)
   ry_deg: -178.71
   rz2_deg: 25.38
 
-uv_work: # UV 조사 작업 시작 자세 - 완 (get_current_posx 실측)
-  x_mm: 376.61
-  y_mm: 65.83
-  z_mm: 401.75
+uv_work: # UV 조사 작업 시작 자세 - 재실측 (2026-08-24, get_current_posx)
+  # 이전 값: x_mm: 376.61, y_mm: 65.83, z_mm: 401.75,
+  #         rz1_deg: 88.60, ry_deg: -159.24, rz2_deg: 88.43
+  x_mm: 371.85
+  y_mm: 115.89
+  z_mm: 385.62
   frame_id: base_link
-  rz1_deg: 88.60
-  ry_deg: -159.24
-  rz2_deg: 88.43
+  rz1_deg: 92.09
+  ry_deg: -146.21
+  rz2_deg: 89.61
 
 uv_work_l: # UV 왕복운동(sanding과 동일 방식) approach_side='left' 작업 시작 자세 (2026-08-24, get_current_posx)
   x_mm: 210.66
@@ -200,3 +202,12 @@ uv_work_l: # UV 왕복운동(sanding과 동일 방식) approach_side='left' 작�
   rz1_deg: 162.35
   ry_deg: -141.34
   rz2_deg: 153.80
+
+uv_work_r: # UV 왕복운동(sanding과 동일 방식) approach_side='right' 작업 시작 자세 (2026-08-24, get_current_posx)
+  x_mm: 520.38
+  y_mm: 75.54
+  z_mm: 353.14
+  frame_id: base_link
+  rz1_deg: 38.79
+  ry_deg: -138.43
+  rz2_deg: 19.12
