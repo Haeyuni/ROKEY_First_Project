@@ -139,6 +139,10 @@ class SandingNode(Node):
         d('nail_boundary_points', 24)
         # 안전 ★
         d('travel_limit_margin_mm', 2.0)
+        # 힘 센서 미작동 대응 — compliance 로 곡률을 못 따라가므로 경계
+        # 곡선 자체를 waypoint 로 삼아 이만큼(mm) 안쪽으로 눌러 넣는다.
+        # travel_limit_mm(경계까지 거리 - margin) 을 넘으면 REJECT.
+        d('engagement_depth_mm', 2.0)
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg):
@@ -298,15 +302,29 @@ class SandingNode(Node):
             return result
         result.computed_travel_limit_mm = travel_limit_mm
 
-        # --- 이송 경로(feed_axis 왕복) 폭 산출 ---------------------------------------
+        engagement_mm = self.get_parameter('engagement_depth_mm').value
+        if engagement_mm > travel_limit_mm:
+            detail = (f'engagement_depth_mm({engagement_mm}) > travel_limit_mm'
+                      f'({travel_limit_mm:.2f}) — 피부 접촉 방어선(NFR-09) 초과 위험')
+            self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
+            goal_handle.abort()
+            result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
+            return result
+
+        # --- 이송 경로: 진입측 호(arc)를 압입 깊이만큼 눌러 넣은 곡선 -----------------
+        # 힘 센서가 없어 compliance 로 곡률을 못 따라가므로(§ 논의 참고),
+        # boundary_xy(타원 근사 다각형) 중 진입점 쪽 절반을 feed_axis 순으로
+        # 뽑아 그 곡선 자체를 waypoint 로 쓴다. base_xy(approach_vec) 방향으로
+        # engagement_depth_mm 만큼 offset 해서 실제 연마 깊이를 만든다.
         feed_axis = _rotate90(base_xy)
-        coords = [_dot(_sub(p, start_xy), feed_axis) for p in boundary_xy]
-        c_min, c_max = min(coords), max(coords)
-        half_width = max(0.5, (c_max - c_min) / 2.0)
-        feed_center_offset = (c_max + c_min) / 2.0
-        p_center = _add_scaled(start_xy, feed_axis, feed_center_offset)
-        wp_a_mm = _add_scaled(p_center, feed_axis, -half_width)
-        wp_b_mm = _add_scaled(p_center, feed_axis, half_width)
+        centroid_xy = centroid(boundary_xy)
+        arc_points = sorted(
+            (p for p in boundary_xy if _dot(_sub(p, centroid_xy), base_xy) <= 0.0),
+            key=lambda p: _dot(_sub(p, start_xy), feed_axis))
+        if len(arc_points) < 2:
+            arc_points = [start_xy, start_xy]
+        engaged_arc = [_add_scaled(p, base_xy, engagement_mm) for p in arc_points]
+        sweep_xy_mm = engaged_arc + list(reversed(engaged_arc[:-1]))
 
         def mm_to_pose(xy_mm, z_mm):
             pose = Pose()
@@ -351,8 +369,7 @@ class SandingNode(Node):
             lc_goal = LateralContact.Goal()
             lc_goal.approach_vector = Vector3(x=approach_vec_3d[0], y=approach_vec_3d[1],
                                                z=approach_vec_3d[2])
-            lc_goal.waypoints = [mm_to_pose(wp_a_mm, z_mm), mm_to_pose(wp_b_mm, z_mm),
-                                  mm_to_pose(wp_a_mm, z_mm)]
+            lc_goal.waypoints = [mm_to_pose(p, z_mm) for p in sweep_xy_mm]
             lc_goal.frame_id = 'nail_local_frame'
             lc_goal.session_id = goal.session_id
             lc_goal.work_plane_offset_mm = z_mm
@@ -360,7 +377,13 @@ class SandingNode(Node):
             lc_goal.max_force_n = max_force
             lc_goal.jam_force_n = jam_force
             lc_goal.feed_speed_mms = feed_speed
-            lc_goal.travel_limit_mm = travel_limit_mm
+            # waypoints 자체가 이미 engagement_depth_mm 만큼 눌러 넣은 좌표라,
+            # LateralContact 진입 시 waypoints[0]로 이동하면 목표 깊이에
+            # 도달한다 — 여기 travel_limit_mm 은 그 이후 추가 탐색/전진 폭이라
+            # 0에 가까운 값(goal 검증상 0 초과만 요구)만 준다. 큰 값을 그대로
+            # 넘기면 waypoints[0] 도달 후 추가로 그만큼 더 파고들어 이중으로
+            # 눌러 넣는다.
+            lc_goal.travel_limit_mm = 0.1
             lc_goal.retreat_mm = margin_mm
             lc_goal.passes = 1
             lc_goal.max_duration_s = max(1.0, deadline - time.monotonic())
