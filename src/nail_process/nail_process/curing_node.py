@@ -112,27 +112,17 @@ class CuringNode(Node):
         d('entry_direction', 'from_side')
         d('park_distance_mm', 120.0)
         # goal.waypoints 가 비어 있을 때(=session_orchestrator 의 CureUV 호출
-        # 포함) 자동으로 쓸 기본 수동 왕복 경로. uv_work_l/uv_work/uv_work_r
-        # (targets.yaml) 3점만으로는 점 사이 거리가 너무 멀어 movej 가
-        # 특이점 근처에서 휩쓰는 궤적을 만드는 문제가 있었다(2026-08-24
-        # 실기 확인) — 그 3점을 지나는 외접원을 구해 호를 9개 점으로 촘촘히
-        # 나누고, 자세(rz1/ry/rz2)도 구간별로 선형보간해서 채운 값이다.
-        # 중심을 임의로 잡은 게 아니라 3점을 정확히 지나는 원이고, 양 끝은
-        # uv_work_l/uv_work_r 값과 정확히 같다(중간 uv_work 도 그 각도
-        # 위치에서 정확히 지난다). sanding_node의 default_waypoints/
-        # oscillations 와 동일 패턴 — TaskPose와 동일한 x_mm,y_mm,z_mm,
-        # rz1_deg,ry_deg,rz2_deg 6개씩 묶어 점 개수만큼 이어붙인 float64[].
-        # 비우면(길이<12) 기존처럼 nail_size_x_mm/y_mm 기반 dwell 지점
-        # 계산으로 대체한다.
+        # 포함) 자동으로 쓸 기본 수동 왕복 경로 — uv_work_l/uv_work/
+        # uv_work_r(targets.yaml) 의 base_link 절대좌표를 변환 없이 그대로
+        # 쓴다(2026-08-24, left 먼저 → right 순). 외접원 9점 확장도 시도해
+        # 봤으나 3점 버전으로 되돌림(요청). sanding_node의
+        # default_waypoints/oscillations 와 동일 패턴 — TaskPose와 동일한
+        # x_mm,y_mm,z_mm,rz1_deg,ry_deg,rz2_deg 6개씩 묶어 점 개수만큼
+        # 이어붙인 float64[]. 비우면(길이<12) 기존처럼 nail_size_x_mm/y_mm
+        # 기반 dwell 지점 계산으로 대체한다.
         d('default_waypoints', [
             210.66, 20.91, 359.81, 162.35, -141.34, 153.80,
-            238.00, 54.09, 371.70, 146.34, -142.45, 139.17,
-            272.21, 81.37, 380.31, 130.33, -143.56, 124.55,
-            311.71, 101.50, 385.25, 114.33, -144.67, 109.92,
-            354.64, 113.53, 386.29, 98.32, -145.78, 95.30,
-            399.02, 116.90, 383.37, 83.07, -144.89, 77.68,
-            442.78, 111.46, 376.64, 68.31, -142.74, 58.16,
-            483.87, 97.45, 366.40, 53.55, -140.58, 38.64,
+            371.85, 115.89, 385.62, 92.09, -146.21, 89.61,
             520.38, 75.54, 353.14, 38.79, -138.43, 19.12,
         ])
         d('oscillations', 1)
@@ -360,14 +350,14 @@ class CuringNode(Node):
                     abort_code, abort_detail = ErrorCode.E_TIMEOUT, \
                         f'max_duration_s({max_duration}) 초과'
                     break
-                # 점 3개(간격 큼)일 때는 movej가 특이점 근처에서 휩쓰는
-                # 궤적을 만들어 movel로 되돌렸었다(2026-08-24). 지금은 원호를
-                # 촘촘한 점으로 나눠 점 사이 간격이 작으므로, 특이점을 더 잘
-                # 우회하는 movej(관절 보간)를 다시 쓴다.
+                # movej(관절 보간)도 시도해봤으나 점 3개는 간격이 커 특이점
+                # 근처에서 휩쓰는 궤적이 나와(2026-08-24 실기 확인) movel로
+                # 되돌림. 개별 MoveTo(target_key, linear=true) 테스트가 정확히
+                # 목표로 간 것과 동일하게, 각 waypoint 로 movel 직선 이동한다.
                 reason, mv_result = self._move(target_pose, speed_ratio, goal_handle,
                                                 max(1.0, deadline - time.monotonic()),
                                                 frame_id=dwell_frame_id,
-                                                linear=False)
+                                                linear=True)
                 if reason != 'ok':
                     abort_code, abort_detail = self._reason_to_code(reason, mv_result)
                     break
