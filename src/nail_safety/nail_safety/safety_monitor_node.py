@@ -133,8 +133,8 @@ class SafetyMonitorNode(Node):
         d('dsr_prefix', 'dsr01')
         d('robot_model', 'm0609')
 
-        d('publish_rate_hz', 20)
-        d('heartbeat_timeout_ms', 500)
+        d('publish_rate_hz', 5)
+        d('heartbeat_timeout_ms', 1500)
         d('di_handrest_channel', 2)
         d('di_dust_channel', 3)
         d('require_handrest', False)  # 현재 하드웨어에 안착 센서 미장착 — 센서 달리면 true로 되돌릴 것

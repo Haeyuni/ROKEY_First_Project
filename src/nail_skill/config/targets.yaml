@@ -153,7 +153,7 @@ tweezers: # 핀셋 - 완
 probe_work: # 탐침 작업 시작 자세 - clear
   x_mm: 382.44
   y_mm: -18.75
-  z_mm: 478.07
+  z_mm: 473.07
   frame_id: base_link
   rz1_deg: 32.02
   ry_deg: -178.17
