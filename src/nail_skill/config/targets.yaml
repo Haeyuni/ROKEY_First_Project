@@ -148,13 +148,13 @@ sander_work: # 네일 파일 작업 시작 자세 - 재실측 (2026-08-24, get_c
   rz2_deg: 6.89
 
 sand_work_r: # SandSurface approach_side='right' 작업 시작 자세 (2026-08-24, get_current_posx)
-  x_mm: 380.04
-  y_mm: -12.55
-  z_mm: 393.82
+  x_mm: 569.39
+  y_mm: 26.08
+  z_mm: 338.66
   frame_id: base_link
-  rz1_deg: 91.89
-  ry_deg: -178.54
-  rz2_deg: 119.15
+  rz1_deg: 16.94
+  ry_deg: -134.64
+  rz2_deg: 32.50
 
 sand_work_l: # SandSurface approach_side='left' 작업 시작 자세 (2026-08-24, get_current_posx)
   x_mm: 370.12
@@ -191,3 +191,12 @@ uv_work: # UV 조사 작업 시작 자세 - 완 (get_current_posx 실측)
   rz1_deg: 88.60
   ry_deg: -159.24
   rz2_deg: 88.43
+
+uv_work_l: # UV 왕복운동(sanding과 동일 방식) approach_side='left' 작업 시작 자세 (2026-08-24, get_current_posx)
+  x_mm: 210.66
+  y_mm: 20.91
+  z_mm: 359.81
+  frame_id: base_link
+  rz1_deg: 162.35
+  ry_deg: -141.34
+  rz2_deg: 153.80
