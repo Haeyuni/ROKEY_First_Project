@@ -130,7 +130,6 @@ class SandingNode(Node):
         d('nail_boundary_points', 24)
         # 안전 ★
         d('travel_limit_margin_mm', 2.0)
-        d('require_dust_collector', True)
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg):
@@ -184,11 +183,6 @@ class SandingNode(Node):
         if not self._safe_to_move():
             self.get_logger().warn('SandSurface REJECT: E_SAFETY_BLOCKED')
             return GoalResponse.REJECT
-        if self.get_parameter('require_dust_collector').value:
-            if self._latest_safety is None or not self._latest_safety.dust_extraction_on:
-                self.get_logger().warn(
-                    'SandSurface REJECT: E_PRECOND_FAILED (dust_extraction_on=false)')
-                return GoalResponse.REJECT
         if len(self._nail_boundary()) < 3:
             self.get_logger().warn(
                 'SandSurface REJECT: E_INVALID_GOAL — nail_size_x_mm/nail_size_y_mm/'

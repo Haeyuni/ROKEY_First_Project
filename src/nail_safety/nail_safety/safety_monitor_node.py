@@ -9,34 +9,22 @@ v0.2에서 UV 상시 ON으로 바뀌면서(§7.0) 소프트웨어가 램프를 �
 **하드웨어 접점 매핑에 대한 솔직한 고백**: NIS §7 소비 인터페이스는
 "dsr 상태 토픽(하트비트) · dsr Digital Input"이라고만 적혀 있고, 정확한
 토픽/서비스 이름은 이 저장소 어디에도 없다(실제 두산 컨트롤러 드라이버
-설정에서만 확정된다). 이 구현은:
-
-  - 더스트 Digital Input 은 `DSR_ROBOT2.get_digital_input(channel)`
-    (공식 파이썬 API의 GPIO 분류에 실제로 존재)을 그대로 쓴다.
-  - E-Stop 은 애초에 Control Box DI 채널로 추측 매핑했었으나(2026-08-22
-    실기 커미셔닝) 해당 채널이 물리 버튼과 무관하게 항상 고정값을 반환하는
-    것으로 확인되어 **폐기**했다. 대신 `get_robot_state()`(원래 하트비트
-    용도로만 쓰던 동기 폴링 함수)가 그대로 노출하는 `robot_state` enum을
-    쓴다 — 실측: 평상시 3(STATE_SAFE_OFF), E-Stop 누르면 6(STATE_EMERGENCY_
-    STOP), 풀면 3으로 복귀. `_ROBOT_STATE_EMERGENCY_STOP = {6, 7}`(RobotState.msg
-    주석상 6/7 둘 다 EMERGENCY_STOP) 에 포함되면 눌림으로 판정한다. 이 호출이
-    실패/타임아웃이면 여전히 `FAULT_COMM_LOST`.
-  - 더스트 DI 극성(눌림=HIGH 인지 LOW 인지)은 배선마다 다르다.
-    "센서 감지 = HIGH"로 가정했다. `dust_active_high` 파라미터로 배선이
-    반대면 뒤집는다 — **커미셔닝 때 실제로 막아 보고 반드시 확인할 것.**
+설정에서만 확정된다). 이 구현은 Digital Input 을 전혀 쓰지 않는다 —
+E-Stop 은 애초에 Control Box DI 채널로 추측 매핑했었으나(2026-08-22
+실기 커미셔닝) 해당 채널이 물리 버튼과 무관하게 항상 고정값을 반환하는
+것으로 확인되어 **폐기**했다. 대신 `get_robot_state()`(원래 하트비트
+용도로만 쓰던 동기 폴링 함수)가 그대로 노출하는 `robot_state` enum을
+쓴다 — 실측: 평상시 3(STATE_SAFE_OFF), E-Stop 누르면 6(STATE_EMERGENCY_
+STOP), 풀면 3으로 복귀. `_ROBOT_STATE_EMERGENCY_STOP = {6, 7}`(RobotState.msg
+주석상 6/7 둘 다 EMERGENCY_STOP) 에 포함되면 눌림으로 판정한다. 이 호출이
+실패/타임아웃이면 여전히 `FAULT_COMM_LOST`.
 
 **래치 결함**: `FAULT_ESTOP`/`FAULT_COMM_LOST`/`FAULT_TOOL_DROP` 은 물리
 원인이 사라져도 `ResetSafety` 를 불러야 풀린다(§7 결함 코드 표의 "해제
-조건"에 전부 "+ ResetSafety" 가 붙어 있다). 안착 센서(`FAULT_NO_HANDREST`)는
-현재 하드웨어에 실제로 달려있지 않아 판정 자체가 불가능해 관련 로직을
-전부 제거했다 — 센서가 설치되면 다시 넣을 것.
-
-**FAULT_NO_DUST 를 상시 결함에 안 넣은 이유**: 파라미터 이름 자체가
-`require_dust_for_sanding` — 연마 중에만 요구한다는 뜻이다. 이 노드는
-지금 어떤 공정이 실행 중인지 모른다(세션 상태를 추적하지 않는다,
-그건 orchestrator 의 일이다). 그래서 더스트 OFF 를 전역 `active_faults`
-에 넣어 항상 로봇을 못 움직이게 만드는 대신, `ValidatePrecondition`
-에서 `stage==SAND` 일 때만 `blocking_reasons` 로 낸다.
+조건"에 전부 "+ ResetSafety" 가 붙어 있다). 안착 센서(`FAULT_NO_HANDREST`)와
+더스트 컬렉터(`FAULT_NO_DUST`)는 현재 하드웨어에 실제로 달려있지 않아
+판정 자체가 불가능해 관련 로직을 전부 제거했다 — 센서/장비가 설치되면
+다시 넣을 것.
 """
 import threading
 
@@ -72,7 +60,6 @@ class SafetyMonitorNode(Node):
         self._state_lock = threading.Lock()
         self._prev_estop_pressed = False
         self._estop_pressed = True  # fail-safe: 첫 폴링 전/실패 시 "안 눌림"으로 가정하지 않는다
-        self._dust_on = False
         self._comm_ok = False
         self._latched_faults = set()   # ResetSafety 로만 해제
         self._current_tool = ToolState.NONE
@@ -127,15 +114,10 @@ class SafetyMonitorNode(Node):
         d('dsr_prefix', 'dsr01')
         d('robot_model', 'm0609')
 
-        d('publish_rate_hz', 5)
-        d('heartbeat_timeout_ms', 1500)
-        d('di_dust_channel', 3)
-        d('require_dust_for_sanding', True)
+        d('publish_rate_hz', 3)
+        d('heartbeat_timeout_ms', 3000)
         d('uv_software_control', False)
         d('auto_reset', False)
-
-        # DI 극성 — docstring 참고, 커미셔닝 때 검증 필요
-        d('dust_active_high', True)
 
     # --- /tool/status 구독 ------------------------------------------------------
     def _on_tool_status(self, msg):
@@ -156,22 +138,18 @@ class SafetyMonitorNode(Node):
     # --- ① 상태 수집 루프 (NIS §7 동작 ①②) ---------------------------------------
     def _on_publish_timer(self):
         p = self.get_parameter
-        dust_ch = p('di_dust_channel').value
-        dust_hi = p('dust_active_high').value
         timeout_s = p('heartbeat_timeout_ms').value / 1000.0
 
         comm_ok = True
         estop_pressed = self._estop_pressed
-        dust_on = self._dust_on
 
         try:
-            dust_raw, robot_state_raw = self._poll_hardware(dust_ch, timeout_s)
+            robot_state_raw = self._poll_hardware(timeout_s)
             estop_pressed = robot_state_raw in self._ROBOT_STATE_EMERGENCY_STOP
-            dust_on = dust_raw if dust_hi else (not dust_raw)
         except Exception as e:  # noqa: BLE001 - 모든 드라이버 오류는 통신 결함으로 fail-safe
             comm_ok = False
             self.get_logger().error(
-                f'[FAULT_COMM_LOST] DI/컨트롤러 응답 없음: {e}',
+                f'[FAULT_COMM_LOST] 컨트롤러 응답 없음: {e}',
                 throttle_duration_sec=2.0)
 
         with self._state_lock:
@@ -184,7 +162,6 @@ class SafetyMonitorNode(Node):
                     '[FAULT_ESTOP] E-Stop 감지 — ResetSafety 전까지 안전 결함 유지')
             self._prev_estop_pressed = estop_pressed
             self._estop_pressed = estop_pressed
-            self._dust_on = dust_on
 
             if not comm_ok:
                 self._latched_faults.add(SafetyState.FAULT_COMM_LOST)
@@ -199,7 +176,6 @@ class SafetyMonitorNode(Node):
             msg.safe_to_move = safe_to_move
             msg.estop_released = not estop_pressed
             msg.comm_ok = comm_ok
-            msg.dust_extraction_on = dust_on
             msg.tool_grip_ok = SafetyState.FAULT_TOOL_DROP not in active_faults
             msg.active_faults = active_faults
             msg.reason = active_faults[0] if active_faults else ''
@@ -209,9 +185,8 @@ class SafetyMonitorNode(Node):
 
         self._status_pub.publish(msg)
 
-    def _poll_hardware(self, dust_ch, timeout_s):
-        """DI 1개와 robot_state(하트비트 겸 E-Stop 판정)를 한 작업으로 읽고
-        전체 timeout을 적용한다.
+    def _poll_hardware(self, timeout_s):
+        """robot_state(하트비트 겸 E-Stop 판정)를 조회하고 전체 timeout을 적용한다.
 
         DSR 동기 호출이 내부에서 영구 대기할 수 있으므로 worker를 사용하되,
         이전 worker가 아직 살아 있으면 새 worker를 만들지 않는다. 통신 장애
@@ -221,25 +196,24 @@ class SafetyMonitorNode(Node):
 
         def run():
             try:
-                dust = self._adapter.read_digital_input(dust_ch)
                 robot_state = self._adapter.read_robot_state()
                 if robot_state is None or \
                         (isinstance(robot_state, (int, float)) and robot_state < 0):
                     raise DsrAdapterError(
                         f'get_robot_state 응답 오류 (state={robot_state})')
-                result['value'] = (dust, robot_state)
+                result['value'] = robot_state
             except Exception as e:  # noqa: BLE001 - 스레드 경계 너머로 그대로 전달
                 result['error'] = e
 
         with self._poll_guard:
             if self._poll_thread is not None and self._poll_thread.is_alive():
-                raise TimeoutError('이전 DI/하트비트 조회가 아직 종료되지 않음')
+                raise TimeoutError('이전 하트비트 조회가 아직 종료되지 않음')
             t = threading.Thread(target=run, daemon=True, name='safety_dsr_poll')
             self._poll_thread = t
         t.start()
         t.join(timeout_s)
         if t.is_alive():
-            raise TimeoutError(f'DI/하트비트가 {timeout_s * 1000:.0f}ms 내 응답 없음')
+            raise TimeoutError(f'하트비트가 {timeout_s * 1000:.0f}ms 내 응답 없음')
         with self._poll_guard:
             if self._poll_thread is t:
                 self._poll_thread = None
@@ -249,12 +223,10 @@ class SafetyMonitorNode(Node):
 
     # --- ③ 전제조건 검사 (NIS §7 동작 ③ 표) ---------------------------------------
     def _on_validate_precondition(self, request, response):
-        p = self.get_parameter
         reasons = []
 
         with self._state_lock:
             current_tool = self._current_tool
-            dust_on = self._dust_on
             safe_to_move = self._latest_safe_to_move
             active_faults = sorted(self._latched_faults)
 
@@ -264,14 +236,6 @@ class SafetyMonitorNode(Node):
         if request.required_tool and current_tool != request.required_tool:
             reasons.append(
                 f'툴 불일치: 요구={request.required_tool}, 현재={current_tool or "(없음)"}')
-
-        # v0.3: 스캔이 폐지돼 "스캔이 유효한가" 라는 전제조건 자체가 없어졌다.
-        # 손톱 경계는 이제 설정값(nail_region)이라 런타임에 검증할 대상이
-        # 아니다 — 각 공정 노드가 자기 파라미터를 직접 확인한다.
-        Stage = ValidatePrecondition.Request
-        if request.stage == Stage.STAGE_SAND and p('require_dust_for_sanding').value \
-                and not dust_on:
-            reasons.append('더스트 컬렉터 OFF (연마 중 배기 인터록)')
 
         response.ok = len(reasons) == 0
         response.blocking_reasons = reasons

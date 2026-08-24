@@ -37,7 +37,8 @@ subscribe 쪽만 `relay_topics` 로 연다.
 따르는 클라이언트-주도 방식이다 — 서버 쪽 상한을 강제하는 파라미터가 없다.
 다만 화이트리스트 토픽은 소스 자체가 이미 20Hz 이하로 발행하므로
 (`/force/data_ui` 는 robot_skill_node 의 `force_ui_rate_hz` 기본 20,
-`/safety/status` 는 safety_monitor 의 `publish_rate_hz` 기본 20, 나머지는
+`/safety/status` 는 safety_monitor 의 `publish_rate_hz` 기본 3(FAULT_COMM_LOST
+오탐 대응으로 하향), 나머지는
 이벤트/변경 기반으로 더 느리다) 이 상한은 설계상 이미 지켜진다 — 여기서
 추가로 스로틀링 코드를 만들지 않는다.
 

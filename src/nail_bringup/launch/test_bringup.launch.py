@@ -405,21 +405,23 @@ def generate_launch_description():
         DeclareLaunchArgument('dsr_prefix', default_value='dsr01',
                                description='두산 드라이버 네임스페이스 (ws_dsr 쪽과 일치해야 함)'),
         DeclareLaunchArgument(
-            'heartbeat_timeout_ms', default_value='1500',
+            'heartbeat_timeout_ms', default_value='3000',
             description=(
                 'safety_monitor 에 전달. 실측: 20Hz 주기로 DI 2개+robot_state 1개를 '
                 '순차 호출하는데, robot_skill_node 등 다른 노드도 동시에 같은 두산 '
                 '컨트롤러에 서비스를 호출해서 200ms(구 기본값)는 자주 넘겨 '
-                'FAULT_COMM_LOST 가 반복적으로 래치됐다. 800도 스캔처럼 서비스 호출이 '
-                '몰리는 구간에서 넘겨서 1500으로 재검증됨. (safety_monitor_node.py '
-                '자체 기본값과 별개로 이 launch 인자가 항상 파라미터로 전달되어 '
-                '덮어쓰므로, 노드 쪽 기본값만 고쳐서는 여기 값이 안 바뀐다.)')),
+                'FAULT_COMM_LOST 가 반복적으로 래치됐다. 800, 1500 도 각각 스캔/'
+                'ChangeTool(PickPlace) 처럼 서비스 호출이 몰리는 구간에서 넘겨서 '
+                '3000으로 재검증됨. (safety_monitor_node.py 자체 기본값과 별개로 '
+                '이 launch 인자가 항상 파라미터로 전달되어 덮어쓰므로, 노드 쪽 '
+                '기본값만 고쳐서는 여기 값이 안 바뀐다.)')),
         DeclareLaunchArgument(
-            'safety_publish_rate_hz', default_value='5',
+            'safety_publish_rate_hz', default_value='3',
             description=(
-                'safety_monitor 에 전달. 낮출수록(예: 5~10) 두산 컨트롤러 서비스 '
+                'safety_monitor 에 전달. 낮출수록(예: 3~10) 두산 컨트롤러 서비스 '
                 '호출 빈도가 줄어 다른 노드와의 경합/FAULT_COMM_LOST 오탐이 준다 — '
-                '단 안전 상태 갱신도 그만큼 느려진다. 스캔 중 오탐으로 5까지 낮춤.')),
+                '단 안전 상태 갱신도 그만큼 느려진다. ChangeTool(PickPlace) 중 '
+                '오탐으로 5→3 까지 낮춤.')),
         DeclareLaunchArgument(
             'sync_tcp_on_startup', default_value='true',
             description=(
