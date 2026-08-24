@@ -5,8 +5,13 @@
 안에만 있고, 이 파일은 그 래퍼만 호출한다 (SDS §4.1).
 
 제공: /skill/move_to, /skill/pick_place, /skill/contact_path,
-      /skill/lateral_contact, /skill/probe_point (Action)
+      /skill/lateral_contact (Action)
       /force/data(100Hz), /force/data_ui(20Hz), /robot/pose(50Hz) (Topic)
+
+`/skill/probe_point`(ProbePoint) 는 폐지됐다 — 이 스킬을 쓰던 scan_node /
+inspection_node 가 함께 제거됐고, 남은 stone_node 는 티칭된
+`nail_local_frame` 높이를 그대로 써서 압입 탐색 없이 동작한다. 법선 접촉이
+필요하면 `ContactPath` 를 쓴다.
 
 참고로 삼은 문서: docs/노드별_인터페이스명세서_v0.2.md §5.1 (사용자 지정),
 docs/개발명세서_SDS.md §3~5, docs/인터페이스정의서_IDS.md (실제 필드명 — nail_msgs).
@@ -30,8 +35,8 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from tf2_ros import Buffer, TransformListener
 
-from nail_msgs.action import ContactPath, LateralContact, MoveTo, PickPlace, ProbePoint
-from nail_msgs.msg import ErrorCode, ForceSample, ResultBase, SafetyState, StiffnessPoint
+from nail_msgs.action import ContactPath, LateralContact, MoveTo, PickPlace
+from nail_msgs.msg import ErrorCode, ForceSample, ResultBase, SafetyState
 from nail_perception.geometry2d import point_in_polygon
 
 from .conversions import TaskPose, pose_to_task_pose, task_pose_to_ros_pose
@@ -131,13 +136,6 @@ class RobotSkillNode(Node):
             goal_callback=self._on_goal_lateral_contact,
             cancel_callback=self._on_cancel,
             callback_group=self._cb_skill)
-        self._probe_point_server = ActionServer(
-            self, ProbePoint, '/skill/probe_point',
-            execute_callback=self._execute_probe_point,
-            goal_callback=self._on_goal_probe_point,
-            cancel_callback=self._on_cancel,
-            callback_group=self._cb_skill)
-
         self.get_logger().info('robot_skill_node ready')
 
     def destroy_node(self):
@@ -165,10 +163,9 @@ class RobotSkillNode(Node):
         d('force_ui_rate_hz', 20)
         d('pose_pub_rate_hz', 50)
         d('ft_filter_cutoff_hz', 10.0)
-        # 이동 기본값 — PickPlace/ProbePoint 가 goal.approach_height_mm 을
-        # 안 채웠을 때 공유하는 fallback. 0 이면 접근 지점이 목표 z와 같아져
-        # 위로 뜨지 않고 바로 그 자리에서 시작한다(실기: origin_z_mm 이 이미
-        # 표면 위 호버링 높이라 여기서 더 뜨면 탐색이 표면에 못 닿음).
+        # 이동 기본값 — PickPlace 가 goal.approach_height_mm 을 안 채웠을 때
+        # 쓰는 fallback. 0 이면 접근 지점이 목표 z와 같아져 위로 뜨지 않고
+        # 바로 그 자리에서 시작한다.
         d('approach_height_mm', 0.0)
         # PLACE 시 목표 z 를 이만큼 올려서 놓는다(mm). 0 이면 PICK 과 정확히
         # 같은 높이. 이동 중 툴이 그리퍼 안에서 미끄러지면 그만큼 슬롯 바닥을
@@ -190,20 +187,13 @@ class RobotSkillNode(Node):
         d('move_max_speed_mms', 300.0)
         d('move_max_accel_mms2', 600.0)
         d('move_pose_tolerance_mm', 1.0)
-        # ProbePoint
-        d('probe_speed_mms', 2.0)
-        d('probe_contact_threshold_n', 0.3)
-        # 접촉 판정 기준(raw TCP z 힘, N — tare 적용 전 원값). 실기 실측:
-        # probe 하강 중 미접촉 시 fz ≈ -12N(툴 자중), 0.8N 만 올라도(-11.2N)
-        # 이미 실제 접촉임을 확인함 — 툴/TCP 바뀌면 자중이 달라지므로 다시
-        # 실측해서 맞출 것.
-        d('probe_contact_fz_n', -11.2)
-        d('probe_max_depth_mm', 1.0)
-        d('probe_max_force_n', 3.0)
-        d('probe_regression_min_samples', 10)
-        d('release_speed_mms', 1.0)
-        d('probe_search_step_mm', 0.2)
-        # ContactPath
+        # ContactPath — 법선(+Z) 접촉 탐색·추종.
+        # contact_threshold_n / contact_search_step_mm 은 예전 ProbePoint 와
+        # 공유하던 값이었다(당시 이름은 probe_*). ProbePoint 가 폐지되면서
+        # 쓰는 곳이 ContactPath 하나만 남아 이름을 여기 맞춰 정리했다 —
+        # 예전 이름으로 param set 하던 스크립트가 있으면 같이 고칠 것.
+        d('contact_threshold_n', 0.3)
+        d('contact_search_step_mm', 0.2)
         d('contact_search_speed_mms', 5.0)
         d('contact_search_max_depth_mm', 15.0)
         d('compliance_stiffness', [500.0, 500.0, 200.0, 50.0, 50.0, 50.0])
@@ -742,7 +732,7 @@ class RobotSkillNode(Node):
             self.get_parameter('motion_timeout_s').value
         search_speed = self.get_parameter('contact_search_speed_mms').value
         search_max_depth = self.get_parameter('contact_search_max_depth_mm').value
-        contact_threshold = self.get_parameter('probe_contact_threshold_n').value
+        contact_threshold = self.get_parameter('contact_threshold_n').value
         max_force_n = goal.max_force_n if goal.max_force_n > 0.0 else \
             self.get_parameter('default_max_force_n').value
 
@@ -777,7 +767,7 @@ class RobotSkillNode(Node):
             return result
 
         # 표면 탐색: 접촉 감지까지 조금씩 하강
-        step_mm = self.get_parameter('probe_search_step_mm').value
+        step_mm = self.get_parameter('contact_search_step_mm').value
         travelled = 0.0
         contacted = False
         while travelled < search_max_depth:
@@ -787,7 +777,7 @@ class RobotSkillNode(Node):
                 result.base = self._finish_from_reason(reason, goal_handle, started_at,
                                                          context='ContactPath 탐색')
                 return result
-            # ProbePoint 와 동일한 이유로 부호 반전(+Z = 표면 쪽, 실기 확인).
+            # 실기 확인: 이 툴 자세(ry≈-179°)에서는 tool +Z 가 표면 쪽이다.
             self._adapter.start_move_rel_tool_z(step_mm, search_speed, search_speed * 2)
             self._monitor(goal_handle, 5.0, 20.0, lambda: None)
             travelled += step_mm
@@ -1001,8 +991,8 @@ class RobotSkillNode(Node):
             return [w.fx_n, w.fy_n, w.fz_n][axis] * axis_sign
 
         # 1) 작업 평면 높이로 첫 waypoint 이동 (waypoints[0] 에 이미 work_plane
-        #    높이가 반영되어 있다고 가정 — nail_local_frame 은 scan_node 가
-        #    소유하며 이 노드는 그 좌표계 규약을 강제하지 않는다)
+        #    높이가 반영되어 있다고 가정 — nail_local_frame 은 static_frames.yaml
+        #    에 티칭된 고정 TF 이고, 이 노드는 그 좌표계 규약을 강제하지 않는다)
         if len(goal.waypoints) > 0:
             try:
                 start_base = self._transform_pose_to_base(goal.waypoints[0], goal.frame_id)
@@ -1191,254 +1181,6 @@ class RobotSkillNode(Node):
     def _msg_to_wrench(fs: ForceSample):
         from .dsr_adapter import Wrench
         return Wrench(fs.fx_n, fs.fy_n, fs.fz_n, fs.tx_nm, fs.ty_nm, fs.tz_nm)
-
-    # =========================================================================
-    # ProbePoint — 스캔·택프리 검사 공유 최소 단위 (SDS §5.1)
-    # =========================================================================
-    def _on_goal_probe_point(self, goal_request):
-        if goal_request.max_depth_mm <= 0.0:
-            self.get_logger().warn('ProbePoint REJECT: E_INVALID_GOAL (max_depth_mm <= 0)')
-            return GoalResponse.REJECT
-        if not self._safe_to_move():
-            self.get_logger().warn('ProbePoint REJECT: E_SAFETY_BLOCKED')
-            return GoalResponse.REJECT
-        return GoalResponse.ACCEPT
-
-    def _execute_probe_point(self, goal_handle):
-        goal = goal_handle.request
-        started_at = time.monotonic()
-        result = ProbePoint.Result()
-        waveform = []
-
-        approach_speed = goal.probe_speed_mms if goal.probe_speed_mms > 0.0 else \
-            self.get_parameter('probe_speed_mms').value
-        contact_threshold = goal.contact_threshold_n if goal.contact_threshold_n > 0.0 else \
-            self.get_parameter('probe_contact_threshold_n').value
-        contact_fz_n = self.get_parameter('probe_contact_fz_n').value
-        max_depth = goal.max_depth_mm if goal.max_depth_mm > 0.0 else \
-            self.get_parameter('probe_max_depth_mm').value
-        max_force = goal.max_force_n if goal.max_force_n > 0.0 else \
-            self.get_parameter('probe_max_force_n').value
-        lateral_limit = goal.lateral_force_limit_n if goal.lateral_force_limit_n > 0.0 else 2.0
-        min_samples = self.get_parameter('probe_regression_min_samples').value
-        step_mm = self.get_parameter('probe_search_step_mm').value
-        approach_height = goal.approach_height_mm if goal.approach_height_mm > 0.0 else \
-            self.get_parameter('approach_height_mm').value
-
-        try:
-            target_base = self._transform_point_to_base(goal.target, goal.frame_id)
-        except Exception as e:
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED,
-                                              f'TF 변환 실패: {e}', started_at)
-            return result
-
-        try:
-            current = self._adapter.get_pose()
-        except DsrAdapterError as e:
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED,
-                                              f'현재 자세 조회 실패: {e}', started_at)
-            return result
-
-        approach_pose = TaskPose(target_base.x * 1000.0, target_base.y * 1000.0,
-                                  target_base.z * 1000.0 + approach_height,
-                                  current.rz1_deg, current.ry_deg, current.rz2_deg)
-
-        # 접근 이동(approach_pose 까지)도 힘을 감시한다. target 이 참조하는
-        # 프레임(예: nail_frame) 좌표가 아직 미실측이면 approach_pose 자체가
-        # 이미 실제 표면과 같거나 그 아래일 수 있는데, 이 이동은 원래
-        # 위치제어로만 빠르게(approach_speed*4) 갔다 — 실기에서 표면에 힘
-        # 감시 없이 그대로 부딪히는 문제가 확인됨. 이동 전에 미리 tare 해두고
-        # (자세는 이동 중 안 바뀌므로 그대로 재사용 가능) 도중에 힘이
-        # max_force_n 을 넘으면 즉시 멈추고 위로 후퇴한다.
-        try:
-            tare = self._adapter.read_wrench()
-        except DsrAdapterError as e:
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED,
-                                              f'힘 센서 조회 실패: {e}', started_at)
-            return result
-
-        approach_hit = {'value': False}
-
-        def approach_should_abort():
-            if goal_handle.is_cancel_requested or not self._safe_to_move():
-                return True
-            try:
-                w = self._adapter.read_wrench()
-            except DsrAdapterError:
-                return False
-            mag = math.sqrt((w.fx_n - tare.fx_n) ** 2 + (w.fy_n - tare.fy_n) ** 2 +
-                             (w.fz_n - tare.fz_n) ** 2)
-            if mag >= max_force:
-                approach_hit['value'] = True
-                return True
-            return False
-
-        self._adapter.start_move_line(approach_pose, approach_speed * 4, approach_speed * 8)
-        completed = self._adapter.wait_motion_done(
-            self.get_parameter('motion_timeout_s').value, 10.0, on_tick=None,
-            should_abort=approach_should_abort)
-
-        if approach_hit['value']:
-            # 표면 쪽에서 후퇴 = -Z (실기 확인, 위 주석들과 동일한 부호).
-            self._adapter.start_move_rel_tool_z(-self._retreat_mm, 10.0, 30.0)
-            self._monitor(goal_handle, 10.0, 10.0, lambda: None)
-            self._log_abort(ErrorCode.E_OVERFORCE,
-                             'ProbePoint 접근 중 예상 밖 접촉 감지 — target/frame_id 좌표 확인 필요 '
-                             '(nail_frame 등 미실측 프레임일 수 있음)')
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_OVERFORCE,
-                                              '접근 이동 중 예상 밖 접촉 — 목표 좌표 확인 필요',
-                                              started_at)
-            return result
-        if not completed:
-            reason = 'cancel' if goal_handle.is_cancel_requested else \
-                ('safety' if not self._safe_to_move() else 'timeout')
-            result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                     context='ProbePoint 접근')
-            return result
-
-        def relative(w):
-            from .dsr_adapter import Wrench
-            return Wrench(w.fx_n - tare.fx_n, w.fy_n - tare.fy_n, w.fz_n - tare.fz_n,
-                          w.tx_nm - tare.tx_nm, w.ty_nm - tare.ty_nm, w.tz_nm - tare.tz_nm)
-
-        def feedback(depth_mm, force_n):
-            fb = ProbePoint.Feedback()
-            fb.current_depth_mm = depth_mm
-            fb.current_force_n = force_n
-            goal_handle.publish_feedback(fb)
-
-        samples = []
-        travelled = 0.0
-        contacted = False
-        n_steps = max(1, int(math.ceil(max_depth / step_mm)))
-        for _ in range(n_steps):
-            if goal_handle.is_cancel_requested or not self._safe_to_move():
-                self._probe_retreat(approach_pose)
-                reason = 'cancel' if goal_handle.is_cancel_requested else 'safety'
-                result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                         context='ProbePoint 하강')
-                return result
-            # 실기 확인: 이 툴 자세(ry≈-179°)에서는 tool +Z 가 표면 쪽이다
-            # (아래 주석의 "-Z=표면" 가정이 뒤집혀 있었음 — probe_depth_mm 을
-            # 올렸더니 반대로 위로 올라가는 게 확인됨).
-            self._adapter.start_move_rel_tool_z(step_mm, approach_speed, approach_speed * 2)
-            self._monitor(goal_handle, 5.0, 20.0, lambda: None)
-            travelled += step_mm
-            w = self._adapter.read_wrench()
-            waveform.append(self._wrench_to_msg(w))
-            r = relative(w)
-            # 손톱이 빗각(경사면)이면 접촉력이 fz 축에만 안 실리고 fx/fy 로도
-            # 많이 샌다 — fz 성분만 보면 접촉을 못 알아채고 계속 눌러 옆으로
-            # 미끄러지는 문제가 실기에서 확인됨. 합력 크기로 접촉/한계를
-            # 판정해 경사면에서도 실제로 부딪힌 힘 전체를 본다.
-            force_mag = math.sqrt(r.fx_n ** 2 + r.fy_n ** 2 + r.fz_n ** 2)
-            feedback(travelled, force_mag)
-
-            if math.hypot(r.fx_n, r.fy_n) > lateral_limit:
-                self._probe_retreat(approach_pose)
-                goal_handle.abort()
-                result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED,
-                                                  '탐색 중 측면 힘 초과', started_at)
-                result.waveform = waveform
-                return result
-
-            samples.append((travelled, force_mag))
-            # raw TCP z 힘(w.fz_n, tare 전)이 실측 기준값(probe_contact_fz_n,
-            # 기본 -10.5N)보다 커지면(덜 눌린 쪽으로 읽히면) 접촉으로 본다 —
-            # 미접촉 시 -12N(툴 자중) → 접촉 시 -9N까지 오르는 실측 패턴.
-            # force_mag(상대값) 기준도 그대로 두어 OR 로 판정한다.
-            if force_mag >= contact_threshold or w.fz_n >= contact_fz_n:
-                contacted = True
-            if force_mag >= max_force:
-                # SDS §5.1: "probe_max_depth_mm 또는 probe_max_force_n 도달까지
-                # 계속 하강" — contact_threshold 를 넘긴 직후 멈추면 회귀에 쓸
-                # 표본이 1개뿐이라 compute_stiffness 가 거의 항상 실패한다.
-                # 접촉 이후에도 두 한계 중 하나에 닿을 때까지 계속 눌러
-                # 하강 구간 전체로 회귀한다.
-                break
-
-        point = StiffnessPoint()
-        point.source = goal.source_tag or StiffnessPoint.SRC_FINE
-        point.valid = False
-
-        if not contacted:
-            self._probe_retreat(approach_pose)
-            self._log_abort(ErrorCode.E_NO_CONTACT,
-                             f'ProbePoint: {max_depth}mm 하강 후 접촉 미검출 '
-                             f'(target base=({target_base.x*1000:.1f},{target_base.y*1000:.1f}))')
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_NO_CONTACT,
-                                              '최대 깊이 내 접촉 미검출', started_at)
-            result.point = point
-            result.waveform = waveform
-            return result
-
-        stiffness, r2, n_used = compute_stiffness(samples, contact_threshold, min_samples)
-        result.regression_samples = n_used
-
-        release_force_n = 0.0
-        if goal.measure_release:
-            release_speed = goal.release_speed_mms if goal.release_speed_mms > 0.0 else \
-                self.get_parameter('release_speed_mms').value
-            min_fz = 0.0
-            retract_total = travelled + self.get_parameter('retreat_mm').value
-            retracted = 0.0
-            while retracted < retract_total:
-                if goal_handle.is_cancel_requested or not self._safe_to_move():
-                    break
-                step = min(step_mm, retract_total - retracted)
-                # 후퇴 = -Z (위 주석들과 동일한 부호, 실기 확인).
-                self._adapter.start_move_rel_tool_z(-step, release_speed, release_speed * 2)
-                self._monitor(goal_handle, 5.0, 20.0, lambda: None)
-                retracted += step
-                w = self._adapter.read_wrench()
-                waveform.append(self._wrench_to_msg(w))
-                r = relative(w)
-                min_fz = min(min_fz, r.fz_n)
-                # 접촉점 기준 깊이(음수 = 접촉점 위로 후퇴한 거리). retreat_mm
-                # 만큼 계속 물러나는데 0으로 clamp 하면 물러나는 중에도
-                # depth_mm 이 0에 멈춰 있는 것처럼 보여 헷갈린다(실기 확인됨).
-                feedback(travelled - retracted, r.fz_n)
-            release_force_n = min_fz
-        else:
-            self._probe_retreat(approach_pose)
-
-        # IDS StiffnessPoint.position 은 "nail_frame 또는 nail_local_frame 기준,
-        # mm" 로 명시돼 있다 — 호출자가 goal 을 보낼 때 쓴 그 frame_id 기준이어야
-        # 한다. target_base 는 실제 이동 명령에 쓰려고 base 프레임으로 변환해둔
-        # 값이라 여기 쓰면 안 된다(잘못 쓰면 ScanBoundary 의 boundary_polygon 이
-        # base 좌표인데 frame_id="nail_frame" 이라고 잘못 라벨링된 채로 나가,
-        # 이걸 그대로 쓰는 모든 공정 노드가 엉뚱한 위치로 이동하게 된다).
-        # 하강 중 XY 는 움직이지 않으므로 접촉점의 XY 는 원래 goal.target 과
-        # 같다 — goal.frame_id 기준값을 그대로 mm 로 변환해 쓴다.
-        point.position = Point(x=goal.target.x * 1000.0, y=goal.target.y * 1000.0,
-                                z=goal.target.z * 1000.0)
-        point.stiffness_n_per_mm = stiffness or 0.0
-        point.release_force_n = release_force_n
-        point.contact_depth_mm = travelled
-        point.lateral_force_n = math.hypot(samples[-1][1], 0.0) if samples else 0.0
-        point.valid = stiffness is not None and r2 >= 0.5
-
-        goal_handle.succeed()
-        result.base = self._result_base(True, ErrorCode.OK, '', started_at)
-        result.point = point
-        result.waveform = waveform
-        return result
-
-    def _probe_retreat(self, approach_pose):
-        self._adapter.start_move_line(approach_pose, 10.0, 30.0)
-        # 후퇴는 베스트-에포트 — 취소/안전 사유로 여기 온 경우에도 로봇을
-        # 표면에서 띄우는 것이 우선이므로 완료를 기다리되 실패해도 무시한다.
-        try:
-            deadline = time.monotonic() + 10.0
-            while self._adapter.is_moving() and time.monotonic() < deadline:
-                time.sleep(0.05)
-        except DsrAdapterError:
-            pass
 
 
 def main(args=None):

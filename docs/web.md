@@ -1,8 +1,34 @@
 # 웹 시스템 개발 요구사항 정의서
 
-**문서 ID** WRD-NAIL-v1.0 · **작성일** 2026-08-21
+**문서 ID** WRD-NAIL-v1.1 · **작성일** 2026-08-24
+**이전판** WRD-NAIL-v1.0 (2026-08-21)
 **대상** 네일 셀 웹 시스템 (FastAPI + React) · **기간** 3일 · **담당** 주은
-**관련** SDS-NAIL-v1.0 (개발명세서) · IDS-NAIL-v1.0 (인터페이스 정의서)
+**관련** SDS-NAIL-v1.0 (개발명세서) · **IDS-NAIL-v1.1** · **NIS-NAIL-v0.3**
+
+---
+
+## 0. v1.1 변경 — 스캔·검사 폐지의 여파 ★★
+
+ROS2 쪽에서 **`scan_node`(강성 스캔)와 `inspection_node`(택프리 3점 검사)가
+폐지**됐습니다 (NIS-NAIL-v0.3 §0). 웹이 표시할 데이터가 통째로 두 종류
+사라졌다는 뜻입니다.
+
+| 사라진 것 | 영향받는 요구사항 |
+|---|---|
+| `/stiffness/map` 토픽 (`StiffnessMap`) | **FR-11 · FR-12 · FR-13 · FR-14 · FR-16 · FR-43 · DR(stiffness_maps 테이블)** |
+| `/validation/result` 토픽 (`ValidationResult`) | **FR-20 · FR-21 · FR-22 · FR-41 · FR-42 · DR-01 · DR-02** |
+| `ProcessState.rework_count` 필드 | **FR-23** |
+| `ProcessState` 의 `SCAN`/`INSPECT`/`REWORK` 스테이지 | **FR-10** (6단계 → 5단계) |
+| `RunSession.Result` 의 `scan_result` / `all_results` / `total_rework` | 리포트 API |
+
+> ⚠️ **강성 히트맵(FR-11~13)은 v1.0 에서 "축소 대상 제외"로 못 박혀 있던
+> 항목이자 인도 순서 2위였습니다.** 데이터 소스가 없어져 **구현 불가**가
+> 됐습니다. 발표 자료에서 이 시각 자산을 빼거나 대체해야 합니다 — §8.3 참조.
+
+**대체된 것**: 손톱 경계는 이제 측정 결과가 아니라
+`nail_bringup/config/static_frames.yaml` 의 `nail_local_frame` + `nail_region`
+에 **티칭된 설정값**입니다. 웹이 이 값을 실시간으로 받을 경로는 없습니다
+(토픽으로 발행되지 않고 launch 파라미터로만 주입됨).
 
 ---
 
@@ -27,7 +53,7 @@ React ──WebSocket/REST──▶ FastAPI + rclpy (단일 프로세스) ──
 |---|---|---|
 | React | 표시, 입력 | 판단 |
 | FastAPI | 중계, 저장 | **공정 판단·재시도 결정·안전 판정** |
-| ROS2 | 공정 실행, 판정 | — |
+| ROS2 | 공정 실행 | **판정** — v1.1 에서 검증 노드가 폐지돼 아무도 안 함 |
 
 > **웹은 관측자다.** 공정 판단은 전적으로 `session_orchestrator` 가 소유한다. 웹에서 저수준 로봇 명령을 노출하지 않는다.
 
@@ -37,7 +63,10 @@ React ──WebSocket/REST──▶ FastAPI + rclpy (단일 프로세스) ──
 
 ### 2.1 포함
 
-세션 시작·취소 / 실시간 공정 감시 / 강성 히트맵 / 3점 판정 표시 / 안전 상태 표시 / 결과 저장
+세션 시작·취소 / 실시간 공정 감시 / 힘 그래프 / 안전 상태 표시 / 결과 저장
+
+> **v1.1 제외**: 강성 히트맵 · 3점 판정 표시. 데이터 소스(`scan_node`,
+> `inspection_node`)가 폐지됐습니다 (§0).
 
 ### 2.2 제외
 
@@ -70,24 +99,36 @@ React ──WebSocket/REST──▶ FastAPI + rclpy (단일 프로세스) ──
 
 | ID | 요구사항 | 우선 | 인수 기준 |
 |---|---|---|---|
-| FR-10 | 6단계 공정 진행 상황을 표시한다 | M | `ProcessState` 수신 시 1초 내 반영 |
-| FR-11 | **스캔 측정 점을 실시간 히트맵으로 렌더링한다** | M | 점 추가 시 즉시 반영 |
-| FR-12 | 히트맵은 coarse(3mm) / fine(1mm) 를 시각적으로 구분한다 | M | `source` 필드별 크기·테두리 차이 |
-| FR-13 | 강성값을 색상 스케일로 표현한다 | M | 저강성/고강성이 구분됨 |
-| FR-14 | 스캔 확정 시 경계 폴리곤을 오버레이한다 | S | `valid=true` 수신 시 외곽선 표시 |
-| FR-15 | 실시간 접촉력 그래프를 표시한다 | S | 20 Hz 입력에서 끊김 없음 |
-| FR-16 | 측정 점 수와 분리도(`separation_margin`)를 표시한다 | S | 수치 표시 |
+| FR-10 | **5단계** 공정 진행 상황을 표시한다 | M | `ProcessState` 수신 시 1초 내 반영. 단계: `PRECHECK · SAND · BRUSH · COAT · CURE`(+`STONE` 옵션) |
+| FR-15 | 실시간 접촉력 그래프를 표시한다 | **M** ↑ | 20 Hz 입력에서 끊김 없음 |
+| FR-17 | **현재 툴과 TCP 를 표시한다** (신설) | S | `/tool/status` 의 `current_tool`·`active_tcp` |
 
-### 3.3 판정 결과
+> **v1.1 삭제**: FR-11 · FR-12 · FR-13 · FR-14 · FR-16 (전부 히트맵/스캔 계열).
+> `/stiffness/map` 이 발행되지 않아 렌더링할 데이터가 없습니다.
+>
+> **FR-15 를 S → M 으로 올렸습니다.** 히트맵이 빠지면서 `/force/data_ui` 힘
+> 그래프가 **"로봇이 지금 무엇을 하고 있는지" 보여주는 유일한 실시간 시각
+> 자산**이 됐습니다.
+
+### 3.3 판정 결과 — **v1.1 전면 폐지** ★
+
+FR-20 · FR-21 · FR-22 · FR-23 **전부 삭제**합니다. 판정을 생산하던
+`inspection_node` 가 폐지돼 `/validation/result` 를 아무도 발행하지 않고,
+`rework_count` 필드도 `ProcessState` 에서 사라졌습니다.
 
 | ID | 요구사항 | 우선 | 인수 기준 |
 |---|---|---|---|
-| FR-20 | 3점(중앙·좌·우) 판정 결과를 레이어별로 표시한다 | M | PASS/FAIL/SKIP 구분 |
-| FR-21 | 판정 시점의 임계값을 함께 표시한다 | M | `threshold_n` 노출 |
-| FR-22 | 리포트 문구는 **"검사한 3개 지점이 기준을 만족함"**으로 기술한다 | M | 화면·API 응답 전부 준수 |
-| FR-23 | 재작업 발생 시 횟수를 표시한다 | S | `rework_count` 반영 |
+| FR-24 | **경화 여부가 검증되지 않았음을 리포트에 명시한다** (신설) | **M** | 세션 결과 화면·API 응답에 고정 문구 노출 |
 
-> **FR-22 는 표현 요구사항이다.** "손톱 전체가 경화됨"은 3점 검사로 증명할 수 없다. 화면 문구, API 응답, 발표 자료 전부에 적용한다.
+> **FR-24 는 FR-22 를 대체하는 표현 요구사항입니다.** v1.0 의 FR-22 는
+> "손톱 전체가 경화됨"이라고 과장하지 말라는 요구였습니다. v1.1 에서는
+> 검사 자체가 없으므로 **더 강하게** 써야 합니다:
+>
+> > "이 세션은 경화 상태를 검증하지 않았습니다. 도포·조사 공정이 설정된
+> > 파라미터대로 수행됐음만을 기록합니다."
+>
+> 화면 문구, API 응답, 발표 자료 전부에 적용합니다. **"검사 통과",
+> "PASS" 같은 단어를 UI 어디에도 쓰지 마세요** — 검사한 것이 없습니다.
 
 ### 3.4 안전
 
@@ -107,13 +148,22 @@ React ──WebSocket/REST──▶ FastAPI + rclpy (단일 프로세스) ──
 | ID | 요구사항 | 우선 | 인수 기준 |
 |---|---|---|---|
 | FR-40 | 세션 정보를 저장한다 | M | 시작·종료·결과코드 기록 |
-| FR-41 | 모든 판정 결과를 저장한다 | M | 3점 × 레이어 수만큼 레코드 |
-| FR-42 | **FAIL 판정의 힘 파형과 임계값을 저장한다** | M | `waveform`, `threshold_n` 존재 |
-| FR-43 | 강성 맵(점 배열·경계·분리도)을 저장한다 | M | 세션당 1건 |
-| FR-44 | 공정 이벤트를 시계열로 저장한다 | S | 상태 전이·에러 기록 |
+| FR-44 | 공정 이벤트를 시계열로 저장한다 | **M** ↑ | 상태 전이·에러 기록 |
 | FR-45 | **저장 실패가 공정을 중단시키지 않는다** | M | DB 차단 시험 시 세션 정상 완주 |
+| FR-46 | **세션의 손톱 경계 설정값을 함께 저장한다** (신설) | S | `nail_local_frame` 좌표 + `nail_region` 크기 |
 
-> **FR-42**: 임계값은 캘리브레이션으로 계속 바뀐다. 판정 시점의 임계값과 원본 파형이 없으면 과거 데이터를 재해석할 수 없다.
+> **v1.1 삭제**: FR-41 · FR-42 · FR-43 (판정 결과 · FAIL 파형 · 강성 맵).
+> 생산 노드가 전부 폐지돼 저장할 데이터가 없습니다.
+>
+> **FR-44 를 S → M 으로 올렸습니다.** 측정 데이터가 사라진 만큼, "언제 어떤
+> 단계에서 무슨 에러가 났는가"라는 이벤트 로그가 사후 분석의 **유일한**
+> 근거가 됩니다.
+>
+> **FR-46 이 필요한 이유**: 공정 결과가 좋든 나쁘든, 그 세션이 **어떤 좌표를
+> 손톱이라고 믿고 작업했는지**가 지금은 유일하게 재현 가능한 입력입니다.
+> ROS2 가 토픽으로 발행하지 않으므로 웹이
+> `install/nail_bringup/share/nail_bringup/config/static_frames.yaml` 을
+> 세션 시작 시 읽어 스냅샷으로 저장하는 방식이 현실적입니다.
 
 ---
 
@@ -125,13 +175,23 @@ React ──WebSocket/REST──▶ FastAPI + rclpy (단일 프로세스) ──
 |---|---|---|---|
 | `/safety/status` | `SafetyState` | **TRANSIENT_LOCAL** | 안전 배너 |
 | `/process/status` | `ProcessState` | **TRANSIENT_LOCAL** | 진행 표시 |
-| `/stiffness/map` | `StiffnessMap` | **TRANSIENT_LOCAL** | 히트맵 |
-| `/validation/result` | `ValidationResult` | RELIABLE | 판정 |
+| `/tool/status` | `ToolState` | **TRANSIENT_LOCAL** | 현재 툴 (FR-17) |
 | `/force/data_ui` | `ForceSample` | BEST_EFFORT | 힘 그래프 |
 
 **요구사항**
 - IR-01 (M): 래치 토픽 3종은 TRANSIENT_LOCAL QoS 로 구독한다. 미준수 시 늦게 기동한 웹이 현재 상태를 받지 못한다.
 - IR-02 (M): `/force/data`(100 Hz)를 구독하지 않는다. `/force/data_ui`(20 Hz)만 사용한다.
+
+> **v1.1 삭제**: `/stiffness/map`, `/validation/result`. 발행 노드가
+> 폐지됐습니다 — 구독 코드를 남겨두면 **웹이 영원히 오지 않는 데이터를
+> 기다리며 화면 일부가 빈 채로 있게 됩니다.** 반드시 지우세요.
+>
+> `rosbridge` 를 쓰는 구성이라면 `nail_bridge/config/web_bridge.yaml` 의
+> `relay_topics` 화이트리스트에서도 이미 빠져 있어, 남겨둬도 구독 자체가
+> 차단됩니다.
+>
+> `/tool/status` 를 새로 넣었습니다 — 히트맵이 빠진 화면에서 "지금 어느
+> 툴로 무슨 공정 중인가"를 보여주는 값싼 대체 지표입니다.
 
 ### 4.2 ROS2 액션
 
@@ -150,18 +210,20 @@ React ──WebSocket/REST──▶ FastAPI + rclpy (단일 프로세스) ──
 |---|---|---|
 | `safety` | 안전 상태 | 변경 시 |
 | `state` | 공정 상태 | 전이 + 1 Hz |
-| `map` | 강성 맵 (점 누적) | 점 추가 시 |
-| `verdict` | 3점 판정 | 이벤트 |
+| `tool` | 현재 툴 · TCP | 변경 시 |
 | `force` | 접촉력 샘플 | 20 Hz |
 | `error` | 에러 코드 + 심각도 | 이벤트 |
 | `result` | 세션 종료 결과 | 1회 |
 
+> **v1.1 삭제**: `map`(강성 맵), `verdict`(3점 판정). 소스가 없습니다.
+
 ```json
 {"type":"safety","data":{"safe_to_move":false,"active_faults":["FAULT_ESTOP"]}}
-{"type":"verdict","data":{"layer_index":0,"point_label":"left","result":"FAIL","threshold_n":0.15}}
+{"type":"state","data":{"stage":"CURE","layer_index":0,"layer_total":2,"session_percent":62.5}}
+{"type":"tool","data":{"current_tool":"uv","active_tcp":"tcp_uv"}}
 ```
 
-- IR-05 (M): 클라이언트 접속 시 서버는 최신 `safety` / `state` / `map` 을 즉시 전송한다(스냅샷). 새로고침 후 화면이 비어 있어서는 안 된다.
+- IR-05 (M): 클라이언트 접속 시 서버는 최신 `safety` / `state` / `tool` 을 즉시 전송한다(스냅샷). 새로고침 후 화면이 비어 있어서는 안 된다.
 - IR-06 (M): 연결이 끊기면 클라이언트는 2초 간격으로 자동 재연결한다.
 - IR-07 (M): **웹 연결이 끊겨도 ROS2 세션은 계속 진행된다.** 웹 종료가 로봇을 중단시키지 않는다.
 
@@ -172,7 +234,7 @@ React ──WebSocket/REST──▶ FastAPI + rclpy (단일 프로세스) ──
 | GET | `/api/recipes` | 레시피 목록 |
 | POST | `/api/sessions` | 세션 생성 + 시작 |
 | POST | `/api/sessions/{id}/cancel` | 취소 |
-| GET | `/api/sessions/{id}/report` | 판정 리포트 |
+| GET | `/api/sessions/{id}/report` | 세션 리포트 (FR-24 고지 포함. 판정 결과는 없음) |
 | GET | `/api/health` | 상태 확인 |
 
 ---
@@ -184,14 +246,16 @@ React ──WebSocket/REST──▶ FastAPI + rclpy (단일 프로세스) ──
 | 테이블 | 주요 컬럼 |
 |---|---|
 | `sessions` | id, recipe_id, target_material, started_at, finished_at, result_code, abort_reason |
-| `stiffness_maps` | session_id, points, boundary, forbidden, threshold_k, separation_margin, valid |
-| `verdicts` | session_id, layer_index, point_label, x, y, release_force_n, **threshold_n**, result, **waveform** |
+| `nail_regions` | session_id, x_mm, y_mm, z_mm, yaw_deg, size_x_mm, size_y_mm (FR-46) |
 | `events` | session_id, ts, mtype, detail |
 
-- DR-01 (M): `verdicts.waveform` 은 FAIL 판정 시 반드시 채운다.
-- DR-02 (M): `verdicts.threshold_n` 을 판정과 함께 저장한다.
+> **v1.1 삭제**: `stiffness_maps`, `verdicts` 테이블. 채울 데이터가 없습니다.
+> **신설**: `nail_regions` — 그 세션이 손톱이라고 믿은 좌표 (FR-46).
+
 - DR-03 (M): 20 Hz 힘 데이터는 저장하지 않는다(용량).
-- DR-04 (S): 모든 이벤트에 `session_id` 와 타임스탬프를 부여한다.
+- DR-04 (**M** ↑): 모든 이벤트에 `session_id` 와 타임스탬프를 부여한다.
+      측정 데이터가 없어진 만큼 이벤트 로그가 유일한 사후 근거다.
+- DR-05 (S): `nail_regions` 는 세션당 1건, 시작 시점의 설정값 스냅샷.
 
 ---
 
@@ -233,23 +297,38 @@ React ──WebSocket/REST──▶ FastAPI + rclpy (단일 프로세스) ──
 | 순위 | 항목 | 이유 |
 |---|---|---|
 | 1 | 안전 배너 (FR-30~34) | 안전 통제의 일부 |
-| 2 | 강성 히트맵 (FR-11~13) | 프로젝트 핵심 시각 자산 |
-| 3 | 세션 시작·취소 (FR-02, 05) | 없으면 데모 불가 |
-| 4 | 공정 진행 표시 (FR-10) | |
-| 5 | 판정 표시 (FR-20~22) | |
-| 6 | 저장 (FR-40~45) | |
-| 7 | 힘 그래프 (FR-15) | |
+| 2 | 세션 시작·취소 (FR-02, 05) | 없으면 데모 불가 |
+| 3 | 공정 진행 표시 (FR-10) | |
+| 4 | **힘 그래프 (FR-15)** ↑ | 히트맵이 빠져 유일하게 남은 실시간 시각 자산 |
+| 5 | 미검증 고지 (FR-24) | 과장 표현 방지 — 안전·윤리 요구 |
+| 6 | 저장 (FR-40 · 44~46) | |
+| 7 | 현재 툴 표시 (FR-17) | |
 
 ### 8.2 축소 순서
 
 일정 부족 시 아래 순서로 축소한다.
 
-1. FR-14 경계 폴리곤 오버레이
-2. FR-20 판정 매트릭스 → 텍스트 목록
+1. FR-17 현재 툴 표시
+2. FR-46 손톱 경계 스냅샷 저장
 3. FR-15 힘 그래프 → 현재값 숫자 표시
-4. FR-40~44 저장 → JSON 파일 덤프
+4. FR-40·44 저장 → JSON 파일 덤프
 
-**축소 대상에서 제외**: FR-30~34(안전) · FR-11~13(히트맵) · FR-02·05(시작·취소) · FR-42·45
+**축소 대상에서 제외**: FR-30~34(안전) · **FR-24(미검증 고지)** · FR-02·05(시작·취소) · FR-45
+
+### 8.3 ★ 히트맵 자리를 무엇으로 채울 것인가
+
+v1.0 에서 히트맵은 인도 순서 2위이자 "프로젝트 핵심 시각 자산"이었습니다.
+데이터 소스가 사라졌으니 화면 한가운데가 비게 됩니다. 세 가지 선택지:
+
+| 안 | 내용 | 비용 |
+|---|---|---|
+| **A (권장)** | **힘 그래프를 메인으로 승격.** `/force/data_ui` 를 크게 그리고, 현재 단계별 목표 힘(`target_force_n`)을 기준선으로 겹쳐 표시 | 낮음. 이미 FR-15 로 계획된 것 |
+| B | **설정된 손톱 경계를 정적 도형으로 표시.** `nail_region` 타원과 현재 TCP 위치(`/robot/pose`)를 겹쳐 그림 | 중간. `/robot/pose` 중계 추가 필요 |
+| C | 단계별 진행 타임라인을 크게 | 낮음. 시각적 임팩트는 약함 |
+
+> **B 를 쓸 때 주의**: 그 타원은 **측정 결과가 아니라 설정값**입니다. 화면에
+> "스캔 결과", "측정된 경계" 같은 라벨을 붙이지 마세요 — FR-24 위반입니다.
+> "설정된 작업 영역"으로 표기하세요.
 
 ---
 
@@ -257,13 +336,15 @@ React ──WebSocket/REST──▶ FastAPI + rclpy (단일 프로세스) ──
 
 아래를 모두 충족하면 완료로 판정한다.
 
-1. 가짜 퍼블리셔로 세션 시작 → 히트맵 렌더링 → 판정 표시 → 저장 확인
+1. 가짜 퍼블리셔로 세션 시작 → 단계 전이 표시 → 힘 그래프 렌더링 → 저장 확인
 2. 안전 fault 주입 시 UI 잠금 및 fault 전체 표시
 3. 브라우저 강제 종료 후 재접속 시 현재 상태 즉시 복원
 4. 세션 취소가 ROS2 액션까지 전파
 5. 웹 종료 시에도 ROS2 세션이 정상 진행
-6. FAIL 판정의 파형과 임계값이 DB 에 존재
-7. 리포트 문구가 FR-22 를 준수
+6. **리포트 문구가 FR-24(미검증 고지)를 준수**하고, UI 어디에도 "검사 통과"
+   /"PASS" 표현이 없음
+7. **폐지된 토픽을 구독하지 않음**: 코드에 `/stiffness/map`,
+   `/validation/result` 참조가 남아 있지 않음
 8. 30분 세션에서 브라우저 메모리 누수 없음
 9. **M** 등급 요구사항 전 항목 충족
 
@@ -273,7 +354,8 @@ React ──WebSocket/REST──▶ FastAPI + rclpy (단일 프로세스) ──
 
 | # | 항목 | 결정 시점 |
 |---|---|---|
-| O1 | 히트맵 강성 색상 스케일 (절대값 / 세션 상대값) | Day 2 |
+| O1 | **히트맵 자리 대체안 A/B/C 중 확정** (§8.3) | Day 1 |
 | O2 | 힘 그래프 표시 구간 (30초 / 전체) | Day 2 |
-| O3 | 에러 코드 한국어 문구 확정 | Day 3 |
+| O3 | 에러 코드 한국어 문구 확정 (v0.3 에서 6개 삭제됨 — NIS §4) | Day 3 |
+| O4 | FR-24 고지 문구 최종 확정 | Day 1 |
 | O4 | 실기 연동 일정 | 팀 협의 |

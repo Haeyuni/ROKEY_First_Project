@@ -10,18 +10,21 @@
 web_bridge:
   websocket_port: 9090
 
-  # NIS §9 "구성" 표의 5개 중계 토픽. rosbridge topics_glob 화이트리스트로
-  # 그대로 들어간다 — 여기 없는 토픽은 웹에서 구독할 수 없다.
+  # 중계 토픽. rosbridge topics_glob 화이트리스트로 그대로 들어간다 —
+  # 여기 없는 토픽은 웹에서 구독할 수 없다.
+  #
+  # v0.3: `/stiffness/map`(scan_node 발행)과 `/validation/result`
+  # (inspection_node/stone_node 검증 발행)는 두 노드가 폐지되면서 아무도
+  # 발행하지 않아 제거했다 — 남겨두면 웹이 영원히 안 오는 토픽을 기다린다.
+  # NIS §9 표의 5개 중 3개만 남았다.
   relay_topics:
     - /process/status
     - /safety/status
-    - /validation/result
-    - /stiffness/map
     - /force/data_ui
 
   # 참고용 상한 표기. rosbridge 는 구독 시 클라이언트가 요청하는
   # throttle_rate 를 그대로 따르는 클라이언트-주도 방식이라 서버가 이 값을
-  # 강제하지는 않는다 — 다만 relay_topics 5개는 전부 소스 노드 자체가 이미
+  # 강제하지는 않는다 — 다만 relay_topics 는 전부 소스 노드 자체가 이미
   # 20Hz 이하로 발행하므로(§3.6 표 참고) 이 상한은 설계상 자동으로 지켜진다.
   max_relay_rate_hz: 20
 

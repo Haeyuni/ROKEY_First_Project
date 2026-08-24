@@ -17,10 +17,11 @@
 # 누가 이 파일의 이름을 쓰나
 # ----------------------------------------------------------------------------
 #   tool_manager : tool_rack.yaml 의 slot_frame 값을 그대로 target_key 로 넘긴다.
-#                  → 툴 6개(probe/sander/brush/coater/uv/tweezers)의 키 이름이
+#                  → 툴 5개(sander/brush/coater/uv/tweezers)의 키 이름이
 #                    tool_rack.yaml 의 slot_frame 과 **글자 그대로 같아야** 한다.
 #                    한쪽을 고치면 반드시 다른 쪽도 같이 고칠 것.
 #   stone_node   : stone_pickup_frame 파라미터(기본 'stone_tray')
+#   session_orchestrator : ChangeTool 직후 '<툴>_work' 와 rack_transit
 #
 # ----------------------------------------------------------------------------
 # 필드
@@ -60,24 +61,13 @@ stone_tray: # 스톤 공급 트레이 - 완 (get_current_posx 실측)
   ry_deg: -179.01   # B
   rz2_deg: 30.43   # C
 
-stone_place: # 스톤 부착 위치 - 완 (get_current_posx 실측)
-  x_mm: 325.55
-  y_mm: -21.85
-  z_mm: 394.80
-  frame_id: base_link
-  rz1_deg: 97.94    # A
-  ry_deg: -179.06   # B
-  rz2_deg: 4.65   # C
-
-probe: # 탐침 - 완
-  x_mm: 677.17
-  y_mm: -80.81
-  z_mm: 269.32
-  frame_id: base_link
-  rz1_deg: 11.36
-  ry_deg: -179.22
-  rz2_deg: 11.19
-  via_key: rack_transit
+# ※ 스톤 부착 위치(구 stone_place)는 여기서 빠졌다 — 그 실측 좌표는
+#   nail_bringup/config/static_frames.yaml 의 `nail_local_frame` 으로
+#   옮겨갔다. 이제 스톤 부착점은 절대 좌표가 아니라 "손톱 프레임의 원점"
+#   이고, session_orchestrator 가 PlaceStone 에 (0,0,0) 으로 넘긴다.
+#
+# ※ 탐침(구 probe / probe_work)도 빠졌다 — ProbePoint 스킬과 scan_node /
+#   inspection_node 가 폐지되어 이 툴을 집을 일이 없다.
 
 sander: # 네일 파일 - 완
   x_mm: 502.28
@@ -139,25 +129,14 @@ tweezers: # 핀셋 - 완
 # 는 문자열 매칭이라 이름 자체엔 규칙이 없지만, rack 쪽 키(예: sander)와
 # 겹치면 안 되므로 접미사로 구분한다.
 #
-# 이후 실제 연마/도포/조사(SandSurface/BrushDust/CoatGel/CureUV 등)는
-# nail_frame 기준으로 스캔 결과에 따라 동적으로 경로를 계산하므로 이 좌표를
-# 안 쓴다 — 여기 값은 "픽업 직후 ~ 작업 노드가 이어받기 전" 사이, 사람이
-# 눈으로 확인하며 MoveTo 로 접근시키는 용도다.
+# 이후 실제 연마/도포/조사(SandSurface/BrushDust/CoatGel/CureUV)는
+# nail_local_frame 기준으로 경로를 계산하므로 이 좌표를 안 쓴다 — 여기 값은
+# "픽업 직후 ~ 작업 노드가 이어받기 전" 사이 접근용이다
+# (session_orchestrator `_go_to_work`).
 #
-# ⚠️ 전부 미티칭 플레이스홀더다. 채우기 전엔 via_key 를 통해서도 이 좌표로
-#    이동을 시도하니 실제 값으로 바꾸기 전까지 쓰지 말 것.
 # ⚠️ via_key: rack_transit 은 랙 쪽 경유점이라 작업대 방향에는 안 맞을 수
 #    있다 — 작업대 앞에도 안전한 경유점이 필요하면 rack_transit 과 같은
 #    형식으로 하나 더 티칭해서(예: workbench_transit) 여기에 연결할 것.
-
-probe_work: # 탐침 작업 시작 자세 - clear
-  x_mm: 382.44
-  y_mm: -18.75
-  z_mm: 473.07
-  frame_id: base_link
-  rz1_deg: 32.02
-  ry_deg: -178.17
-  rz2_deg: 31.79
 
 sander_work: # 네일 파일 작업 시작 자세 - clear
   x_mm: 375.38

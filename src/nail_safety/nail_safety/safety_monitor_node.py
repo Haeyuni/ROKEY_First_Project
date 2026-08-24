@@ -41,7 +41,7 @@ v0.2에서 UV 상시 ON으로 바뀌면서(§7.0) 소프트웨어가 램프를 �
 """
 import threading
 
-from nail_msgs.msg import ErrorCode, SafetyState, StiffnessMap, ToolState
+from nail_msgs.msg import SafetyState, ToolState
 from nail_msgs.srv import ResetSafety, ValidatePrecondition
 import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -79,7 +79,6 @@ class SafetyMonitorNode(Node):
         self._latched_faults = set()   # ResetSafety 로만 해제
         self._live_faults = set()      # DI 를 그대로 반영, 매 주기 재계산
         self._current_tool = ToolState.NONE
-        self._scan_valid = False
         self._latest_safe_to_move = False
         self._poll_guard = threading.Lock()
         self._poll_thread = None
@@ -95,8 +94,6 @@ class SafetyMonitorNode(Node):
         self._cb_poll = MutuallyExclusiveCallbackGroup()
 
         self.create_subscription(ToolState, '/tool/status', self._on_tool_status,
-                                  transient_qos, callback_group=self._cb_sub)
-        self.create_subscription(StiffnessMap, '/stiffness/map', self._on_stiffness_map,
                                   transient_qos, callback_group=self._cb_sub)
 
         self._status_pub = self.create_publisher(SafetyState, '/safety/status', transient_qos)
@@ -139,7 +136,6 @@ class SafetyMonitorNode(Node):
         d('di_dust_channel', 3)
         d('require_handrest', False)  # 현재 하드웨어에 안착 센서 미장착 — 센서 달리면 true로 되돌릴 것
         d('require_dust_for_sanding', True)
-        d('require_scan_valid', True)
         d('uv_software_control', False)
         d('auto_reset', False)
 
@@ -147,7 +143,7 @@ class SafetyMonitorNode(Node):
         d('handrest_active_high', True)
         d('dust_active_high', True)
 
-    # --- /tool/status, /stiffness/map 구독 --------------------------------------
+    # --- /tool/status 구독 ------------------------------------------------------
     def _on_tool_status(self, msg):
         with self._state_lock:
             self._current_tool = msg.current_tool
@@ -162,10 +158,6 @@ class SafetyMonitorNode(Node):
                         '[FAULT_TOOL_DROP] /tool/status: grip_verified=false — '
                         '자동 복구 금지, 사람이 확인 후 ResetSafety 필요')
                 self._latched_faults.add(SafetyState.FAULT_TOOL_DROP)
-
-    def _on_stiffness_map(self, msg):
-        with self._state_lock:
-            self._scan_valid = bool(msg.valid)
 
     # --- ① 상태 수집 루프 (NIS §7 동작 ①②) ---------------------------------------
     def _on_publish_timer(self):
@@ -227,7 +219,6 @@ class SafetyMonitorNode(Node):
             msg.handrest_seated = handrest_seated
             msg.dust_extraction_on = dust_on
             msg.tool_grip_ok = SafetyState.FAULT_TOOL_DROP not in active_faults
-            msg.scan_valid = self._scan_valid
             msg.active_faults = active_faults
             msg.reason = active_faults[0] if active_faults else ''
 
@@ -283,7 +274,6 @@ class SafetyMonitorNode(Node):
         with self._state_lock:
             handrest_seated = self._handrest_seated
             current_tool = self._current_tool
-            scan_valid = self._scan_valid
             dust_on = self._dust_on
             safe_to_move = self._latest_safe_to_move
             active_faults = sorted(self._latched_faults | self._live_faults)
@@ -298,13 +288,10 @@ class SafetyMonitorNode(Node):
             reasons.append(
                 f'툴 불일치: 요구={request.required_tool}, 현재={current_tool or "(없음)"}')
 
+        # v0.3: 스캔이 폐지돼 "스캔이 유효한가" 라는 전제조건 자체가 없어졌다.
+        # 손톱 경계는 이제 설정값(nail_region)이라 런타임에 검증할 대상이
+        # 아니다 — 각 공정 노드가 자기 파라미터를 직접 확인한다.
         Stage = ValidatePrecondition.Request
-        scan_required_stages = (Stage.STAGE_SAND, Stage.STAGE_COAT, Stage.STAGE_CURE,
-                                 Stage.STAGE_INSPECT)
-        if request.stage in scan_required_stages and p('require_scan_valid').value \
-                and not scan_valid:
-            reasons.append(f'{ErrorCode.E_NO_SCAN}: 스캔 유효하지 않음')
-
         if request.stage == Stage.STAGE_SAND and p('require_dust_for_sanding').value \
                 and not dust_on:
             reasons.append('더스트 컬렉터 OFF (연마 중 배기 인터록)')

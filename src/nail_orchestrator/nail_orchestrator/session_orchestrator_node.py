@@ -1,14 +1,27 @@
-"""session_orchestrator — 세션 상태 머신 · 재작업 루프 (NIS §8, C계층).
+"""session_orchestrator — 세션 상태 머신 (NIS §8, C계층).
 
-**직접 로봇을 움직이지 않는다.** 공정 액션 8종(`ChangeTool` ·
-`ScanBoundary` · `SandSurface` · `BrushDust` · `CoatGel` · `CureUV` ·
-`InspectCure` · `PlaceStone`)을 순서대로 호출하고 결과를 이어 붙이는
-것만 한다. 손가락 1개(D-07)이므로 반복은 레이어 하나뿐이다(§8 표기).
+**직접 로봇을 움직이지 않는다.** 공정 액션 6종(`ChangeTool` ·
+`SandSurface` · `BrushDust` · `CoatGel` · `CureUV` · `PlaceStone`)을
+순서대로 호출하고 결과를 이어 붙이는 것만 한다. 손가락 1개(D-07)이므로
+반복은 레이어 하나뿐이다(§8 표기).
 
-여덟 개의 하위 액션이 전부 "goal 보내고 → feedback 받고 → 취소/안전/
+여섯 개의 하위 액션이 전부 "goal 보내고 → feedback 받고 → 취소/안전/
 타임아웃 감시하며 결과 대기"라는 같은 뼈대를 쓰므로, 스킬 노드들처럼
-액션마다 개별 헬퍼를 쓰지 않고 `_call_action()` 하나로 묶었다 — 여기서도
-같은 코드를 여덟 번 반복하면 유지보수가 안 된다.
+액션마다 개별 헬퍼를 쓰지 않고 `_call_action()` 하나로 묶었다.
+
+★ v0.3 변경 — **SCAN 과 INSPECT 스테이지가 사라졌다.**
+
+scan_node(강성 스캔)와 inspection_node(택프리 3점 검사)가 폐지되면서:
+
+  - 공정 순서가 `PRECHECK → SAND → BRUSH → COAT → CURE → STONE → FINISH`
+    로 줄었다. probe 툴을 집는 단계가 없어 `ChangeTool` 횟수도 준다.
+  - **재작업(REWORK) 루프가 통째로 없어졌다.** "이 레이어가 덜 굳었다"를
+    판정하던 것이 InspectCure 하나뿐이었고, 그게 없으면 다시 구울 근거가
+    없다. `max_rework` / `total_rework` / `rework_exposure_scale` 과
+    `E_REWORK_EXCEEDED` 가 전부 제거됐다 — 경화 부족은 이제 사람이 보고
+    판단하며, 부족하면 `curing_node` 의 `dwell_s_per_point` 를 올린다.
+  - 손톱 경계가 스캔 결과가 아니라 설정값이 됐으므로(`nail_local_frame` +
+    `nail_region`), 스톤 부착 목표점은 그 프레임의 원점(0,0,0)이다.
 
 **문서에 없어서 이 구현이 채운 빈틈들**:
 
@@ -24,11 +37,9 @@
    `ChangeTool` 실행 중 `E_GRIP_FAILED` 로 늦게 드러난다 — PickPlace 의
    그리퍼 폭이 명령값이지 실측이 아닌 것과 같은 종류의 하드웨어 한계다.
 3. **`PlaceStone.target_position`**: `RunSession.Goal` 에 스톤 부착 좌표를
-   실어 보낼 필드가 아예 없다. `enable_stone=true` 인 세션에서는 스캔
-   결과 `boundary_polygon` 의 중심점(yaw=0)에 놓는다 — 정확한 부착
-   위치 결정 로직은 이 문서 범위 밖이라 자리표시자로만 채운다.
-   `enable_stone` 기본값이 false 이고 "축소 대상"으로 명시된 기능이라
-   당장 이 한계가 실사용에 걸릴 가능성은 낮다.
+   실어 보낼 필드가 아예 없다. `enable_stone=true` 인 세션에서는
+   `nail_local_frame` 원점(= 티칭된 손톱 중심, yaw=0)에 놓는다 — 정확한
+   부착 위치 결정 로직은 이 문서 범위 밖이라 자리표시자로만 채운다.
 4. **진행률**: 각 스테이지에 동일 가중치를 준 "몇 번째 단계/전체 단계"
    비율에, 현재 하위 액션이 보내는 feedback.percent 를 그 단계 내 분수로
    얹는다. NIS 는 가중치 산정 방식을 규정하지 않는다.
@@ -45,8 +56,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from nail_msgs.action import (
-    BrushDust, ChangeTool, CoatGel, CureUV, InspectCure, MoveTo, PlaceStone, RunSession,
-    SandSurface, ScanBoundary,
+    BrushDust, ChangeTool, CoatGel, CureUV, MoveTo, PlaceStone, RunSession, SandSurface,
 )
 from nail_msgs.msg import ErrorCode, ProcessState, SafetyState, ToolState
 from nail_msgs.srv import GetToolInfo
@@ -81,8 +91,6 @@ class SessionOrchestratorNode(Node):
             GetToolInfo, '/tool/get_info', callback_group=self._cb_client)
         self._change_tool_client = ActionClient(self, ChangeTool, '/tool/change',
                                                  callback_group=self._cb_client)
-        self._scan_client = ActionClient(self, ScanBoundary, '/process/scan',
-                                          callback_group=self._cb_client)
         self._sand_client = ActionClient(self, SandSurface, '/process/sand',
                                           callback_group=self._cb_client)
         self._brush_client = ActionClient(self, BrushDust, '/process/brush',
@@ -91,8 +99,6 @@ class SessionOrchestratorNode(Node):
                                           callback_group=self._cb_client)
         self._cure_client = ActionClient(self, CureUV, '/process/cure',
                                           callback_group=self._cb_client)
-        self._inspect_client = ActionClient(self, InspectCure, '/process/inspect',
-                                             callback_group=self._cb_client)
         self._stone_client = ActionClient(self, PlaceStone, '/process/place_stone',
                                            callback_group=self._cb_client)
         self._move_client = ActionClient(self, MoveTo, '/skill/move_to',
@@ -114,16 +120,12 @@ class SessionOrchestratorNode(Node):
         d('safety_status_timeout_s', 0.2)
         d('log_force_data', False)
         d('layer_total', 2)
-        d('max_rework', 2)
-        d('max_rework_session', 5)
         d('enable_stone', False)
         d('enable_brush', True)
-        d('stage_timeout_scan_s', 300.0)
         d('stage_timeout_sand_s', 120.0)
         d('stage_timeout_brush_s', 60.0)
         d('stage_timeout_coat_s', 90.0)
         d('stage_timeout_cure_s', 150.0)
-        d('stage_timeout_inspect_s', 60.0)
         d('stage_timeout_stone_s', 90.0)
         d('tool_change_timeout_s', 60.0)
         d('abort_return_home', True)
@@ -131,7 +133,6 @@ class SessionOrchestratorNode(Node):
         # NIS 표에 없는 구현 보조값 — docstring 참고
         d('home_frame_id', 'home_frame')
         d('home_timeout_s', 30.0)
-        d('rework_exposure_scale', 1.5)
         # ChangeTool 직후 공통 이동: 경유점(랙 쪽 안전 지점) → <툴>_work
         # (targets.yaml). 대각선 이동으로 방금 집은 툴이 다른 것과 부딪히는
         # 문제 대응 — robot_skill_node 의 PickPlace via_key 라우팅과 같은
@@ -256,11 +257,8 @@ class SessionOrchestratorNode(Node):
         """ChangeTool 직후 공통 이동: 경유점(tool_transit_key) → <tool_key>_work.
 
         반환: (work_result, None) 성공 / (None, err) 실패 — err 은
-        _finish_by_err 에 그대로 넘기면 된다. work_result.base.final_pose 는
-        <tool_key>_work 도착 후 실제 위치(base_link) — handrest_frame/
-        nail_frame TF 를 없앤 뒤로는 이 값을 스캔 원점으로 재사용한다(아래
-        _scan_origin_from 참고). 대각선 이동으로 방금 집은 툴이 랙/구조물과
-        부딪히는 문제 대응(PickPlace via_key 라우팅과 동일한 이유).
+        _finish_by_err 에 그대로 넘기면 된다. 대각선 이동으로 방금 집은 툴이
+        랙/구조물과 부딪히는 문제 대응(PickPlace via_key 라우팅과 동일한 이유).
         """
         transit_key = self.get_parameter('tool_transit_key').value
         timeout_s = self.get_parameter('tool_transit_timeout_s').value
@@ -271,18 +269,6 @@ class SessionOrchestratorNode(Node):
         if err is not None:
             return None, err
         return work_result, None
-
-    @staticmethod
-    def _scan_origin_from(move_result):
-        """MoveTo 결과의 final_pose(m) → ScanBoundary origin_x/y/z_mm.
-
-        origin_z_mm 은 probe_work 도착 높이를 그대로 쓴다 — 실제 표면보다
-        높이 떠 있는 자세일 수 있으니(§ "작업 시작 자세"), probe_depth_mm
-        만큼 파고들어도 접촉을 못 찾으면(E_NO_CONTACT) probe_work 좌표를
-        표면에 더 가깝게 재측정하거나 probe_depth_mm 을 늘릴 것.
-        """
-        pos = move_result.base.final_pose.position
-        return pos.x * 1000.0, pos.y * 1000.0, pos.z * 1000.0
 
     # --- PRECHECK (NIS §8: 안착 · 툴 랙 전수 · 통신 · E-Stop 해제) -----------------
     def _run_precheck(self, required_tools):
@@ -334,7 +320,7 @@ class SessionOrchestratorNode(Node):
 
     # --- ProcessState 발행 (즉시 전이 시 + 1Hz, §8 피드백) -------------------------
     def _publish_state(self, goal_handle, session_id, stage, layer_index, layer_total,
-                        rework_count, stage_percent, session_percent, current_tool,
+                        stage_percent, session_percent, current_tool,
                         last_error_code='', last_error_detail=''):
         st = ProcessState()
         st.header.stamp = self.get_clock().now().to_msg()
@@ -342,7 +328,6 @@ class SessionOrchestratorNode(Node):
         st.stage = stage
         st.layer_index = layer_index
         st.layer_total = layer_total
-        st.rework_count = rework_count
         st.stage_percent = stage_percent
         st.session_percent = session_percent
         st.current_tool = current_tool
@@ -363,11 +348,11 @@ class SessionOrchestratorNode(Node):
     # --- 진행 단계 시퀀스 (docstring #4) -----------------------------------------
     @staticmethod
     def _build_sequence(enable_brush, enable_stone, layer_total):
-        seq = ['PRECHECK', 'SCAN', 'SAND']
+        seq = ['PRECHECK', 'SAND']
         if enable_brush:
             seq.append('BRUSH')
         for i in range(layer_total):
-            seq += [f'COAT{i}', f'CURE{i}', f'INSPECT{i}']
+            seq += [f'COAT{i}', f'CURE{i}']
         if enable_stone:
             seq.append('STONE')
         seq.append('FINISH')
@@ -382,20 +367,16 @@ class SessionOrchestratorNode(Node):
         session_id = goal.session_id
 
         layer_total = int(self._val(goal.layer_total, 'layer_total'))
-        max_rework = int(self._val(goal.max_rework, 'max_rework'))
-        max_rework_session = int(self.get_parameter('max_rework_session').value)
         # bool 필드는 "설정 안 함"과 False 를 구분 못 한다 — coating_node.use_compliance 와
         # 동일하게 goal 값을 그대로 신뢰한다.
         enable_brush = goal.enable_brush
         enable_stone = goal.enable_stone
 
         p = self.get_parameter
-        t_scan = p('stage_timeout_scan_s').value
         t_sand = p('stage_timeout_sand_s').value
         t_brush = p('stage_timeout_brush_s').value
         t_coat = p('stage_timeout_coat_s').value
         t_cure = p('stage_timeout_cure_s').value
-        t_inspect = p('stage_timeout_inspect_s').value
         t_stone = p('stage_timeout_stone_s').value
         t_tool = p('tool_change_timeout_s').value
 
@@ -407,8 +388,7 @@ class SessionOrchestratorNode(Node):
             return 100.0 * (idx + max(0.0, min(100.0, local_pct)) / 100.0) / n_steps
 
         state = {
-            'layer_index': 0, 'rework_count': 0, 'current_tool': ToolState.NONE,
-            'layer_total': layer_total,
+            'layer_index': 0, 'current_tool': ToolState.NONE, 'layer_total': layer_total,
         }
 
         def emit(stage, local_pct, layer_index=None):
@@ -417,17 +397,15 @@ class SessionOrchestratorNode(Node):
             pct = progress(step_key, local_pct) if step_key in seq else 0.0
             self._publish_state(
                 goal_handle, session_id, stage, state['layer_index'], layer_total,
-                state['rework_count'], local_pct, pct, state['current_tool'])
+                local_pct, pct, state['current_tool'])
 
-        all_results = []
-        scan_map = None
-        total_rework = 0
         abort_code = None
         abort_detail = ''
 
         # --- PRECHECK ----------------------------------------------------------
         emit(ProcessState.STAGE_PRECHECK, 0.0)
-        required_tools = ['probe', 'sander', 'coater', 'uv']
+        # probe 툴은 목록에서 빠졌다 — SCAN/INSPECT 가 없어져 쓸 일이 없다.
+        required_tools = ['sander', 'coater', 'uv']
         if enable_brush:
             required_tools.append('brush')
         if enable_stone:
@@ -436,63 +414,20 @@ class SessionOrchestratorNode(Node):
         if not ok:
             abort_code, abort_detail = ErrorCode.E_PRECOND_FAILED, f'PRECHECK 실패: {reasons}'
             return self._finish_abort(goal_handle, result, abort_code, abort_detail,
-                                       started_at, started_mono, state, all_results,
-                                       scan_map, total_rework)
+                                       started_at, started_mono, state)
         emit(ProcessState.STAGE_PRECHECK, 100.0)
 
-        # --- SCAN ----------------------------------------------------------------
-        ct_result, err = self._call_change_tool(ToolState.PROBE, goal_handle, t_tool)
-        if err is not None:
-            return self._finish_by_err(goal_handle, result, err, 'ChangeTool(probe) 실패',
-                                        started_at, started_mono, state, all_results,
-                                        scan_map, total_rework)
-        state['current_tool'] = ToolState.PROBE
-
-        probe_work_result, err = self._go_to_work('probe', goal_handle)
-        if err is not None:
-            return self._finish_by_err(goal_handle, result, err, '경유/작업위치 이동 실패(probe)',
-                                        started_at, started_mono, state, all_results,
-                                        scan_map, total_rework)
-
-        emit(ProcessState.STAGE_SCAN, 0.0)
-        scan_goal = ScanBoundary.Goal()
-        scan_goal.session_id = session_id
-        # handrest_frame/nail_frame TF 제거됨 — probe_work 도착 위치(실측)를
-        # 스캔 원점으로 그대로 쓴다. base_link 기준으로 직접 스캔한다.
-        scan_goal.frame_id = 'base_link'
-        scan_goal.origin_x_mm, scan_goal.origin_y_mm, scan_goal.origin_z_mm = \
-            self._scan_origin_from(probe_work_result)
-
-        def on_scan_fb(fb_msg):
-            emit(ProcessState.STAGE_SCAN, fb_msg.feedback.overall_percent)
-
-        scan_result, err = self._call_action(self._scan_client, scan_goal, goal_handle, t_scan,
-                                              feedback_cb=on_scan_fb)
-        if err is not None:
-            return self._finish_by_err(goal_handle, result, err, 'ScanBoundary 실패',
-                                        started_at, started_mono, state, all_results,
-                                        scan_map, total_rework)
-        scan_map = scan_result.map
-        if not scan_map.valid:
-            return self._finish_abort(
-                goal_handle, result, ErrorCode.E_NO_SCAN,
-                f'스캔 invalid: {scan_map.reject_reason}', started_at, started_mono, state,
-                all_results, scan_map, total_rework)
-        emit(ProcessState.STAGE_SCAN, 100.0)
-
         # --- SAND ------------------------------------------------------------------
-        ct_result, err = self._call_change_tool(ToolState.SANDER, goal_handle, t_tool)
+        _, err = self._call_change_tool(ToolState.SANDER, goal_handle, t_tool)
         if err is not None:
             return self._finish_by_err(goal_handle, result, err, 'ChangeTool(sander) 실패',
-                                        started_at, started_mono, state, all_results,
-                                        scan_map, total_rework)
+                                        started_at, started_mono, state)
         state['current_tool'] = ToolState.SANDER
 
         _, err = self._go_to_work('sander', goal_handle)
         if err is not None:
             return self._finish_by_err(goal_handle, result, err, '경유/작업위치 이동 실패(sander)',
-                                        started_at, started_mono, state, all_results,
-                                        scan_map, total_rework)
+                                        started_at, started_mono, state)
 
         emit(ProcessState.STAGE_SAND, 0.0)
         sand_goal = SandSurface.Goal()
@@ -501,29 +436,26 @@ class SessionOrchestratorNode(Node):
         def on_sand_fb(fb_msg):
             emit(ProcessState.STAGE_SAND, fb_msg.feedback.percent)
 
-        sand_result, err = self._call_action(self._sand_client, sand_goal, goal_handle, t_sand,
-                                              feedback_cb=on_sand_fb)
+        _, err = self._call_action(self._sand_client, sand_goal, goal_handle, t_sand,
+                                    feedback_cb=on_sand_fb)
         if err is not None:
             return self._finish_by_err(goal_handle, result, err, 'SandSurface 실패',
-                                        started_at, started_mono, state, all_results,
-                                        scan_map, total_rework)
+                                        started_at, started_mono, state)
         emit(ProcessState.STAGE_SAND, 100.0)
 
         # --- BRUSH (옵션) ------------------------------------------------------------
         if enable_brush:
-            ct_result, err = self._call_change_tool(ToolState.BRUSH, goal_handle, t_tool)
+            _, err = self._call_change_tool(ToolState.BRUSH, goal_handle, t_tool)
             if err is not None:
                 return self._finish_by_err(goal_handle, result, err, 'ChangeTool(brush) 실패',
-                                            started_at, started_mono, state, all_results,
-                                            scan_map, total_rework)
+                                            started_at, started_mono, state)
             state['current_tool'] = ToolState.BRUSH
 
             _, err = self._go_to_work('brush', goal_handle)
             if err is not None:
                 return self._finish_by_err(goal_handle, result, err,
                                             '경유/작업위치 이동 실패(brush)', started_at,
-                                            started_mono, state, all_results, scan_map,
-                                            total_rework)
+                                            started_mono, state)
 
             emit(ProcessState.STAGE_BRUSH, 0.0)
             brush_goal = BrushDust.Goal()
@@ -532,32 +464,31 @@ class SessionOrchestratorNode(Node):
             def on_brush_fb(fb_msg):
                 emit(ProcessState.STAGE_BRUSH, fb_msg.feedback.percent)
 
-            brush_result, err = self._call_action(self._brush_client, brush_goal, goal_handle,
-                                                   t_brush, feedback_cb=on_brush_fb)
+            _, err = self._call_action(self._brush_client, brush_goal, goal_handle,
+                                        t_brush, feedback_cb=on_brush_fb)
             if err is not None:
                 return self._finish_by_err(goal_handle, result, err, 'BrushDust 실패',
-                                            started_at, started_mono, state, all_results,
-                                            scan_map, total_rework)
+                                            started_at, started_mono, state)
             emit(ProcessState.STAGE_BRUSH, 100.0)
 
-        # --- 레이어 루프: COAT → CURE → INSPECT (→ REWORK) ----------------------------
+        # --- 레이어 루프: COAT → CURE ---------------------------------------------
+        # v0.3: INSPECT 와 REWORK 가 빠져 루프가 아니라 그냥 순차 진행이다.
+        # 경화가 충분한지는 아무도 검증하지 않는다 (docstring ★ 참고).
         for layer_index in range(layer_total):
             state['layer_index'] = layer_index
 
             # COAT
-            ct_result, err = self._call_change_tool(ToolState.COATER, goal_handle, t_tool)
+            _, err = self._call_change_tool(ToolState.COATER, goal_handle, t_tool)
             if err is not None:
                 return self._finish_by_err(goal_handle, result, err, 'ChangeTool(coater) 실패',
-                                            started_at, started_mono, state, all_results,
-                                            scan_map, total_rework)
+                                            started_at, started_mono, state)
             state['current_tool'] = ToolState.COATER
 
             _, err = self._go_to_work('coater', goal_handle)
             if err is not None:
                 return self._finish_by_err(goal_handle, result, err,
                                             '경유/작업위치 이동 실패(coater)', started_at,
-                                            started_mono, state, all_results, scan_map,
-                                            total_rework)
+                                            started_mono, state)
 
             emit(ProcessState.STAGE_COAT, 0.0, layer_index)
             coat_goal = CoatGel.Goal()
@@ -571,193 +502,108 @@ class SessionOrchestratorNode(Node):
             def on_coat_fb(fb_msg, _li=layer_index):
                 emit(ProcessState.STAGE_COAT, fb_msg.feedback.percent, _li)
 
-            coat_result, err = self._call_action(self._coat_client, coat_goal, goal_handle,
-                                                  t_coat, feedback_cb=on_coat_fb)
+            _, err = self._call_action(self._coat_client, coat_goal, goal_handle,
+                                        t_coat, feedback_cb=on_coat_fb)
             if err is not None:
                 return self._finish_by_err(goal_handle, result, err, 'CoatGel 실패',
-                                            started_at, started_mono, state, all_results,
-                                            scan_map, total_rework)
+                                            started_at, started_mono, state)
             emit(ProcessState.STAGE_COAT, 100.0, layer_index)
 
-            # CURE (최초 — 전체 영역)
-            fail_points = []
-            exposure_scale = 0.0
-            rework_this_layer = 0
-            while True:
-                ct_result, err = self._call_change_tool(ToolState.UV, goal_handle, t_tool)
-                if err is not None:
-                    return self._finish_by_err(goal_handle, result, err,
-                                                'ChangeTool(uv) 실패', started_at, started_mono,
-                                                state, all_results, scan_map, total_rework)
-                state['current_tool'] = ToolState.UV
+            # CURE — 전체 영역 1회
+            _, err = self._call_change_tool(ToolState.UV, goal_handle, t_tool)
+            if err is not None:
+                return self._finish_by_err(goal_handle, result, err, 'ChangeTool(uv) 실패',
+                                            started_at, started_mono, state)
+            state['current_tool'] = ToolState.UV
 
-                _, err = self._go_to_work('uv', goal_handle)
-                if err is not None:
-                    return self._finish_by_err(goal_handle, result, err,
-                                                '경유/작업위치 이동 실패(uv)', started_at,
-                                                started_mono, state, all_results, scan_map,
-                                                total_rework)
+            _, err = self._go_to_work('uv', goal_handle)
+            if err is not None:
+                return self._finish_by_err(goal_handle, result, err,
+                                            '경유/작업위치 이동 실패(uv)', started_at,
+                                            started_mono, state)
 
-                stage_label = ProcessState.STAGE_REWORK if rework_this_layer > 0 else \
-                    ProcessState.STAGE_CURE
-                emit(stage_label, 0.0, layer_index)
-                cure_goal = CureUV.Goal()
-                cure_goal.session_id = session_id
-                cure_goal.layer_index = layer_index
-                cure_goal.target_regions = fail_points
-                cure_goal.exposure_scale = exposure_scale
+            emit(ProcessState.STAGE_CURE, 0.0, layer_index)
+            cure_goal = CureUV.Goal()
+            cure_goal.session_id = session_id
+            cure_goal.layer_index = layer_index
 
-                def on_cure_fb(fb_msg, _li=layer_index, _label=stage_label):
-                    emit(_label, fb_msg.feedback.percent, _li)
+            def on_cure_fb(fb_msg, _li=layer_index):
+                emit(ProcessState.STAGE_CURE, fb_msg.feedback.percent, _li)
 
-                cure_result, err = self._call_action(self._cure_client, cure_goal, goal_handle,
-                                                      t_cure, feedback_cb=on_cure_fb)
-                if err is not None:
-                    return self._finish_by_err(goal_handle, result, err, 'CureUV 실패',
-                                                started_at, started_mono, state, all_results,
-                                                scan_map, total_rework)
-                emit(stage_label, 100.0, layer_index)
-
-                # INSPECT
-                ct_result, err = self._call_change_tool(ToolState.PROBE, goal_handle, t_tool)
-                if err is not None:
-                    return self._finish_by_err(goal_handle, result, err,
-                                                'ChangeTool(probe) 실패', started_at,
-                                                started_mono, state, all_results, scan_map,
-                                                total_rework)
-                state['current_tool'] = ToolState.PROBE
-
-                _, err = self._go_to_work('probe', goal_handle)
-                if err is not None:
-                    return self._finish_by_err(goal_handle, result, err,
-                                                '경유/작업위치 이동 실패(probe)', started_at,
-                                                started_mono, state, all_results, scan_map,
-                                                total_rework)
-
-                emit(ProcessState.STAGE_INSPECT, 0.0, layer_index)
-                inspect_goal = InspectCure.Goal()
-                inspect_goal.session_id = session_id
-                inspect_goal.layer_index = layer_index
-                # CoatGel.use_compliance 와 같은 이유 — inspection_node 도 bool
-                # 필드를 그대로 신뢰한다. NIS 기본값(true)을 명시한다.
-                inspect_goal.require_all_pass = True
-
-                def on_inspect_fb(fb_msg, _li=layer_index):
-                    emit(ProcessState.STAGE_INSPECT, fb_msg.feedback.percent, _li)
-
-                inspect_result, err = self._call_action(self._inspect_client, inspect_goal,
-                                                          goal_handle, t_inspect,
-                                                          feedback_cb=on_inspect_fb)
-                if err is not None:
-                    return self._finish_by_err(goal_handle, result, err, 'InspectCure 실패',
-                                                started_at, started_mono, state, all_results,
-                                                scan_map, total_rework)
-                all_results.extend(inspect_result.results)
-                emit(ProcessState.STAGE_INSPECT, 100.0, layer_index)
-
-                if inspect_result.passed:
-                    break
-
-                rework_this_layer += 1
-                total_rework += 1
-                state['rework_count'] = rework_this_layer
-                if rework_this_layer > max_rework or total_rework > max_rework_session:
-                    detail = (f'레이어 {layer_index} 재작업 {rework_this_layer}회'
-                              f'(상한 {max_rework}) / 세션 누적 {total_rework}회'
-                              f'(상한 {max_rework_session})')
-                    return self._finish_abort(
-                        goal_handle, result, ErrorCode.E_REWORK_EXCEEDED, detail, started_at,
-                        started_mono, state, all_results, scan_map, total_rework)
-
-                fail_points = list(inspect_result.fail_points)
-                exposure_scale = self.get_parameter('rework_exposure_scale').value
-                self.get_logger().warn(
-                    f'REWORK: layer={layer_index} fail_points={len(fail_points)}개 '
-                    f'({rework_this_layer}/{max_rework})')
-            state['rework_count'] = 0
+            _, err = self._call_action(self._cure_client, cure_goal, goal_handle,
+                                        t_cure, feedback_cb=on_cure_fb)
+            if err is not None:
+                return self._finish_by_err(goal_handle, result, err, 'CureUV 실패',
+                                            started_at, started_mono, state)
+            emit(ProcessState.STAGE_CURE, 100.0, layer_index)
 
         # --- STONE (옵션, docstring #3 — 목표 좌표 가정) ------------------------------
         if enable_stone:
-            ct_result, err = self._call_change_tool(ToolState.TWEEZERS, goal_handle, t_tool)
+            _, err = self._call_change_tool(ToolState.TWEEZERS, goal_handle, t_tool)
             if err is not None:
                 return self._finish_by_err(goal_handle, result, err,
                                             'ChangeTool(tweezers) 실패', started_at,
-                                            started_mono, state, all_results, scan_map,
-                                            total_rework)
+                                            started_mono, state)
             state['current_tool'] = ToolState.TWEEZERS
+            # 다른 툴과 달리 <tool>_work 로 먼저 가지 않는다 — targets.yaml 에
+            # tweezers_work 가 없고, PlaceStone 이 곧바로 stone_tray 로 PICK 을
+            # 나가면서 via_key(rack_transit) 라우팅을 타기 때문이다.
 
             emit(ProcessState.STAGE_STONE, 0.0)
-            boundary_xy = [(pt.x, pt.y) for pt in scan_map.region.boundary_polygon] \
-                if scan_map is not None else []
-            if boundary_xy:
-                cx = sum(p[0] for p in boundary_xy) / len(boundary_xy)
-                cy = sum(p[1] for p in boundary_xy) / len(boundary_xy)
-            else:
-                cx = cy = 0.0
             stone_goal = PlaceStone.Goal()
             stone_goal.session_id = session_id
-            stone_goal.target_position = Point(x=cx, y=cy, z=0.0)
+            # nail_local_frame 원점 = 티칭된 손톱 중심 (docstring #3).
+            stone_goal.target_position = Point(x=0.0, y=0.0, z=0.0)
             stone_goal.target_yaw_deg = 0.0
 
             def on_stone_fb(fb_msg):
                 emit(ProcessState.STAGE_STONE, fb_msg.feedback.percent)
 
-            stone_result, err = self._call_action(self._stone_client, stone_goal, goal_handle,
-                                                   t_stone, feedback_cb=on_stone_fb)
+            _, err = self._call_action(self._stone_client, stone_goal, goal_handle,
+                                        t_stone, feedback_cb=on_stone_fb)
             if err is not None:
                 return self._finish_by_err(goal_handle, result, err, 'PlaceStone 실패',
-                                            started_at, started_mono, state, all_results,
-                                            scan_map, total_rework)
+                                            started_at, started_mono, state)
             emit(ProcessState.STAGE_STONE, 100.0)
 
         # --- FINISH ------------------------------------------------------------------
-        ct_result, err = self._call_change_tool(ToolState.NONE, goal_handle, t_tool)
+        self._call_change_tool(ToolState.NONE, goal_handle, t_tool)
         state['current_tool'] = ToolState.NONE
         emit(ProcessState.STAGE_FINISH, 100.0)
 
         goal_handle.succeed()
         result.success = True
         result.result_code = RunSession.Result.RESULT_COMPLETED
-        if scan_map is not None:
-            result.scan_result = scan_map
-        result.all_results = all_results
         result.final_error.code = ErrorCode.OK
-        result.total_rework = total_rework
         result.started_at = started_at
         result.finished_at = self.get_clock().now().to_msg()
         return result
 
+
     # --- 실패 분기 도우미 ---------------------------------------------------------
     def _finish_by_err(self, goal_handle, result, err, context, started_at, started_mono,
-                        state, all_results, scan_map, total_rework):
+                        state):
         if err == 'CANCELLED':
-            return self._finish_cancel(goal_handle, result, context, started_at, state,
-                                        all_results, scan_map, total_rework)
+            return self._finish_cancel(goal_handle, result, context, started_at, state)
         return self._finish_abort(goal_handle, result, err, context, started_at, started_mono,
-                                   state, all_results, scan_map, total_rework)
+                                   state)
 
-    def _finish_cancel(self, goal_handle, result, detail, started_at, state, all_results,
-                        scan_map, total_rework):
+    def _finish_cancel(self, goal_handle, result, detail, started_at, state):
         self._cleanup_abort(goal_handle, state)
         goal_handle.canceled()
         result.success = False
         result.result_code = RunSession.Result.RESULT_CANCELLED
         result.final_error.code = ErrorCode.E_CANCELLED
         result.final_error.detail = detail
-        if scan_map is not None:
-            result.scan_result = scan_map
-        result.all_results = all_results
-        result.total_rework = total_rework
         result.started_at = started_at
         result.finished_at = self.get_clock().now().to_msg()
         self._publish_state(None, goal_handle.request.session_id, ProcessState.STAGE_ABORTED,
                              state['layer_index'], state['layer_total'],
-                             state['rework_count'], 0.0, 0.0, state['current_tool'],
+                             0.0, 0.0, state['current_tool'],
                              ErrorCode.E_CANCELLED, detail)
         return result
 
-    def _finish_abort(self, goal_handle, result, code, detail, started_at, started_mono, state,
-                       all_results, scan_map, total_rework):
+    def _finish_abort(self, goal_handle, result, code, detail, started_at, started_mono, state):
         self._log_abort(code, detail)
         self._cleanup_abort(goal_handle, state)
         goal_handle.abort()
@@ -767,16 +613,11 @@ class SessionOrchestratorNode(Node):
         result.final_error.code = code
         result.final_error.detail = detail
         result.final_error.severity = ErrorCode.SEV_ABORT
-        if scan_map is not None:
-            result.scan_result = scan_map
-        result.all_results = all_results
-        result.total_rework = total_rework
         result.started_at = started_at
         result.finished_at = self.get_clock().now().to_msg()
         self._publish_state(None, goal_handle.request.session_id, ProcessState.STAGE_ABORTED,
                              state['layer_index'], state['layer_total'],
-                             state['rework_count'], 0.0, 0.0, state['current_tool'], code,
-                             detail)
+                             0.0, 0.0, state['current_tool'], code, detail)
         return result
 
     def _cleanup_abort(self, goal_handle, state):

@@ -1,42 +1,34 @@
-"""stone_node — 스톤 픽업·정위치 압착·(옵션) 위치 검증 (NIS §6.7 M05).
+"""stone_node — 스톤 픽업·정위치 압착 (NIS §6.7 M05).
 
-**담당자 메모(NIS): "일정 지연 시 1순위 축소 대상"** — 이 노드가 다른
-B계층 노드보다 구현 난이도가 높은 이유는, 소비 인터페이스가
-`/skill/pick_place` · `/skill/probe_point` · `/skill/move_to` 세 개로
-제한돼 있어(§6.7 인터페이스 표) `ContactPath`/`LateralContact` 같은
-힘-경로 추종 스킬을 못 쓰기 때문이다. "압착력으로 압착 유지"를 이 세
-primitive만으로 구현하려면 다음과 같은 조합이 필요하다:
+**담당자 메모(NIS): "일정 지연 시 1순위 축소 대상"** — 실제로 v0.3 에서
+한 번 축소됐다. 이 노드가 쓰던 `/skill/probe_point`(ProbePoint)가 폐지되면서
+(scan_node/inspection_node 제거와 함께) 힘 제어 하강과 부착 위치 검증이
+같이 사라졌다.
 
-1. `MoveTo` — 목표 위 접근 높이로 이동 + yaw 정렬 (자세 설정)
-2. `ProbePoint(max_force_n=press_force_n)` — 힘 제어 하강으로 접촉·압착력
-   도달을 확인한다. **문제**: `ProbePoint`는 끝나면 항상 후퇴한다
-   (SDS §5.1) — "누른 채로 버티기"가 안 된다.
-3. 그래서 `ProbePoint`가 돌려준 `point.contact_depth_mm`(접근 높이부터
-   압착력 도달까지 실제 내려간 거리)으로 압착 깊이를 역산해, **같은
-   깊이로 `MoveTo`를 한 번 더 내려보낸다.** 이번엔 위치제어지만 깊이 자체는
-   힘제어로 검증된 값이라 안전하다. 여기서 `press_duration_s`만큼 그냥
-   대기하면 실제로 눌려 있는 상태를 유지할 수 있다.
-4. 그리퍼를 열려면(그냥 "지금 위치에서 열어라"가 없다) `PickPlace`를 다시
-   써야 한다 — `robot_skill_node._target_task_pose()`가 `target_key`를
-   targets.yaml에 없으면 **TF 프레임 이름으로 취급**하는 폴백을 이미 갖고
-   있다(로봇스킬 노드 §5.1, 랙 슬롯용으로 만들어진 경로). 그래서 지금 누르고
-   있는 자세를 TF로 한 번 브로드캐스트하고, 그 프레임을 `target_key`로
-   `PickPlace(PLACE, approach_height_mm=approach_height_mm)`를 부르면
-   "제자리에서 그리퍼 열고 후퇴"가 된다. `approach_height_mm`만큼 한 번
-   들었다 다시 내려오는 왕복이 끼지만(같은 프레임이라 접근점=목표점),
-   무해하고 위치도 그대로 보존된다.
+## 지금의 압착 방식 — 티칭된 높이로 위치 제어 하강
 
-이 설계는 §6.7 의 서술("압착력으로 압착 유지 → 그리퍼 Open")을 문서에
-없는 새 스킬 없이 기존 세 인터페이스만으로 재현하려는 시도다. 스톤이
-아주 작아 힘 제어 없는 순수 위치 하강은 손톱/스톤을 깰 위험이 있어
-피했다.
+예전에는 `ProbePoint` 로 힘 제어 하강해 "실제로 표면에 닿은 깊이"를 재고
+그 깊이로 다시 내려가 압착을 유지했다. 힘 센서로 표면을 찾았기 때문에
+손톱 높이를 몰라도 됐다. 지금은 그 반대다 — **손톱 표면 높이를 알고 있다는
+전제**로 바꿨다. `nail_local_frame` 의 z=0 이 손톱 표면이라고 티칭돼 있으므로
+(`nail_bringup/config/static_frames.yaml`), 목표 z 로 그냥 내려가면 된다.
 
-**검증(`verify_enabled`, 기본 false)**: §6.7 스스로 "시간이 없으면 검증
-없이 부착만 구현하고 `position_error=-1`을 반환하라"고 명시한다. `true`인
-경우에도 이 구현은 정밀한 스톤 윤곽 검출이 아니라, 목표점 주변 원형으로
-`verify_probe_count`점을 얕게 눌러 **압착 시 확인한 높이(hold_z) 근처에서
-접촉하는 점만 "스톤 위"로 분류**하는 높이-대역 휴리스틱이다 —
-scan_node 급의 군집화는 하지 않는다.
+  1. `MoveTo` — 목표 위 `approach_height_mm` 지점으로 이동 + yaw 정렬
+  2. `MoveTo` — 목표 z + `press_offset_mm` 까지 저속 하강 (압착)
+  3. `press_duration_s` 만큼 그 자리에서 대기
+  4. `PickPlace(PLACE)` — 지금 자세를 TF 로 브로드캐스트하고 그 프레임을
+     `target_key` 로 넘겨 "제자리에서 그리퍼 열고 후퇴"시킨다
+     (`robot_skill_node._target_task_pose()` 의 TF 폴백을 이용)
+
+⚠️ **이 방식은 힘으로 멈추지 않는다.** `nail_local_frame` 의 z 가 실제보다
+낮게 티칭돼 있으면 그만큼 손톱을 눌러버린다. `press_offset_mm` 을 처음엔
+넉넉히(양수, 즉 표면보다 위) 잡고 실기에서 눈으로 보며 줄일 것.
+`press_force_n` 은 이제 아무 데도 쓰이지 않아 액션에서 제거됐다.
+
+⚠️ **부착 성공 여부를 확인하지 않는다.** 검증은 목표점 주변을 얕게 눌러보는
+ProbePoint 휴리스틱이었고 함께 사라졌다 — `verify_enabled` / `max_retry` /
+`position_tolerance_mm` / `position_error_mm` / `E_STONE_MISS` 가 전부
+제거됐다. 스톤이 제대로 붙었는지는 **사람이 눈으로 확인**해야 한다.
 """
 import math
 import threading
@@ -52,12 +44,8 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from tf2_ros import TransformBroadcaster
 
 from nail_msgs.action import MoveTo, PickPlace, PlaceStone
-from nail_msgs.action import ProbePoint as ProbePointAction
-from nail_msgs.msg import ErrorCode, ResultBase, SafetyState, StiffnessPoint, ToolState, \
-    ValidationResult
+from nail_msgs.msg import ErrorCode, ResultBase, SafetyState, ToolState
 from nail_msgs.srv import ValidatePrecondition
-
-from nail_perception.geometry2d import centroid
 
 # robot_skill_node 의 ABORT_* 표기(ABORT_LOW_STIFFNESS 등)와 맞춘다.
 SEVERITY_BY_CODE = {
@@ -65,7 +53,6 @@ SEVERITY_BY_CODE = {
     ErrorCode.E_CANCELLED: ErrorCode.SEV_NONE,
     ErrorCode.E_PRECOND_FAILED: ErrorCode.SEV_ABORT,
     ErrorCode.E_GRIP_FAILED: ErrorCode.SEV_ABORT,
-    ErrorCode.E_STONE_MISS: ErrorCode.SEV_ABORT,
     ErrorCode.E_OVERFORCE: ErrorCode.SEV_ABORT,
     ErrorCode.E_SAFETY_BLOCKED: ErrorCode.SEV_SAFETY,
     ErrorCode.E_TIMEOUT: ErrorCode.SEV_ABORT,
@@ -110,19 +97,12 @@ class StoneNode(Node):
                                   self._on_safety_status, safety_qos,
                                   callback_group=self._cb_client)
 
-        # IDS 부록: /validation/result 는 RELIABLE, depth 20 (inspection_node 와 공유)
-        result_qos = QoSProfile(depth=20, reliability=ReliabilityPolicy.RELIABLE,
-                                 durability=DurabilityPolicy.VOLATILE)
-        self._result_pub = self.create_publisher(ValidationResult, '/validation/result',
-                                                   result_qos)
         self._tf_broadcaster = TransformBroadcaster(self)
 
         self._validate_client = self.create_client(
             ValidatePrecondition, '/safety/validate', callback_group=self._cb_client)
         self._pick_place_client = ActionClient(self, PickPlace, '/skill/pick_place',
                                                 callback_group=self._cb_client)
-        self._probe_client = ActionClient(self, ProbePointAction, '/skill/probe_point',
-                                           callback_group=self._cb_client)
         self._move_client = ActionClient(self, MoveTo, '/skill/move_to',
                                           callback_group=self._cb_client)
         self._active_goal_handle = None
@@ -143,28 +123,23 @@ class StoneNode(Node):
         d('safety_status_timeout_s', 0.2)
         d('node_timeout_s', 120.0)
         d('log_force_data', False)
-        d('press_force_n', 1.5)
         d('press_duration_s', 2.0)
-        d('position_tolerance_mm', 1.0)
-        d('max_retry', 2)
-        d('verify_enabled', False)
-        d('verify_probe_count', 4)
         d('stone_pickup_frame', 'stone_tray')
         d('approach_height_mm', 15.0)
-        # NIS 표에 없는 구현 보조값 — 위 docstring 의 압착/검증 설계에 필요하다.
+        # NIS 표에 없는 구현 보조값 — 위 docstring 의 압착 설계에 필요하다.
+        # 압착 목표 z = target_position.z + 이 값 (nail_local_frame, mm).
+        # 힘으로 멈추지 않으므로 이 값이 곧 "얼마나 세게 누르는가"다. 양수면
+        # 표면보다 위(덜 누름), 음수면 표면 아래(더 누름). 스톤 두께만큼
+        # 띄우는 것이 출발점 — 실기에서 눈으로 보며 줄일 것.
+        d('press_offset_mm', 1.0)
         d('stone_grip_width_mm', 3.0)          # PICK 목표 파지 폭 (작은 스톤)
         # 핀셋을 "툴로서" RG2 가 쥐고 있는 폭(tool_rack.yaml 의 tweezers.
         # expected_grip_width_mm 와 맞출 것). 스톤을 놓을 때 이 폭까지만
         # 벌린다 — 완전개방(gripper_open_width_mm)까지 벌리면 핀셋 손잡이
         # 자체를 놓쳐버린다.
         d('tweezers_grip_width_mm', 20.0)
-        d('press_search_margin_mm', 3.0)       # ProbePoint max_depth = approach_height + 이 값
-        d('press_hold_speed_ratio', 0.1)       # 압착 깊이로 재하강할 때 속도(0~1)
+        d('press_hold_speed_ratio', 0.1)       # 압착 하강 속도(0~1). 힘 감시가 없으니 느리게.
         d('approach_speed_ratio', 0.3)         # 접근 이동 속도(0~1) — PickPlace 내부값과 동일
-        d('verify_probe_radius_mm', 1.5)       # 검증 프로빙 원 반경
-        d('verify_probe_max_force_n', 1.0)     # 검증 프로빙 힘 상한(스톤 건드리지 않게 약하게)
-        d('verify_probe_depth_mm', 1.0)        # 검증 프로빙 최대 깊이
-        d('stone_height_tolerance_mm', 0.3)    # 이 안에 있으면 "스톤 위" 로 분류
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg):
@@ -341,62 +316,6 @@ class StoneNode(Node):
             return result, result.base.error.code
         return result, None
 
-    # --- ProbePoint 클라이언트 헬퍼 (scan_node/inspection_node 와 동일 패턴) --------
-    def _call_probe_point(self, x_mm, y_mm, z_mm, approach_height_mm, max_depth_mm, max_force_n,
-                           timeout_s, our_goal_handle):
-        """반환: (StiffnessPoint|None, error_code|None|'CANCELLED')."""
-        if not self._probe_client.wait_for_server(timeout_sec=10.0):
-            return None, ErrorCode.E_COMM_LOST
-
-        goal = ProbePointAction.Goal()
-        goal.target = Point(x=x_mm / 1000.0, y=y_mm / 1000.0, z=z_mm / 1000.0)
-        goal.frame_id = 'nail_local_frame'
-        goal.approach_height_mm = approach_height_mm
-        goal.max_depth_mm = max_depth_mm
-        goal.max_force_n = max_force_n
-        goal.measure_release = False
-        goal.source_tag = StiffnessPoint.SRC_VERIFY
-
-        send_done = threading.Event()
-        state = {}
-
-        def on_goal_response(fut):
-            state['goal_handle'] = fut.result()
-            send_done.set()
-
-        self._probe_client.send_goal_async(goal).add_done_callback(on_goal_response)
-        if not send_done.wait(timeout=timeout_s):
-            return None, ErrorCode.E_TIMEOUT
-
-        gh = state.get('goal_handle')
-        if gh is None or not gh.accepted:
-            return None, ErrorCode.E_SAFETY_BLOCKED
-        self._active_goal_handle = gh
-
-        result_done = threading.Event()
-
-        def on_result(fut):
-            state['result'] = fut.result()
-            result_done.set()
-
-        gh.get_result_async().add_done_callback(on_result)
-        deadline = time.monotonic() + timeout_s
-        while not result_done.wait(timeout=0.1):
-            if our_goal_handle.is_cancel_requested:
-                gh.cancel_goal_async()
-                self._active_goal_handle = None
-                return None, 'CANCELLED'
-            if time.monotonic() > deadline:
-                gh.cancel_goal_async()
-                self._active_goal_handle = None
-                return None, ErrorCode.E_TIMEOUT
-        self._active_goal_handle = None
-
-        result = state['result'].result
-        if not result.base.success:
-            return result.point, result.base.error.code
-        return result.point, None
-
     def _broadcast_hold_frame(self, x_mm, y_mm, z_mm, quat):
         t = TransformStamped()
         t.header.stamp = self.get_clock().now().to_msg()
@@ -415,18 +334,11 @@ class StoneNode(Node):
         started_at = time.monotonic()
         result = PlaceStone.Result()
 
-        press_force = self._val(goal.press_force_n, 'press_force_n')
         press_duration = self._val(goal.press_duration_s, 'press_duration_s')
-        position_tolerance = self._val(goal.position_tolerance_mm, 'position_tolerance_mm')
-        max_retry = int(self._val(goal.max_retry, 'max_retry'))
-        # bool 필드는 "설정 안 함"과 False 를 구분 못 한다 — coating_node.use_compliance 와
-        # 동일하게 goal 값을 그대로 신뢰한다.
-        verify_enabled = goal.verify_enabled
-        verify_probe_count = int(self._val(goal.verify_probe_count, 'verify_probe_count'))
         approach_height = self._val(goal.approach_height_mm, 'approach_height_mm')
         pickup_key = self.get_parameter('stone_pickup_frame').value
         grip_width = self.get_parameter('stone_grip_width_mm').value
-        press_margin = self.get_parameter('press_search_margin_mm').value
+        press_offset = self.get_parameter('press_offset_mm').value
         hold_speed = self.get_parameter('press_hold_speed_ratio').value
         approach_speed = self.get_parameter('approach_speed_ratio').value
 
@@ -437,6 +349,9 @@ class StoneNode(Node):
         ty_mm = goal.target_position.y * 1000.0
         tz_mm = goal.target_position.z * 1000.0
         quat = _grip_orientation(goal.target_yaw_deg)
+        # 압착 높이. 힘으로 멈추지 않으므로 이 숫자가 곧 압착 깊이다
+        # (모듈 docstring 경고 참고).
+        hold_z_mm = tz_mm + press_offset
 
         def feedback(step, pct):
             fb = PlaceStone.Feedback()
@@ -444,18 +359,20 @@ class StoneNode(Node):
             fb.percent = pct
             goal_handle.publish_feedback(fb)
 
+        def pose_at(z_mm):
+            pose = Pose()
+            pose.position.x = tx_mm / 1000.0
+            pose.position.y = ty_mm / 1000.0
+            pose.position.z = z_mm / 1000.0
+            pose.orientation.x, pose.orientation.y, \
+                pose.orientation.z, pose.orientation.w = quat
+            return pose
+
         timeout_s = self.get_parameter('node_timeout_s').value
-        retry_count = 0
         abort_code, abort_detail = None, ''
-        actual_position = Point(x=0.0, y=0.0, z=0.0)
-        position_error_mm = -1.0
 
-        # 그리퍼가 지금 스톤을 물고 있는지 추적한다 — E_NO_CONTACT 재시도는
-        # 아직 스톤을 놓지 않았으므로 PICK 을 다시 부르면 안 된다(이미 물고
-        # 있는데 또 집으라는 명령이 되어 위험하다). 검증 실패로 인한 재배치는
-        # 이미 PLACE 로 내려놓아 그리퍼가 비어 있으므로 새 스톤을 다시 집는다.
-        stone_in_hand = False
-
+        # 재시도 루프가 없다 — 접촉/부착을 확인할 센서가 없어서 "실패했으니 다시"
+        # 를 판정할 근거 자체가 없다. 한 번 시도하고 결과를 사람에게 넘긴다.
         while True:
             if goal_handle.is_cancel_requested:
                 abort_code, abort_detail = 'CANCELLED', '사용자 취소'
@@ -464,32 +381,24 @@ class StoneNode(Node):
                 abort_code, abort_detail = ErrorCode.E_SAFETY_BLOCKED, 'safe_to_move=false'
                 break
 
-            # --- 0단계: PICK (아직 스톤을 안 물고 있을 때만) -----------------------
-            if not stone_in_hand:
-                feedback(0, 0.0)
-                pick_result, err = self._call_pick_place(
-                    PickPlace.Goal.MODE_PICK, pickup_key, grip_width, True, approach_height,
-                    timeout_s, goal_handle, already_holding=True)
-                if err == 'CANCELLED':
-                    abort_code, abort_detail = 'CANCELLED', '사용자 취소'
-                    break
-                if err is not None:
-                    detail = pick_result.base.error.detail if pick_result is not None else ''
-                    abort_code, abort_detail = ErrorCode.E_GRIP_FAILED, \
-                        f'PICK 실패({pickup_key}): {err} {detail}'.strip()
-                    break
-                stone_in_hand = True
+            # --- 0단계: PICK — 트레이에서 스톤 집기 ---------------------------------
+            feedback(0, 0.0)
+            pick_result, err = self._call_pick_place(
+                PickPlace.Goal.MODE_PICK, pickup_key, grip_width, True, approach_height,
+                timeout_s, goal_handle, already_holding=True)
+            if err == 'CANCELLED':
+                abort_code, abort_detail = 'CANCELLED', '사용자 취소'
+                break
+            if err is not None:
+                detail = pick_result.base.error.detail if pick_result is not None else ''
+                abort_code, abort_detail = ErrorCode.E_GRIP_FAILED, \
+                    f'PICK 실패({pickup_key}): {err} {detail}'.strip()
+                break
 
             # --- 1단계: 목표 위 접근 + yaw 정렬 -----------------------------------
-            feedback(1, 15.0)
-            approach_pose = Pose()
-            approach_pose.position.x = tx_mm / 1000.0
-            approach_pose.position.y = ty_mm / 1000.0
-            approach_pose.position.z = (tz_mm + approach_height) / 1000.0
-            approach_pose.orientation.x, approach_pose.orientation.y, \
-                approach_pose.orientation.z, approach_pose.orientation.w = quat
-            mv_result, err = self._call_move_to(approach_pose, approach_speed, timeout_s,
-                                                 goal_handle)
+            feedback(1, 25.0)
+            mv_result, err = self._call_move_to(pose_at(tz_mm + approach_height),
+                                                 approach_speed, timeout_s, goal_handle)
             if err == 'CANCELLED':
                 abort_code, abort_detail = 'CANCELLED', '사용자 취소'
                 break
@@ -498,49 +407,19 @@ class StoneNode(Node):
                 abort_code, abort_detail = err, f'접근 이동 실패: {detail or err}'
                 break
 
-            # --- 2단계: 힘 제어 하강 — 접촉 확인 + 압착력 도달 -----------------------
-            feedback(2, 30.0)
-            point, err = self._call_probe_point(
-                tx_mm, ty_mm, tz_mm, approach_height, approach_height + press_margin,
-                press_force, timeout_s, goal_handle)
-            if err == 'CANCELLED':
-                abort_code, abort_detail = 'CANCELLED', '사용자 취소'
-                break
-            if err == ErrorCode.E_NO_CONTACT:
-                self.get_logger().warn(
-                    f'[{err}] stone: 목표 위치에서 표면 미검출 — 위치 오차로 간주, 재시도 대상')
-                retry_count += 1
-                if retry_count > max_retry:
-                    abort_code, abort_detail = ErrorCode.E_STONE_MISS, \
-                        f'{max_retry}회 재시도 후에도 목표 위치에서 접촉 실패'
-                    break
-                feedback(4, 0.0)
-                continue
-            if err is not None:
-                # 접촉은 됐는데 실패(측면 힘 초과 등) — 위치 문제가 아니라 힘/자세
-                # 문제로 보고 즉시 중단한다 (§6.7 에러표의 E_OVERFORCE 로 매핑).
-                abort_code, abort_detail = ErrorCode.E_OVERFORCE, \
-                    f'압착 중 ProbePoint 실패({err}) — 힘/자세 이상'
-                break
-
-            # --- 3단계: 같은 깊이로 재하강 — 물리적으로 압착 유지 -------------------
-            feedback(3, 55.0)
-            hold_z_mm = tz_mm + approach_height - point.contact_depth_mm
-            hold_pose = Pose()
-            hold_pose.position.x = tx_mm / 1000.0
-            hold_pose.position.y = ty_mm / 1000.0
-            hold_pose.position.z = hold_z_mm / 1000.0
-            hold_pose.orientation.x, hold_pose.orientation.y, \
-                hold_pose.orientation.z, hold_pose.orientation.w = quat
-            mv_result, err = self._call_move_to(hold_pose, hold_speed, timeout_s, goal_handle)
+            # --- 2단계: 압착 높이로 저속 하강 --------------------------------------
+            feedback(2, 50.0)
+            mv_result, err = self._call_move_to(pose_at(hold_z_mm), hold_speed, timeout_s,
+                                                 goal_handle)
             if err == 'CANCELLED':
                 abort_code, abort_detail = 'CANCELLED', '사용자 취소'
                 break
             if err is not None:
                 detail = mv_result.base.error.detail if mv_result is not None else ''
-                abort_code, abort_detail = err, f'압착 유지 재하강 실패: {detail or err}'
+                abort_code, abort_detail = err, f'압착 하강 실패(z={hold_z_mm:.2f}mm): {detail or err}'
                 break
 
+            # --- 3단계: press_duration_s 만큼 눌러 유지 -----------------------------
             dwell_deadline = time.monotonic() + press_duration
             while time.monotonic() < dwell_deadline:
                 if goal_handle.is_cancel_requested:
@@ -570,104 +449,28 @@ class StoneNode(Node):
                 abort_code, abort_detail = ErrorCode.E_GRIP_FAILED, \
                     f'PLACE 실패: {err} {detail}'.strip()
                 break
-            stone_in_hand = False
 
-            # --- 5단계: 검증 (옵션) -----------------------------------------------
-            if not verify_enabled:
-                position_error_mm = -1.0
-                actual_position = Point(x=0.0, y=0.0, z=0.0)
-                break
-
-            feedback(5, 90.0)
-            on_stone_xy = []
-            radius = self.get_parameter('verify_probe_radius_mm').value
-            v_force = self.get_parameter('verify_probe_max_force_n').value
-            v_depth = self.get_parameter('verify_probe_depth_mm').value
-            height_tol = self.get_parameter('stone_height_tolerance_mm').value
-            for i in range(verify_probe_count):
-                if goal_handle.is_cancel_requested or not self._safe_to_move():
-                    break
-                theta = 2.0 * math.pi * i / max(1, verify_probe_count)
-                vx = tx_mm + radius * math.cos(theta)
-                vy = ty_mm + radius * math.sin(theta)
-                vpoint, verr = self._call_probe_point(
-                    vx, vy, tz_mm, approach_height, approach_height + v_depth, v_force,
-                    timeout_s, goal_handle)
-                label = f'stone_{i}'
-                if verr is not None or vpoint is None:
-                    vr = self._make_validation_result(
-                        goal.session_id, label, Point(x=vx / 1000.0, y=vy / 1000.0, z=0.0),
-                        0.0, 0.0, height_tol, ValidationResult.RESULT_SKIP)
-                else:
-                    contact_z = tz_mm + approach_height - vpoint.contact_depth_mm
-                    on_stone = abs(contact_z - hold_z_mm) <= height_tol
-                    if on_stone:
-                        on_stone_xy.append((vx, vy))
-                    grading = ValidationResult.RESULT_PASS if on_stone else \
-                        ValidationResult.RESULT_FAIL
-                    vr = self._make_validation_result(
-                        goal.session_id, label, vpoint.position, vpoint.release_force_n,
-                        vpoint.stiffness_n_per_mm, height_tol, grading)
-                self._result_pub.publish(vr)
-
-            if on_stone_xy:
-                cx, cy = centroid(on_stone_xy)
-                actual_position = Point(x=cx / 1000.0, y=cy / 1000.0, z=hold_z_mm / 1000.0)
-                position_error_mm = math.hypot(cx - tx_mm, cy - ty_mm)
-            else:
-                actual_position = Point(x=0.0, y=0.0, z=0.0)
-                position_error_mm = float('inf')
-                self.get_logger().warn(
-                    'stone: 검증 프로빙에서 스톤 위 점을 하나도 못 찾음 — 재시도 대상')
-
-            if position_error_mm <= position_tolerance:
-                break
-
-            retry_count += 1
-            if retry_count > max_retry:
-                abort_code, abort_detail = ErrorCode.E_STONE_MISS, \
-                    (f'검증 위치 오차 {position_error_mm:.2f}mm > '
-                     f'position_tolerance_mm({position_tolerance}), '
-                     f'{max_retry}회 재배치 후에도 미달')
-                break
-            self.get_logger().warn(
-                f'stone: 위치 오차 {position_error_mm:.2f}mm 초과 — 재배치 {retry_count}/{max_retry}')
-            continue
+            feedback(4, 100.0)
+            break
 
         if abort_code == 'CANCELLED':
             goal_handle.canceled()
             result.base = self._result_base(False, ErrorCode.E_CANCELLED, abort_detail,
                                               started_at)
-            result.retry_count = retry_count
             return result
         if abort_code is not None:
             self._log_abort(abort_code, abort_detail)
             goal_handle.abort()
             result.base = self._result_base(False, abort_code, abort_detail, started_at)
             result.abort_reason = _abort_reason(abort_code)
-            result.retry_count = retry_count
             return result
 
         goal_handle.succeed()
         result.base = self._result_base(True, ErrorCode.OK, '', started_at)
-        result.actual_position = actual_position
-        result.position_error_mm = position_error_mm
-        result.retry_count = retry_count
+        # 명령값 그대로 — 부착 위치를 되읽는 수단이 없다 (docstring 경고).
+        result.actual_position = Point(x=tx_mm / 1000.0, y=ty_mm / 1000.0,
+                                        z=hold_z_mm / 1000.0)
         return result
-
-    def _make_validation_result(self, session_id, label, position, release_force_n,
-                                 stiffness_n_per_mm, threshold_n, grading):
-        vr = ValidationResult()
-        vr.session_id = session_id
-        vr.layer_index = 0
-        vr.point_label = label
-        vr.position = position
-        vr.release_force_n = release_force_n
-        vr.stiffness_n_per_mm = stiffness_n_per_mm
-        vr.threshold_n = threshold_n
-        vr.result = grading
-        vr.measured_at = self.get_clock().now().to_msg()
-        return vr
 
     # --- 공통 ------------------------------------------------------------------
     def _result_base(self, success, code, detail, started_at):

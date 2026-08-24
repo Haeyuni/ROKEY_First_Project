@@ -40,23 +40,36 @@ ros2 launch nail_bringup test_bringup.launch.py nodes:=all
 ros2 launch nail_bringup test_bringup.launch.py nodes:=safety,skill,tool,sanding log_level:=debug
 ```
 
-`nodes` 토큰: `frames` `safety` `skill` `tool` `scan` `sanding` `brushing`
-`coating` `curing` `inspection` `stone` `orchestrator` (또는 `all`). 콤마로
-여러 개.
+`nodes` 토큰: `frames` `safety` `skill` `tool` `sanding` `brushing`
+`coating` `curing` `stone` `orchestrator` (또는 `all`). 콤마로 여러 개.
 
-각 토큰이 실제로 무엇을 필요로 하는지는 NIS-NAIL-v0.2 §11.1 인터페이스
-매트릭스와 docs/노드별_단위테스트_가이드.md 를 참조 — 이 launch 파일은
-**의존성을 자동으로 끼워 넣지 않는다** (예: `sanding` 을 넣어도 `scan` 이
+**`scan` / `inspection` 토큰은 없어졌다** — scan_node 와 inspection_node 는
+폐지됐다(탐침 기반 공정 제거). 손톱 경계는 이제 스캔 결과가 아니라
+`config/static_frames.yaml` 의 `nail_region` 에서 온다 (아래 `frames` 항목).
+
+각 토큰이 실제로 무엇을 필요로 하는지는 NIS-NAIL-v0.3 §11.1 인터페이스
+매트릭스와 docs/노드별_단위테스트_가이드_v0.3.md 를 참조 — 이 launch 파일은
+**의존성을 자동으로 끼워 넣지 않는다** (예: `sanding` 을 넣어도 `frames` 가
 자동으로 따라 붙지 않음). 무엇이 켜져 있고 무엇이 꺼져 있는지 항상 명시적으로
-알 수 있게 하기 위한 설계다 — REJECT(E_NO_SCAN 등)도 유효한 테스트 케이스다.
+알 수 있게 하기 위한 설계다.
 
-## `frames` 토큰 — NIS §11.4 고정 TF (지금은 tool_rack_frame만 남음)
+## `frames` 토큰 — 고정 TF + 손톱 작업 영역 ★
 
-`config/static_frames.yaml` 을 읽어 프레임마다 `tf2_ros
-static_transform_publisher` 를 하나씩 띄운다. `handrest_frame`/`nail_frame`
-은 제거됨(운영자 결정, 정적 사전 티칭 방식을 안 씀) — scan_node 의 기본
-frame_id 도 `base_link`로 바뀌었으니 `ScanBoundary` 호출 시 frame_id 를
-반드시 명시할 것.
+`config/static_frames.yaml` 을 읽어 두 가지를 한다:
+
+1. `frames:` 의 프레임마다 `tf2_ros static_transform_publisher` 를 하나씩
+   띄운다 — 그중 **`nail_local_frame` 이 필수**다. sanding/brushing/coating/
+   curing/stone 이 하위 스킬을 부를 때 쓰는 frame_id 가 전부 이 이름이라,
+   `frames` 를 빼면 그 공정들이 전부 TF lookup 실패로 ABORT 된다.
+2. `nail_region:` 의 크기를 공정 노드 5개(sanding/brushing/coating/curing/
+   stone)에 `nail_size_x_mm` / `nail_size_y_mm` / `nail_boundary_points`
+   파라미터로 **주입**한다. 스캔이 폐지된 뒤 손톱 경계의 유일한 출처다.
+   이 주입은 `frames` 토큰과 무관하게 공정 노드가 하나라도 있으면 일어나고,
+   `nail_region` 이 없거나 값이 이상하면 launch 자체가 실패한다
+   (`_nail_region_params`) — 틀린 경계로 로봇이 도는 것보다 안 뜨는 게 낫다.
+
+⚠️ 그래도 **공정 노드를 띄울 땐 `frames` 를 항상 같이 넣을 것.** 크기는
+파라미터로 들어가지만 위치(`nail_local_frame` TF)는 `frames` 가 띄운다.
 """
 import math
 
@@ -73,12 +86,10 @@ _NODE_SPECS = {
     'safety':       ('nail_safety',       'safety_monitor_node',         'safety_monitor',        True),
     'skill':        ('nail_skill',        'robot_skill_node',            'robot_skill_node',      True),
     'tool':         ('nail_skill',        'tool_manager',                'tool_manager',          True),
-    'scan':         ('nail_perception',   'scan_node',                   'scan_node',              False),
     'sanding':      ('nail_process',      'sanding_node',                'sanding_node',           False),
     'brushing':     ('nail_process',      'brushing_node',               'brushing_node',          False),
     'coating':      ('nail_process',      'coating_node',                'coating_node',           False),
     'curing':       ('nail_process',      'curing_node',                 'curing_node',            False),
-    'inspection':   ('nail_process',      'inspection_node',             'inspection_node',        False),
     'stone':        ('nail_process',      'stone_node',                  'stone_node',             False),
     'orchestrator': ('nail_orchestrator', 'session_orchestrator_node',   'session_orchestrator',   False),
 }
@@ -86,8 +97,12 @@ _NODE_SPECS = {
 # NIS §8 동작 순서를 따른 'all' 확장 순서 ('frames' 는 다른 토큰이 TF 를
 # 참조하기 전에 뜨도록 맨 앞. 툴 교체가 실제로 일어나진 않지만 로그를
 # 읽을 때 위에서 아래로 자연스럽게 보이도록)
-_ALL_ORDER = ['frames', 'safety', 'skill', 'tool', 'scan', 'sanding', 'brushing',
-              'coating', 'curing', 'inspection', 'stone', 'orchestrator']
+_ALL_ORDER = ['frames', 'safety', 'skill', 'tool', 'sanding', 'brushing',
+              'coating', 'curing', 'stone', 'orchestrator']
+
+# `nail_region` 크기를 파라미터로 받아야 하는 노드들 — 손톱 경계를 직접
+# 만드는 공정 노드 전부다 (orchestrator 는 경로를 안 만들어서 빠진다).
+_NAIL_REGION_TOKENS = ('sanding', 'brushing', 'coating', 'curing', 'stone')
 
 
 # --- frame 값 <-> 3x3 회전행렬 계산 (absolute: true 프레임의 부모 기준 상대값
@@ -269,6 +284,35 @@ def _static_frame_nodes(static_frames_file):
     return nodes
 
 
+def _nail_region_params(static_frames_file):
+    """static_frames.yaml 의 `nail_region:` → 공정 노드 파라미터 dict.
+
+    스캔이 폐지된 뒤 손톱 경계의 유일한 출처다. 항목이 없거나 값이 이상하면
+    조용히 노드 기본값으로 넘어가지 않고 **여기서 launch 를 실패시킨다** —
+    경계가 틀린 채로 로봇이 도는 것보다 안 뜨는 편이 안전하다.
+    """
+    with open(static_frames_file) as f:
+        cfg = yaml.safe_load(f) or {}
+    region = cfg.get('nail_region')
+    if not region:
+        raise RuntimeError(
+            f"{static_frames_file} 에 'nail_region:' 항목이 없다. 손톱 경계를 "
+            "만들 수 없으므로 공정 노드를 띄울 수 없다.")
+    size_x = float(region.get('size_x_mm', 0.0))
+    size_y = float(region.get('size_y_mm', 0.0))
+    points = int(region.get('boundary_points', 0))
+    if size_x <= 0.0 or size_y <= 0.0 or points < 3:
+        raise RuntimeError(
+            f"nail_region 값이 유효하지 않다: size_x_mm={size_x}, "
+            f"size_y_mm={size_y}, boundary_points={points} "
+            "(크기는 양수, boundary_points 는 3 이상이어야 한다)")
+    return {
+        'nail_size_x_mm': size_x,
+        'nail_size_y_mm': size_y,
+        'nail_boundary_points': points,
+    }
+
+
 def _launch_setup(context, *args, **kwargs):
     raw = LaunchConfiguration('nodes').perform(context).strip()
     tokens = _ALL_ORDER if raw == 'all' else [t.strip() for t in raw.split(',') if t.strip()]
@@ -293,7 +337,16 @@ def _launch_setup(context, *args, **kwargs):
     static_frames_file = LaunchConfiguration('static_frames_file').perform(context)
     log_level = LaunchConfiguration('log_level').perform(context)
 
+    # 공정 노드가 하나라도 있으면 손톱 영역을 미리 읽어둔다 (실패 시 즉시 중단).
+    nail_region = _nail_region_params(static_frames_file) \
+        if any(t in _NAIL_REGION_TOKENS for t in tokens) else {}
+
     actions = [LogInfo(msg=f'[nail_bringup] 기동 대상: {tokens}')]
+    if nail_region:
+        actions.append(LogInfo(msg=(
+            f"[nail_bringup] 손톱 작업 영역: {nail_region['nail_size_x_mm']}"
+            f" x {nail_region['nail_size_y_mm']} mm"
+            f" ({nail_region['nail_boundary_points']}각형, nail_local_frame 기준)")))
 
     for token in tokens:
         if token == 'frames':
@@ -317,6 +370,8 @@ def _launch_setup(context, *args, **kwargs):
             params['require_handrest'] = require_handrest == 'true'
             params['heartbeat_timeout_ms'] = int(heartbeat_timeout_ms)
             params['publish_rate_hz'] = int(safety_publish_rate_hz)
+        if token in _NAIL_REGION_TOKENS:
+            params.update(nail_region)
 
         actions.append(Node(
             package=package,
@@ -341,9 +396,9 @@ def generate_launch_description():
             'nodes', default_value='safety,skill,tool',
             description=(
                 "쉼표로 구분한 노드 토큰 또는 'all'. 토큰: frames, safety, skill, "
-                "tool, scan, sanding, brushing, coating, curing, inspection, "
-                "stone, orchestrator. 의존 노드는 자동으로 추가되지 않는다 — "
-                "직접 나열할 것.")),
+                "tool, sanding, brushing, coating, curing, stone, orchestrator. "
+                "의존 노드는 자동으로 추가되지 않는다 — 직접 나열할 것. 공정 "
+                "노드는 nail_local_frame 이 필요하니 frames 를 꼭 같이 넣을 것.")),
         DeclareLaunchArgument(
             'use_mock_hardware', default_value='false',
             description=(
@@ -399,8 +454,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'static_frames_file', default_value=default_static_frames,
             description=(
-                "'frames' 토큰이 읽는 NIS §11.4 고정 프레임 좌표. 전부 "
-                "placeholder — 실측 전 로봇 이동에 쓰지 말 것.")),
+                "'frames' 토큰이 읽는 고정 프레임 좌표 + 손톱 작업 영역"
+                "(nail_region). nail_local_frame 은 아직 대체 좌표라 "
+                "실측 티칭 전에는 로봇을 손 위로 보내지 말 것.")),
         DeclareLaunchArgument('log_level', default_value='info',
                                description='debug 로 주면 §3.5 DEBUG 급 힘 로그도 보임'),
         OpaqueFunction(function=_launch_setup),

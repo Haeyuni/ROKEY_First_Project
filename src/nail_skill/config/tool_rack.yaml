@@ -25,7 +25,7 @@
 #     넘기고, robot_skill_node 가 그 이름을 좌표로 바꾼다.
 #     조회 순서: ① targets.yaml 의 최상위 키에서 찾는다
 #                ② 없으면 그 이름을 TF 프레임으로 간주해 조회한다
-#     → 지금은 ① 을 쓴다. 그래서 값이 targets.yaml 의 키(probe/sander/...)와
+#     → 지금은 ① 을 쓴다. 그래서 값이 targets.yaml 의 키(sander/brush/...)와
 #       글자 그대로 같아야 한다. 여기를 고쳤으면 targets.yaml 도 같이 고칠 것.
 #
 # expected_grip_width_mm : 이 툴을 잡았을 때 그리퍼가 벌어져 있어야 할 폭 (mm).
@@ -70,15 +70,11 @@
 #
 # ============================================================================
 
-tools:
-  probe:                              # 탐침 — 스캔/검사용
-    slot_frame: probe                 # targets.yaml 의 'probe' 키
-    expected_grip_width_mm: 12.0      # TODO: 손잡이 폭 실측
-    # TODO: 실측. 이전 값 [668.58, 100.75, 372.13, 52.45, -179.77, 52.79] 은
-    # 펜던트 절대 자세를 잘못 넣은 것이라 0 으로 되돌림 (넣은 채로 두면
-    # set_tcp 이후 모든 이동이 66cm 어긋남).
-    tcp_offset: [0, 0, 0, 0, 0, 0]
+# ※ probe(탐침)는 목록에서 빠졌다 — ProbePoint 스킬과 그걸 쓰던
+#   scan_node / inspection_node 가 폐지되어 집을 일이 없다. 여기 없는
+#   이름은 ChangeTool 이 E_INVALID_GOAL 로 거부한다.
 
+tools:
   sander:                             # 네일 파일: width_mm(clear)
     slot_frame: sander
     expected_grip_width_mm: 50.0      # TODO: 손잡이 폭 실측 (현재 NIS 예시값)

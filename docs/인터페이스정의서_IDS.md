@@ -1,6 +1,7 @@
 # 인터페이스 정의서 (Interface Definition Specification)
 
-**문서 ID** IDS-NAIL-v1.0 · **작성일** 2026-08-21
+**문서 ID** IDS-NAIL-v1.1 · **작성일** 2026-08-24
+**이전판** IDS-NAIL-v1.0 (2026-08-21)
 **대상 패키지** `nail_msgs`
 
 > 이 문서는 `nail_msgs` 패키지에 그대로 배치할 인터페이스 정의 전문입니다.
@@ -12,9 +13,40 @@
 
 | 버전 | 변경 |
 |---|---|
+| v1.1 | **탐침(ProbePoint) 계열 전면 폐지** — `scan_node`·`inspection_node` 제거에 따른 정리. 아래 표 참조 |
 | v1.0 | 초판. `LateralContact` 신설 · UV permit 폐지 · 2단계 스캔 · 3점 검사 반영 · `mock_robot_driver` 제거 |
 
-**폐지된 인터페이스** (v0.x 문서에 있었다면 삭제)
+### v1.1 에서 폐지된 인터페이스 ★
+
+`scan_node`(2단계 강성 스캔)와 `inspection_node`(택프리 3점 검사)를 일정
+사유로 구현하지 않기로 하면서, **그 두 노드만 쓰던 인터페이스를 전부
+삭제**했습니다. 손톱 경계는 이제 측정 결과가 아니라
+`nail_bringup/config/static_frames.yaml` 에 티칭해 둔 설정값
+(`nail_local_frame` + `nail_region`)에서 옵니다.
+
+| 항목 | 종류 | 사유 |
+|---|---|---|
+| `ProbePoint.action` | action | 유일한 소비자였던 scan/inspection/stone-verify 가 전부 사라짐 |
+| `ScanBoundary.action` | action | `scan_node` 폐지 |
+| `InspectCure.action` | action | `inspection_node` 폐지 |
+| `GetStiffnessMap.srv` | srv | 강성 맵이 더 이상 생성되지 않음 |
+| `StiffnessMap.msg` | msg | 위와 동일 |
+| `StiffnessPoint.msg` | msg | `ProbePoint` 결과 타입 |
+| `BoundaryRegion.msg` | msg | 경계가 설정값이 되어 메시지로 실어 나를 대상이 아님 |
+| `ValidationResult.msg` | msg | 판정 주체(inspection, stone verify)가 전부 사라짐 |
+| `E_NO_SCAN`, `E_COARSE_INSUFFICIENT`, `E_SEPARATION_LOW`, `E_MAP_SESSION_MISMATCH` | 에러코드 | 스캔 전용 |
+| `E_REWORK_EXCEEDED` | 에러코드 | 재작업 판정 근거(InspectCure)가 없어 REWORK 루프 자체가 폐지 |
+| `E_STONE_MISS` | 에러코드 | 부착 위치 검증이 ProbePoint 기반이었음 |
+| `SafetyState.scan_valid` | 필드 | 검증할 스캔이 없음 |
+| `ValidatePrecondition` 의 `STAGE_SCAN`, `STAGE_INSPECT` | 상수 | 해당 스테이지 소멸 |
+| `ProcessState` 의 `STAGE_SCAN`, `STAGE_INSPECT`, `STAGE_REWORK`, `rework_count` | 상수·필드 | 위와 동일 |
+| `ToolState.PROBE` | 상수 | 탐침 툴을 집을 일이 없음 |
+| `RunSession` 의 `max_rework`, `scan_result`, `all_results`, `total_rework` | 필드 | 스캔 결과·검사 이력·재작업이 전부 없음 |
+| `CureUV` 의 `target_regions`, `exposure_scale` | 필드 | 부분 재조사(REWORK) 폐지 |
+| `SandSurface.forbidden_margin_mm` | 필드 | `forbidden_polygon` 을 측정할 수단이 없음 |
+| `PlaceStone` 의 `press_force_n`, `position_tolerance_mm`, `max_retry`, `verify_enabled`, `verify_probe_count`, `position_error_mm`, `retry_count` | 필드 | 힘 제어 하강·부착 검증 폐지 |
+
+**v1.0 에서 이미 폐지된 것들** (v0.x 문서에 있었다면 삭제)
 
 | 항목 | 사유 |
 |---|---|
@@ -35,36 +67,28 @@ nail_msgs/
 │   ├── ErrorCode.msg
 │   ├── ResultBase.msg
 │   ├── ForceSample.msg
-│   ├── StiffnessPoint.msg
-│   ├── StiffnessMap.msg
-│   ├── BoundaryRegion.msg
 │   ├── SafetyState.msg
 │   ├── ToolState.msg
-│   ├── ProcessState.msg
-│   └── ValidationResult.msg
+│   └── ProcessState.msg
 ├── srv/
 │   ├── ValidatePrecondition.srv
 │   ├── ResetSafety.srv
-│   ├── GetStiffnessMap.srv
 │   └── GetToolInfo.srv
 └── action/
     ├── MoveTo.action
     ├── PickPlace.action
     ├── ContactPath.action
     ├── LateralContact.action
-    ├── ProbePoint.action
     ├── ChangeTool.action
-    ├── ScanBoundary.action
     ├── SandSurface.action
     ├── BrushDust.action
     ├── CoatGel.action
     ├── CureUV.action
-    ├── InspectCure.action
     ├── PlaceStone.action
     └── RunSession.action
 ```
 
-**합계**: msg 10 · srv 4 · action 14
+**합계**: msg 6 · srv 3 · action 11 (v1.0 대비 msg -4 · srv -1 · action -3)
 
 ### 1.1 CMakeLists.txt
 
@@ -82,29 +106,21 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ErrorCode.msg"
   "msg/ResultBase.msg"
   "msg/ForceSample.msg"
-  "msg/StiffnessPoint.msg"
-  "msg/StiffnessMap.msg"
-  "msg/BoundaryRegion.msg"
   "msg/SafetyState.msg"
   "msg/ToolState.msg"
   "msg/ProcessState.msg"
-  "msg/ValidationResult.msg"
   "srv/ValidatePrecondition.srv"
   "srv/ResetSafety.srv"
-  "srv/GetStiffnessMap.srv"
   "srv/GetToolInfo.srv"
   "action/MoveTo.action"
   "action/PickPlace.action"
   "action/ContactPath.action"
   "action/LateralContact.action"
-  "action/ProbePoint.action"
   "action/ChangeTool.action"
-  "action/ScanBoundary.action"
   "action/SandSurface.action"
   "action/BrushDust.action"
   "action/CoatGel.action"
   "action/CureUV.action"
-  "action/InspectCure.action"
   "action/PlaceStone.action"
   "action/RunSession.action"
   DEPENDENCIES std_msgs geometry_msgs builtin_interfaces
@@ -192,29 +208,19 @@ string E_CANCELLED             = "E_CANCELLED"
 string E_COMM_LOST             = "E_COMM_LOST"
 string E_MOTION_FAILED         = "E_MOTION_FAILED"
 
-# 스캔 / 경계
-string E_COARSE_INSUFFICIENT   = "E_COARSE_INSUFFICIENT"
-string E_SEPARATION_LOW        = "E_SEPARATION_LOW"
-string E_NO_SCAN               = "E_NO_SCAN"
-
 # 접촉 (법선)
-string E_NO_CONTACT            = "E_NO_CONTACT"
-string E_OVERFORCE             = "E_OVERFORCE"
-string E_LOW_STIFFNESS         = "E_LOW_STIFFNESS"
+string E_NO_CONTACT             = "E_NO_CONTACT"
+string E_OVERFORCE              = "E_OVERFORCE"
+string E_LOW_STIFFNESS          = "E_LOW_STIFFNESS"
 
 # 접촉 (수평) — 연마 전용
-string E_LATERAL_LIMIT         = "E_LATERAL_LIMIT"
-string E_LATERAL_JAM           = "E_LATERAL_JAM"
+string E_LATERAL_LIMIT          = "E_LATERAL_LIMIT"
+string E_LATERAL_JAM            = "E_LATERAL_JAM"
 
 # 툴
-string E_TOOL_MISMATCH         = "E_TOOL_MISMATCH"
-string E_GRIP_FAILED           = "E_GRIP_FAILED"
-string E_TOOL_DROP             = "E_TOOL_DROP"
-
-# 세션
-string E_REWORK_EXCEEDED       = "E_REWORK_EXCEEDED"
-string E_MAP_SESSION_MISMATCH  = "E_MAP_SESSION_MISMATCH"
-string E_STONE_MISS            = "E_STONE_MISS"
+string E_TOOL_MISMATCH          = "E_TOOL_MISMATCH"
+string E_GRIP_FAILED            = "E_GRIP_FAILED"
+string E_TOOL_DROP              = "E_TOOL_DROP"
 
 # 심각도
 uint8 SEV_NONE   = 0
@@ -255,68 +261,7 @@ float64 ty_nm
 float64 tz_nm
 ```
 
-### 3.4 StiffnessPoint.msg
-
-```
-# 한 점의 압입 측정 결과. 스캔과 택프리 검사가 공유한다.
-
-string SRC_COARSE = "coarse"
-string SRC_FINE   = "fine"
-string SRC_VERIFY = "verify"
-
-geometry_msgs/Point position          # nail_frame 또는 nail_local_frame 기준, mm
-float64 stiffness_n_per_mm            # 하강 구간 선형회귀 기울기
-float64 release_force_n               # 이탈 시 최저 Fz. 음수면 점착
-float64 hysteresis_ratio              # 로딩/언로딩 면적비. 연조직 보조 판별
-float64 contact_depth_mm              # 접촉 후 압입 깊이
-float64 lateral_force_n               # 접촉 시 측면 힘. 비스듬 접촉 검출
-string  source                        # SRC_*
-bool    valid                         # false면 미접촉 또는 측정 실패
-```
-
-### 3.5 StiffnessMap.msg
-
-```
-std_msgs/Header header
-
-string  session_id                    # 필수. E_MAP_SESSION_MISMATCH 검증용
-string  frame_id                      # 좌표 기준 프레임
-
-nail_msgs/StiffnessPoint[] points     # coarse + fine 통합
-
-# --- 2단계 스캔 메타 ---
-float64 coarse_pitch_mm
-float64 fine_pitch_mm
-int32   coarse_point_count
-int32   fine_point_count
-int32   candidate_count               # 경계 후보 쌍 개수
-
-# --- 판정 결과 ---
-bool    valid                         # false면 후속 공정 전부 진입 불가
-float64 threshold_k_n_per_mm          # 손톱/피부 분리 임계 강성
-float64 separation_margin             # 군집간거리 / 군집내분산
-int32   cluster_hard_count
-int32   cluster_soft_count
-string  reject_reason                 # valid=false 사유
-
-nail_msgs/BoundaryRegion region
-
-builtin_interfaces/Time created_at
-```
-
-### 3.6 BoundaryRegion.msg
-
-```
-geometry_msgs/Point[] boundary_polygon    # 고강성(가공 허용) 외곽선
-geometry_msgs/Point[] forbidden_polygon   # 저강성(가공 금지)
-geometry_msgs/Point[] coat_polygon        # boundary에서 offset 안쪽
-
-float64 boundary_offset_mm
-float64 repeat_deviation_mm               # 반복 측정 편차
-bool    reliable
-```
-
-### 3.7 SafetyState.msg
+### 3.4 SafetyState.msg
 
 ```
 std_msgs/Header header
@@ -328,7 +273,6 @@ bool comm_ok
 bool handrest_seated
 bool dust_extraction_on
 bool tool_grip_ok
-bool scan_valid
 
 string FAULT_ESTOP        = "FAULT_ESTOP"
 string FAULT_COMM_LOST    = "FAULT_COMM_LOST"
@@ -342,40 +286,36 @@ string   reason                       # 사람이 읽을 설명
 
 > **UV 관련 필드가 없습니다.** 상시 ON 정책이므로 소프트웨어가 UV 상태를 소유하지 않습니다. UV 차단은 물리 결선(SDS §9.3)이 담당합니다.
 
-### 3.8 ToolState.msg
+### 3.5 ToolState.msg
 
 ```
 std_msgs/Header header
 
-string NONE    = "none"
-string PROBE   = "probe"
-string SANDER  = "sander"
-string BRUSH   = "brush"
-string COATER  = "coater"
-string UV      = "uv"
-string TWEEZERS= "tweezers"
+string NONE     = "none"
+string SANDER   = "sander"
+string BRUSH    = "brush"
+string COATER   = "coater"
+string UV       = "uv"
+string TWEEZERS = "tweezers"
 
 string  current_tool
-string  active_tcp                    # tcp_probe, tcp_sander, …
+string  active_tcp                    # tcp_sander, tcp_coater, …
 float64 grip_width_mm
 float64 expected_width_mm
 bool    grip_verified
 ```
 
-### 3.9 ProcessState.msg
+### 3.6 ProcessState.msg
 
 ```
 std_msgs/Header header
 
 string STAGE_IDLE     = "IDLE"
 string STAGE_PRECHECK = "PRECHECK"
-string STAGE_SCAN     = "SCAN"
 string STAGE_SAND     = "SAND"
 string STAGE_BRUSH    = "BRUSH"
 string STAGE_COAT     = "COAT"
 string STAGE_CURE     = "CURE"
-string STAGE_INSPECT  = "INSPECT"
-string STAGE_REWORK   = "REWORK"
 string STAGE_STONE    = "STONE"
 string STAGE_FINISH   = "FINISH"
 string STAGE_ABORTED  = "ABORTED"
@@ -384,39 +324,11 @@ string  session_id
 string  stage
 int32   layer_index
 int32   layer_total
-int32   rework_count
 float64 stage_percent
 float64 session_percent
 string  current_tool
 nail_msgs/ErrorCode last_error
 ```
-
-### 3.10 ValidationResult.msg
-
-```
-string POINT_CENTER = "center"
-string POINT_LEFT   = "left"
-string POINT_RIGHT  = "right"
-
-string RESULT_PASS  = "PASS"
-string RESULT_FAIL  = "FAIL"
-string RESULT_SKIP  = "SKIP"     # 마진 부족으로 측정 안 함
-
-string  session_id
-int32   layer_index
-string  point_label              # POINT_*
-geometry_msgs/Point position
-
-float64 release_force_n
-float64 stiffness_n_per_mm
-float64 threshold_n              # 판정에 쓴 임계값 (사후 재해석용)
-string  result
-
-nail_msgs/ForceSample[] waveform # FAIL 시 필수. PASS 시 생략 가능
-builtin_interfaces/Time measured_at
-```
-
-> **`threshold_n`을 결과에 함께 저장하는 이유**: 임계값은 캘리브레이션으로 계속 바뀝니다. 판정 시점의 임계값이 없으면 나중에 데이터를 다시 해석할 수 없습니다.
 
 ---
 
@@ -427,12 +339,10 @@ builtin_interfaces/Time measured_at
 ```
 # 모든 공정 노드가 goal 수락 전에 호출한다.
 
-string STAGE_SCAN    = "SCAN"
 string STAGE_SAND    = "SAND"
 string STAGE_BRUSH   = "BRUSH"
 string STAGE_COAT    = "COAT"
 string STAGE_CURE    = "CURE"
-string STAGE_INSPECT = "INSPECT"
 string STAGE_STONE   = "STONE"
 
 string stage
@@ -453,17 +363,7 @@ bool     ok                    # remaining_faults 가 비었을 때만 true
 string[] remaining_faults
 ```
 
-### 4.3 GetStiffnessMap.srv
-
-```
-string session_id              # 불일치 시 found=false + E_MAP_SESSION_MISMATCH
----
-bool                    found
-nail_msgs/StiffnessMap  map
-nail_msgs/ErrorCode     error
-```
-
-### 4.4 GetToolInfo.srv
+### 4.3 GetToolInfo.srv
 
 ```
 string tool_id                 # 빈 문자열이면 현재 장착 툴
@@ -483,6 +383,12 @@ string               slot_frame
 ```
 geometry_msgs/Pose target
 string  frame_id
+string  target_key             # 비어있지 않으면 targets.yaml 의 target_key 를
+                                # 찾아 target/frame_id 대신 그 좌표로 이동한다
+                                # (PickPlace 와 동일한 조회 — rz1/ry/rz2 를
+                                # quaternion 변환 없이 그대로 써서 짐벌락 근처
+                                # 자세도 안전하게 지정 가능). 비어있으면 기존
+                                # 대로 target/frame_id 를 쓴다.
 bool    linear                 # true=movel, false=movej
 float64 speed_ratio            # 0.0~1.0
 float64 accel_ratio
@@ -509,6 +415,14 @@ float64 grip_width_mm          # PICK 시 목표 폭
 float64 expected_width_mm
 float64 width_tolerance_mm
 bool    verify_grip
+bool    already_holding        # 그리퍼가 이미 툴(예: 핀셋)을 쥔 채로 호출됨.
+                                # PICK: 하강 전 완전개방(gripper_open_width_mm)을
+                                # 건너뛰고 지금 쥔 폭 그대로 목표 위치로 내려가
+                                # grip_width_mm/expected_width_mm 로 좁힌다 —
+                                # 완전개방하면 쥐고 있던 툴 자체를 놓친다.
+                                # PLACE: 완전개방 대신 grip_width_mm/
+                                # expected_width_mm 폭까지만 벌려서 놓는다 —
+                                # 예: 스톤만 놓고 핀셋 손잡이는 계속 쥔 채 유지.
 ---
 nail_msgs/ResultBase base
 float64 measured_width_mm
@@ -576,7 +490,7 @@ float64 max_force_n                     # 접근축 상한
 float64 jam_force_n                     # 진행축 걸림 판정
 float64 feed_speed_mms
 
-float64 travel_limit_mm      ★          # 접근축 최대 진행 거리. 0 이하면 REJECT
+float64 travel_limit_mm                 # 접근축 최대 진행 거리. 0 이하면 REJECT
 float64 retreat_mm                      # 이탈 시 역방향 후퇴 거리
 
 int32   passes
@@ -585,7 +499,7 @@ float64 max_duration_s
 nail_msgs/ResultBase base
 float64 mean_force_n
 float64 max_force_measured_n
-float64 max_travel_mm        ★          # 실제 최대 진행. 한계 대비 여유 확인
+float64 max_travel_mm                   # 실제 최대 진행. 한계 대비 여유 확인
 float64 applied_travel_limit_mm         # 적용된 한계값 (리포트 기록)
 float64 max_jam_force_n
 int32   passes_done
@@ -598,34 +512,7 @@ float64 travel_mm                       # 현재 진행 거리 → UI 게이지
 nail_msgs/ForceSample current_wrench
 ```
 
-### 5.5 ProbePoint.action
-
-```
-# 스캔과 택프리 검사가 공유하는 최소 단위.
-
-geometry_msgs/Point target
-string  frame_id
-float64 approach_height_mm
-float64 probe_speed_mms
-float64 contact_threshold_n
-float64 max_depth_mm
-float64 max_force_n
-float64 lateral_force_limit_n
-
-bool    measure_release                 # true면 이탈 중 Fz 측정 (택프리)
-float64 release_speed_mms
-string  source_tag                      # StiffnessPoint.source 에 기록
----
-nail_msgs/ResultBase base
-nail_msgs/StiffnessPoint point
-nail_msgs/ForceSample[] waveform        # 하강+이탈 전체 파형
-int32   regression_samples              # 회귀에 쓴 표본 수
----
-float64 current_depth_mm
-float64 current_force_n
-```
-
-### 5.6 ChangeTool.action
+### 5.5 ChangeTool.action
 
 ```
 string  target_tool                     # ToolState 상수. "none"이면 반납만
@@ -646,48 +533,7 @@ float64 percent
 
 ## 6. action — B계층 (공정)
 
-### 6.1 ScanBoundary.action — 2단계 ★
-
-```
-string  session_id
-string  frame_id
-
-# 스캔 영역
-float64 area_x_mm
-float64 area_y_mm
-float64 margin_mm
-
-# 1단계
-float64 coarse_pitch_mm                 # 기본 3.0
-int32   coarse_min_valid_points
-int32   coarse_min_per_cluster
-
-# 2단계
-float64 fine_pitch_mm                   # 기본 1.0
-float64 boundary_band_mm                # 후보 중점 기준 밴드 폭
-int32   fine_max_points                 # 시간 폭주 방지
-
-# 판정
-float64 separation_margin_min
-float64 invalid_point_max_ratio
----
-nail_msgs/ResultBase base
-nail_msgs/StiffnessMap map
----
-string STAGE_COARSE    = "COARSE"
-string STAGE_CANDIDATE = "CANDIDATE"
-string STAGE_FINE      = "FINE"
-
-string  stage
-nail_msgs/StiffnessPoint last_point
-int32   points_done
-int32   points_total
-int32   candidate_count
-float64 stage_percent
-float64 overall_percent                 # coarse 30% + fine 70% 가중
-```
-
-### 6.2 SandSurface.action
+### 6.1 SandSurface.action
 
 ```
 string  session_id
@@ -709,14 +555,13 @@ float64 step_over_mm
 float64 feed_speed_mms
 float64 max_duration_s
 
-float64 travel_limit_margin_mm  ★       # 경계까지 거리에서 뺄 안전 마진
-float64 forbidden_margin_mm
+float64 travel_limit_margin_mm          # 경계까지 거리에서 뺄 안전 마진
 ---
 nail_msgs/ResultBase base
 float64 mean_force_n
 float64 max_force_measured_n
 float64 max_travel_mm
-float64 computed_travel_limit_mm ★      # 이번 세션에 계산된 한계값
+float64 computed_travel_limit_mm        # 이번 세션에 계산된 한계값
 float64 max_jam_force_n
 int32   passes_done
 string  abort_reason
@@ -727,7 +572,7 @@ float64 travel_mm
 nail_msgs/ForceSample current_wrench
 ```
 
-### 6.3 BrushDust.action
+### 6.2 BrushDust.action
 
 ```
 string  session_id
@@ -747,7 +592,7 @@ float64 percent
 int32   current_pass
 ```
 
-### 6.4 CoatGel.action
+### 6.3 CoatGel.action
 
 ```
 string  session_id
@@ -774,21 +619,23 @@ int32   current_pass
 
 > **`coverage_ratio`는 기록용입니다.** 도포 두께는 측정하지 않으며, 요구사항은 "빈 영역 없이 덮였는가"로 한정됩니다. result 에 두께 필드를 추가하지 마세요.
 
-### 6.5 CureUV.action — permit 없음
+### 6.4 CureUV.action — permit 없음
 
 ```
 # UV 램프는 상시 ON 이다. 이 액션은 "언제 켜는가"가 아니라
 # "얼마나 오래 그 자리에 머무는가"로 조사량을 만든다.
+#
+# 부분 재조사(target_regions / exposure_scale)는 제거됐다 — 어디가 덜
+# 굳었는지 판정하던 inspection_node 가 폐지돼 채울 근거가 없어졌다.
+# 항상 손톱 전체를 dwell_points 개 지점으로 한 번 조사한다.
 
 string  session_id
 int32   layer_index
 
-geometry_msgs/Point[] target_regions    # 비어 있으면 전체. 차 있으면 부분 재조사
 float64 standoff_mm
 float64 standoff_tolerance_mm
 int32   dwell_points
 float64 dwell_s_per_point
-float64 exposure_scale                  # 재조사 시 1.5 등
 float64 path_speed_mms
 float64 park_distance_mm
 float64 max_duration_s                  # 모션 타임아웃 (램프 아님)
@@ -808,62 +655,32 @@ float64 current_standoff_mm
 
 > **`parked`를 반드시 확인하세요.** permit이 없으므로 안전 결함 시 유일한 대응은 물리적 이탈입니다. `parked=false`로 종료되는 경로가 있다면 그것 자체가 안전 결함입니다.
 
-### 6.6 InspectCure.action — 3점 고정
+### 6.5 PlaceStone.action
 
 ```
-# 검사점은 중앙 · 좌 · 우 3점으로 고정한다.
+# 스톤 픽업 → 티칭된 높이로 위치 제어 하강 → 압착 유지 → 그리퍼 개방.
+#
+# 힘 제어 하강과 부착 위치 검증은 `/skill/probe_point`(ProbePoint)로만
+# 가능했고, 그 스킬이 폐지되면서 함께 제거됐다. 그래서 이 액션에는
+# press_force_n / position_tolerance_mm / max_retry / verify_* 가 없고,
+# 결과에도 position_error_mm / retry_count 가 없다 — 채울 근거가 없는
+# 필드를 남겨두면 그게 곧 쓰레기값이 된다.
+#
+# 압착 깊이는 stone_node 의 `press_offset_mm` 파라미터가 정한다.
+# 부착 성공 여부는 사람이 눈으로 확인해야 한다.
 
 string  session_id
-int32   layer_index
-
-float64 center_offset_x_ratio           # 0 = 손톱 중심
-float64 side_offset_y_ratio             # 경계까지 거리 대비 비율
-float64 min_edge_clearance_mm           # 좌우점 최소 경계 이격
-
-float64 tack_threshold_n
-bool    require_all_pass
-
-float64 probe_depth_mm
-float64 probe_max_force_n               # 젤 관통 방지 상한
-float64 release_speed_mms
-float64 point_timeout_s
----
-nail_msgs/ResultBase base
-bool    passed
-nail_msgs/ValidationResult[] results    # 3개 (마진 부족 시 SKIP 포함)
-geometry_msgs/Point[] fail_points       # REWORK 대상 좌표
-int32   points_measured
-string  abort_reason
----
-float64 percent
-nail_msgs/ValidationResult last_result
-```
-
-> **3점의 한계를 결과 해석에 반영하세요.** `passed=true`는 "손톱 전체가 경화됨"이 아니라 **"검사한 3개 지점이 기준을 만족함"**입니다. 리포트 문구를 그렇게 쓰세요.
-
-### 6.7 PlaceStone.action
-
-```
-string  session_id
-geometry_msgs/Point target_position
+geometry_msgs/Point target_position     # nail_local_frame 기준, m
 float64 target_yaw_deg
 
-float64 press_force_n
 float64 press_duration_s
-float64 position_tolerance_mm
-int32   max_retry
-
-bool    verify_enabled                  # 기본 false
-int32   verify_probe_count
 float64 approach_height_mm
 ---
 nail_msgs/ResultBase base
-geometry_msgs/Point actual_position
-float64 position_error_mm               # verify_enabled=false 면 -1.0
-int32   retry_count
+geometry_msgs/Point actual_position     # 명령값 (측정 아님)
 string  abort_reason
 ---
-int32   step
+int32   step                            # 0=픽업 1=접근 2=하강 3=개방 4=완료
 float64 percent
 ```
 
@@ -880,7 +697,6 @@ string  shape_profile_id
 string  target_material                 # 안전 검증용. 사람 신체 금지 (BR-029)
 
 int32   layer_total
-int32   max_rework
 bool    enable_brush
 bool    enable_stone
 ---
@@ -892,10 +708,7 @@ string RESULT_CANCELLED       = "CANCELLED"
 
 bool    success
 string  result_code
-nail_msgs/StiffnessMap scan_result
-nail_msgs/ValidationResult[] all_results
 nail_msgs/ErrorCode final_error
-int32   total_rework
 int32   warn_count
 builtin_interfaces/Time started_at
 builtin_interfaces/Time finished_at
@@ -916,11 +729,14 @@ nail_msgs/ProcessState state            # ProcessState 를 통째로 전달
 | `/robot/pose` | `PoseStamped` | robot_skill | 50 Hz | BEST_EFFORT, depth 1 |
 | `/safety/status` | `SafetyState` | safety_monitor | 20 Hz | **RELIABLE + TRANSIENT_LOCAL** |
 | `/tool/status` | `ToolState` | tool_manager | 변경 시 | **RELIABLE + TRANSIENT_LOCAL** |
-| `/stiffness/map` | `StiffnessMap` | scan_node | 완료 시 | **RELIABLE + TRANSIENT_LOCAL** |
 | `/process/status` | `ProcessState` | orchestrator | 변경 + 1 Hz | **RELIABLE + TRANSIENT_LOCAL** |
-| `/validation/result` | `ValidationResult` | inspection, stone | 이벤트 | RELIABLE, depth 20 |
 
-**TRANSIENT_LOCAL 을 쓴 4개는 "늦게 뜬 노드도 즉시 현재 상태를 받아야 하는" 것들입니다.** 특히 `/safety/status`가 VOLATILE 이면, 재시작한 노드가 안전 상태를 모르는 창(window)이 생깁니다.
+> v1.1 삭제: `/stiffness/map`(scan_node 발행)과 `/validation/result`
+> (inspection·stone 발행). 두 노드가 폐지되어 발행자가 없어졌습니다 —
+> `nail_bridge/config/web_bridge.yaml` 의 `relay_topics` 에서도 함께
+> 뺐습니다. 남겨두면 웹이 영원히 오지 않는 토픽을 기다립니다.
+
+**TRANSIENT_LOCAL 을 쓴 3개는 "늦게 뜬 노드도 즉시 현재 상태를 받아야 하는" 것들입니다.** 특히 `/safety/status`가 VOLATILE 이면, 재시작한 노드가 안전 상태를 모르는 창(window)이 생깁니다.
 
 **`/force/data`(100 Hz)는 웹으로 중계하지 마세요.** WebSocket 이 버티지 못합니다.
 
@@ -938,3 +754,9 @@ nail_msgs/ProcessState state            # ProcessState 를 통째로 전달
 - [ ] `session_id` 가 필요한 인터페이스에 빠짐없이 있음
 - [ ] UV permit 관련 잔재가 없음 (`grep -ri "permit" nail_msgs/` 무결과)
 - [ ] mock 관련 잔재가 없음 (`grep -ri "mock" nail_msgs/` 무결과)
+- [ ] **탐침/스캔/검사 잔재가 없음** (v1.1):
+      `grep -riE "probe|scan|stiffness|inspect|rework" nail_msgs/` 가
+      `PlaceStone.action` 의 폐지 설명 주석 외에는 아무것도 안 잡혀야 함
+- [ ] `CMakeLists.txt` 의 `rosidl_generate_interfaces` 목록과 `msg/`·`srv/`·
+      `action/` 실제 파일 목록이 정확히 일치 (하나라도 어긋나면 빌드가 아니라
+      **런타임 import 에서** 터진다)
