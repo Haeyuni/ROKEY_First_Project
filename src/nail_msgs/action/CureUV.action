@@ -19,9 +19,11 @@ float64 max_duration_s                  # 모션 타임아웃 (램프 아님)
 # (선택) 수동 지정 왕복 경로 — base_link 절대좌표 기준(targets.yaml 값을
 # 변환 없이 그대로 넣을 수 있게 하기 위함). 2개 이상이면
 # dwell_points/nail_size_x_mm/y_mm 기반 계산을 건너뛰고 이 지점들을
-# movej(관절 보간)로 오실레이션 왕복한다 — dwell_s_per_point 는 이 모드에서
-# 적용되지 않는다(체류 없이 바로 다음 지점으로 이동). 그 기본 계산 경로
-# (waypoints 미지정)는 movel + dwell_s_per_point 체류를 그대로 유지한다.
+# movel(직선)로 오실레이션 왕복한다 — dwell_s_per_point 는 이 모드에서
+# 적용되지 않는다(체류 없이 바로 다음 지점으로 이동). movej(관절 보간)도
+# 시도해봤으나 지점 간 차이가 크면 직선이 아닌 휩쓰는 궤적이 나와(실기
+# 확인) movel로 되돌렸다. 기본 계산 경로(waypoints 미지정)는 movel +
+# dwell_s_per_point 체류를 그대로 유지한다.
 # SandSurface.waypoints와 동일한 패턴·이유로 nail_msgs/TaskPose 를 쓴다
 # (geometry_msgs/Pose 아님 — quaternion 변환 없이 x_mm/y_mm/z_mm/A/B/C
 # 그대로). 안전 확인은 호출자 책임.

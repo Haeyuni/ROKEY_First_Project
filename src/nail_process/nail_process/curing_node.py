@@ -348,13 +348,14 @@ class CuringNode(Node):
                     abort_code, abort_detail = ErrorCode.E_TIMEOUT, \
                         f'max_duration_s({max_duration}) 초과'
                     break
-                # 수동 waypoints 모드는 movej(관절 보간, linear=False)로
-                # 지점만 순회한다 — movel 대신 써달라는 요청. 기본(경계 기반)
-                # 모드는 계속 movel 을 쓴다.
+                # movej(관절 보간)로 바꿔봤으나 지점 간 차이가 커 직선이 아닌
+                # 휩쓰는 궤적이 나오는 것으로 실기 확인(2026-08-24) — movel로
+                # 되돌림. 개별 MoveTo(target_key, linear=true) 테스트가 정확히
+                # 목표로 간 것과 동일하게, 각 waypoint 로 movel 직선 이동한다.
                 reason, mv_result = self._move(target_pose, speed_ratio, goal_handle,
                                                 max(1.0, deadline - time.monotonic()),
                                                 frame_id=dwell_frame_id,
-                                                linear=not use_custom_waypoints)
+                                                linear=True)
                 if reason != 'ok':
                     abort_code, abort_detail = self._reason_to_code(reason, mv_result)
                     break
