@@ -199,6 +199,12 @@ class RobotSkillNode(Node):
         d('compliance_stiffness', [500.0, 500.0, 200.0, 50.0, 50.0, 50.0])
         d('contact_force_ramp_mms', 1.0)
         d('contact_stiffness_window', 20)
+        # F/T 센서 미장착·미작동 하드웨어 대응 — lateral_force_sensing_enabled
+        # 와 동일한 이유(§5.1 경고). false 면 접촉 탐색(힘 임계값 도달까지
+        # 하강)과 힘 추종(compliance/target_force)을 전부 건너뛰고, waypoints
+        # 를 좌표만으로 그대로 따라간다 — max_force_n 초과 감시도 못 한다.
+        # **waypoints 의 z 가 실제로 표면과 맞는지는 사람이 보장해야 한다.**
+        d('contact_force_sensing_enabled', True)
         # LateralContact
         d('lateral_search_speed_mms', 3.0)
         d('lateral_contact_threshold_n', 0.3)
@@ -766,26 +772,49 @@ class RobotSkillNode(Node):
                                                      context='ContactPath')
             return result
 
+        force_sensing = self.get_parameter('contact_force_sensing_enabled').value
+
         # 표면 탐색: 접촉 감지까지 조금씩 하강
         step_mm = self.get_parameter('contact_search_step_mm').value
         travelled = 0.0
         contacted = False
-        while travelled < search_max_depth:
+        if not force_sensing:
+            # 힘 센서 미작동 — waypoints[0] 의 z 를 표면으로 신뢰하고 그
+            # 좌표까지 직접 이동한다(LateralContact 의
+            # lateral_force_sensing_enabled=False 와 동일한 방식). 접촉
+            # 감지/과압 방어가 없으므로 waypoints 의 z 가 실제로 표면과
+            # 맞는지는 사람이 보장해야 한다.
             if goal_handle.is_cancel_requested or not self._safe_to_move():
                 self._cleanup_normal(goal_handle)
                 reason = 'cancel' if goal_handle.is_cancel_requested else 'safety'
                 result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                         context='ContactPath 탐색')
+                                                         context='ContactPath 탐색(좌표전용)')
                 return result
-            # 실기 확인: 이 툴 자세(ry≈-179°)에서는 tool +Z 가 표면 쪽이다.
-            self._adapter.start_move_rel_tool_z(step_mm, search_speed, search_speed * 2)
-            self._monitor(goal_handle, 5.0, 20.0, lambda: None)
-            travelled += step_mm
-            w = self._adapter.read_wrench()
-            force_log.append(self._wrench_to_msg(w))
-            if abs(w.fz_n) >= contact_threshold:
-                contacted = True
-                break
+            self._adapter.start_move_line(start_pose, search_speed, search_speed * 2)
+            reason = self._monitor(goal_handle, timeout_s, 20.0, lambda: feedback(10.0, 0))
+            if reason != 'ok':
+                self._cleanup_normal(goal_handle)
+                result.base = self._finish_from_reason(reason, goal_handle, started_at,
+                                                         context='ContactPath 탐색(좌표전용)')
+                return result
+            contacted = True
+        else:
+            while travelled < search_max_depth:
+                if goal_handle.is_cancel_requested or not self._safe_to_move():
+                    self._cleanup_normal(goal_handle)
+                    reason = 'cancel' if goal_handle.is_cancel_requested else 'safety'
+                    result.base = self._finish_from_reason(reason, goal_handle, started_at,
+                                                             context='ContactPath 탐색')
+                    return result
+                # 실기 확인: 이 툴 자세(ry≈-179°)에서는 tool +Z 가 표면 쪽이다.
+                self._adapter.start_move_rel_tool_z(step_mm, search_speed, search_speed * 2)
+                self._monitor(goal_handle, 5.0, 20.0, lambda: None)
+                travelled += step_mm
+                w = self._adapter.read_wrench()
+                force_log.append(self._wrench_to_msg(w))
+                if abs(w.fz_n) >= contact_threshold:
+                    contacted = True
+                    break
 
         if not contacted:
             self._cleanup_normal(goal_handle)
@@ -797,10 +826,11 @@ class RobotSkillNode(Node):
             result.force_log = force_log
             return result
 
-        if goal.use_compliance:
-            self._adapter.compliance_on(self.get_parameter('compliance_stiffness').value)
-        self._adapter.set_desired_force([0.0, 0.0, -abs(goal.target_force_n), 0.0, 0.0, 0.0],
-                                         [0, 0, 1, 0, 0, 0])
+        if force_sensing:
+            if goal.use_compliance:
+                self._adapter.compliance_on(self.get_parameter('compliance_stiffness').value)
+            self._adapter.set_desired_force(
+                [0.0, 0.0, -abs(goal.target_force_n), 0.0, 0.0, 0.0], [0, 0, 1, 0, 0, 0])
 
         passes = max(1, goal.passes)
         n_wp = len(goal.waypoints)
@@ -832,6 +862,10 @@ class RobotSkillNode(Node):
 
                 def on_tick():
                     nonlocal max_force_measured, max_force_seen
+                    if not force_sensing:
+                        feedback(min(99.0, 100.0 * (pass_idx * n_wp + wp_idx + 1)
+                                     / (passes * n_wp)), pass_idx)
+                        return
                     w = self._adapter.read_wrench()
                     force_log.append(self._wrench_to_msg(w))
                     mag = math.sqrt(w.fx_n ** 2 + w.fy_n ** 2 + w.fz_n ** 2)
@@ -842,16 +876,15 @@ class RobotSkillNode(Node):
                     feedback(min(99.0, pct), pass_idx, w)
 
                 reason = self._monitor(goal_handle, timeout_s, 20.0, on_tick)
-                w = self._adapter.read_wrench()
                 if reason != 'ok':
                     aborted = reason
                     missed.append(pass_idx * n_wp + wp_idx)
                     continue
-                if max_force_seen > max_force_n:
+                if force_sensing and max_force_seen > max_force_n:
                     aborted = 'overforce'
                     missed.append(pass_idx * n_wp + wp_idx)
                     continue
-                if goal.abort_on_low_stiffness and len(stiffness_samples) >= \
+                if force_sensing and goal.abort_on_low_stiffness and len(stiffness_samples) >= \
                         self.get_parameter('contact_stiffness_window').value:
                     window = stiffness_samples[-self.get_parameter('contact_stiffness_window').value:]
                     k, r2, n = compute_stiffness(window, contact_threshold, 3)
