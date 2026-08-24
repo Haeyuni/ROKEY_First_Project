@@ -290,19 +290,19 @@ class SandingNode(Node):
 
         base_xy, approach_vec_3d = self._approach_vector(approach_side, pitch_deg)
 
-        # --- 수동 지정 waypoints ★ — 있으면 경계 계산을 전부 건너뛰고 그 점들
-        #     자체를 오실레이션 왕복 경로로 쓴다 (nail_local_frame, m, x/y/z
-        #     전부 사용 — passes 의 z 스텝은 이 모드에서 무시된다).
-        custom_xyz_mm = [(p.x * 1000.0, p.y * 1000.0, p.z * 1000.0) for p in goal.waypoints]
-        use_custom_waypoints = len(custom_xyz_mm) >= 2
+        # --- 수동 지정 waypoints ★ — 있으면 경계 계산을 전부 건너뛰고 그 Pose들
+        #     자체(위치+자세, nail_local_frame, m)를 오실레이션 왕복 경로로
+        #     쓴다 — passes 의 z 스텝은 이 모드에서 무시된다. 경계 모드와 달리
+        #     face-down 을 강제하지 않고 각 Pose 의 orientation 을 그대로 쓴다.
+        use_custom_waypoints = len(goal.waypoints) >= 2
         travel_limit_mm = None
 
         if use_custom_waypoints:
             self.get_logger().warn(
-                f'SandSurface: waypoints {len(custom_xyz_mm)}개 수동 지정 — 경계/진입점/'
-                'travel_limit_mm/engagement_depth_mm 검증을 전부 건너뛴다. '
-                '좌표가 안전한지는 호출자 책임(NFR-09 방어선 없음).')
-            sweep_xyz_mm = _oscillating_sweep(custom_xyz_mm, oscillations)
+                f'SandSurface: waypoints {len(goal.waypoints)}개 수동 지정(Pose, 자세 포함) — '
+                '경계/진입점/travel_limit_mm/engagement_depth_mm 검증을 전부 건너뛴다. '
+                '좌표·자세가 안전한지는 호출자 책임(NFR-09 방어선 없음).')
+            sweep_poses = _oscillating_sweep(list(goal.waypoints), oscillations)
         else:
             # --- 손톱 경계 (파라미터 재확인 — 실기에서 param set 으로 바뀔 수 있다) ---
             boundary_xy = self._nail_boundary()
@@ -363,14 +363,13 @@ class SandingNode(Node):
             # 왕복(오실레이션) 스트로크 N회
             sweep_xy_mm = _oscillating_sweep(engaged_arc, oscillations)
 
-        def mm_to_pose(xyz_or_xy_mm, z_mm=None):
-            """xyz_or_xy_mm 이 3요소면 그 z 를 쓰고(수동 waypoints 모드),
-            2요소면 인자로 받은 z_mm(패스별 작업 높이)을 쓴다(경계 모드)."""
+        def mm_to_pose(xy_mm, z_mm):
+            """경계 모드 전용 — face-down 고정 자세로 Pose 를 만든다. 수동
+            waypoints 모드는 goal.waypoints 의 Pose(자세 포함)를 그대로 쓴다."""
             pose = Pose()
-            pose.position.x = xyz_or_xy_mm[0] / 1000.0
-            pose.position.y = xyz_or_xy_mm[1] / 1000.0
-            z = xyz_or_xy_mm[2] if len(xyz_or_xy_mm) > 2 else z_mm
-            pose.position.z = z / 1000.0
+            pose.position.x = xy_mm[0] / 1000.0
+            pose.position.y = xy_mm[1] / 1000.0
+            pose.position.z = z_mm / 1000.0
             pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = \
                 _FACE_DOWN_QUAT
             return pose
@@ -410,8 +409,8 @@ class SandingNode(Node):
             lc_goal.approach_vector = Vector3(x=approach_vec_3d[0], y=approach_vec_3d[1],
                                                z=approach_vec_3d[2])
             if use_custom_waypoints:
-                lc_goal.waypoints = [mm_to_pose(p) for p in sweep_xyz_mm]
-                lc_goal.work_plane_offset_mm = sweep_xyz_mm[0][2]
+                lc_goal.waypoints = list(sweep_poses)
+                lc_goal.work_plane_offset_mm = sweep_poses[0].position.z * 1000.0
             else:
                 lc_goal.waypoints = [mm_to_pose(p, z_mm) for p in sweep_xy_mm]
                 lc_goal.work_plane_offset_mm = z_mm
