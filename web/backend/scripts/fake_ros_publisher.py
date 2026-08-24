@@ -4,8 +4,9 @@
 NIS §10 `mock_robot_driver`(로봇 동역학까지 흉내내는 정식 mock, 담당 주은/
 로봇팀 별도 산출물)와는 다르다. 이 스크립트는 그보다 훨씬 좁게, "웹 파이프라인
 (rosbridge → FastAPI → WebSocket → React)이 배선대로 동작하는가"만 확인하기
-위해 /safety/status, /process/status, /stiffness/map 세 토픽에 최소한의
-더미 데이터를 흘려보낸다. 실제 강성 시뮬레이션·안전 로직은 전혀 없다.
+위해 /safety/status, /process/status 두 토픽에 최소한의 더미 데이터를
+흘려보낸다. 실제 안전 로직은 전혀 없다. (probe/검증 단계 시각화 제거로
+/stiffness/map 발행은 뺐다.)
 
 사전 조건:
   1. `colcon build --packages-select nail_msgs` 로 nail_msgs가 빌드되어 있을 것
@@ -17,19 +18,16 @@ NIS §10 `mock_robot_driver`(로봇 동역학까지 흉내내는 정식 mock, �
        source install/setup.bash
        /usr/bin/python3 web/backend/scripts/fake_ros_publisher.py
 
-실행하면 5초마다:
+실행하면:
   - SafetyState: safe_to_move=true 고정 (인터록 주입 테스트는 별도 스크립트로 확장)
   - ProcessState: SCAN → SAND → COAT → CURE → INSPECT → FINISH 를 순환
-  - StiffnessMap: 매 tick마다 점을 하나씩 누적 발행 (coarse 30개 → fine 20개)
 """
-
-import random
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 
-from nail_msgs.msg import ProcessState, SafetyState, StiffnessMap, StiffnessPoint
+from nail_msgs.msg import ProcessState, SafetyState
 
 TRANSIENT_LOCAL_QOS = QoSProfile(
     depth=1,
@@ -46,15 +44,12 @@ class FakeRosPublisher(Node):
 
         self._safety_pub = self.create_publisher(SafetyState, "/safety/status", TRANSIENT_LOCAL_QOS)
         self._state_pub = self.create_publisher(ProcessState, "/process/status", TRANSIENT_LOCAL_QOS)
-        self._map_pub = self.create_publisher(StiffnessMap, "/stiffness/map", TRANSIENT_LOCAL_QOS)
 
         self._session_id = "fake-session-0001"
         self._stage_index = 0
-        self._points: list[StiffnessPoint] = []
 
         self.create_timer(1.0, self._publish_safety)
         self.create_timer(2.0, self._publish_state)
-        self.create_timer(0.5, self._publish_map_tick)
 
     def _publish_safety(self) -> None:
         msg = SafetyState()
@@ -64,7 +59,7 @@ class FakeRosPublisher(Node):
         msg.handrest_seated = True
         msg.dust_extraction_on = True
         msg.tool_grip_ok = True
-        msg.scan_valid = len(self._points) > 30
+        msg.scan_valid = True
         msg.active_faults = []
         msg.reason = ""
         self._safety_pub.publish(msg)
@@ -78,44 +73,10 @@ class FakeRosPublisher(Node):
         msg.rework_count = 0
         msg.stage_percent = 50.0
         msg.session_percent = (self._stage_index / (len(STAGES) - 1)) * 100.0
-        msg.current_tool = "probe"
+        msg.current_tool = "none"
         self._state_pub.publish(msg)
         self.get_logger().info(f"stage={msg.stage}")
         self._stage_index = (self._stage_index + 1) % len(STAGES)
-
-    def _publish_map_tick(self) -> None:
-        # NIS §6.1: 거친 스캔(3mm, ~42점) 후 정밀 스캔(1mm) — 여기서는 30 + 20으로 단순화.
-        if len(self._points) >= 50:
-            return
-
-        source = "coarse" if len(self._points) < 30 else "fine"
-        idx = len(self._points)
-        x = -8.0 + (idx % 10) * 1.8
-        y = -6.0 + (idx // 10) * 1.8
-        # 타원(8mm x 6.5mm) 안쪽이면 손톱(고강성), 바깥이면 피부(저강성) — mock_robot_driver 흉내.
-        inside_nail = (x / 8.0) ** 2 + (y / 6.5) ** 2 < 1.0
-        base_k = 40.0 if inside_nail else 6.0
-
-        p = StiffnessPoint()
-        p.position.x = x
-        p.position.y = y
-        p.position.z = 0.0
-        p.stiffness_n_per_mm = base_k + random.uniform(-1.0, 1.0)
-        p.release_force_n = 0.0
-        p.source = source
-        p.valid = True
-        self._points.append(p)
-
-        msg = StiffnessMap()
-        msg.session_id = self._session_id
-        msg.frame_id = "nail_frame"
-        msg.points = list(self._points)
-        msg.coarse_point_count = min(len(self._points), 30)
-        msg.fine_point_count = max(len(self._points) - 30, 0)
-        msg.valid = len(self._points) >= 50
-        msg.threshold_k_n_per_mm = 20.0
-        msg.separation_margin = 3.0 if msg.valid else 0.0
-        self._map_pub.publish(msg)
 
 
 def main() -> None:

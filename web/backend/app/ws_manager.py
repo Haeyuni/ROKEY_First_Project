@@ -1,8 +1,8 @@
 """web.md §4.3: 단일 채널 `/ws`, `type` 필드로 분기.
 
-IR-05: 클라이언트 접속 시 서버는 최신 safety/state/map을 즉시 전송한다
-(스냅샷). IR-06(2초 재연결)은 프론트 책임이지만, 서버는 매 연결마다 스냅샷을
-다시 보내는 것으로 그 전제를 충족시킨다.
+IR-05: 클라이언트 접속 시 서버는 최신 safety/state를 즉시 전송한다(스냅샷).
+IR-06(2초 재연결)은 프론트 책임이지만, 서버는 매 연결마다 스냅샷을 다시
+보내는 것으로 그 전제를 충족시킨다.
 """
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ from fastapi import WebSocket
 
 logger = logging.getLogger("nail_web.ws_manager")
 
-# IR-05 스냅샷 대상 3종. verdict/force/error/result는 이벤트성이라 스냅샷
-# 대상이 아니다(web.md §4.3 표 "빈도" 열 참고).
-SNAPSHOT_TYPES = ("safety", "state", "map")
+# IR-05 스냅샷 대상. error/result는 이벤트성이라 스냅샷 대상이 아니다
+# (web.md §4.3 표 "빈도" 열 참고).
+SNAPSHOT_TYPES = ("safety", "state")
 
 
 class WsConnectionManager:

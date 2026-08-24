@@ -17,14 +17,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_db
-from ..models import SessionRecord, StiffnessMapRecord, VerdictRecord
+from ..models import SessionRecord
 from ..ros_bridge import RunSessionTimeoutError, make_run_session_goal, new_session_id
 from ..schemas import (
     ALLOWED_TARGET_MATERIALS,
     CreateSessionRequest,
     CreateSessionResponse,
     SessionReportResponse,
-    StiffnessMapOut,
 )
 
 logger = logging.getLogger("nail_web.sessions")
@@ -123,26 +122,12 @@ async def get_session_report(
 
     web.md §2.2가 이력 조회 화면 자체는 범위 밖("SQLite 직접 조회"로
     대체)으로 뒀지만, 이 엔드포인트는 그 대체 수단이 아니라 세션 하나의
-    스캔 결과 + 판정 결과를 API로 확인하기 위한 것이다(인수 기준 §9-6:
-    FAIL 판정의 파형과 임계값이 DB에 존재하는지 확인할 때 씀).
+    기본 정보를 API로 확인하기 위한 것이다. probe(강성 맵)·검증(판정) 단계
+    제거로 그 결과 필드는 더 이상 없다.
     """
     session = await db.get(SessionRecord, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
-
-    map_row = (
-        await db.execute(
-            select(StiffnessMapRecord).where(StiffnessMapRecord.session_id == session_id)
-        )
-    ).scalar_one_or_none()
-
-    verdict_rows = (
-        await db.execute(
-            select(VerdictRecord)
-            .where(VerdictRecord.session_id == session_id)
-            .order_by(VerdictRecord.layer_index, VerdictRecord.point_label)
-        )
-    ).scalars().all()
 
     return SessionReportResponse(
         session_id=session.id,
@@ -153,6 +138,4 @@ async def get_session_report(
         abort_reason=session.abort_reason,
         started_at=session.started_at,
         finished_at=session.finished_at,
-        stiffness_map=StiffnessMapOut.model_validate(map_row) if map_row else None,
-        verdicts=list(verdict_rows),
     )

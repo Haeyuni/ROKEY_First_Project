@@ -6,9 +6,10 @@
 
 FastAPI는 별도 rclpy 노드가 아니다. nail_bridge/launch/web_bridge.launch.py 가
 이미 rosbridge_websocket 을 열어주므로, 여기서는 그 화이트리스트 안에 있는
-5개 토픽 + `/session/run` 액션 + `/safety/reset` 서비스만 roslibpy로 쓴다
-(nail_bridge/config/web_bridge.yaml relay_topics / allowed_action /
-allowed_service 와 반드시 같아야 함).
+토픽 중 웹 UI가 실제로 쓰는 것 + `/session/run` 액션 + `/safety/reset`
+서비스만 roslibpy로 쓴다 (probe/검증 단계 시각화 제거로 아래 RELAY_TOPICS는
+nail_bridge/config/web_bridge.yaml relay_topics의 부분집합이면 충분하다 —
+반드시 같을 필요는 없음. allowed_action / allowed_service는 그대로 일치해야 함).
 
 roslibpy는 Twisted 리액터를 백그라운드 스레드에서 돌린다. 토픽 콜백은 그
 스레드에서 호출되므로, asyncio 쪽(WS 브로드캐스트)으로 넘길 때는 반드시
@@ -29,14 +30,12 @@ import roslibpy
 logger = logging.getLogger("nail_web.ros_bridge")
 
 # 토픽 경로 → (ROS 메시지 타입, WebSocket 프로토콜의 `type` 필드).
-# web.md §4.3 표와 정확히 일치해야 한다. `/force/data`(100Hz)는 절대 포함하지
-# 않는다 (IR-02, NIS §9 "allow_force_raw 금지").
+# probe(강성 맵)·검증(판정/접촉력) 단계 시각화 제거로 safety/state 두 토픽만
+# 남는다. `/force/data`(100Hz)는 절대 포함하지 않는다 (IR-02, NIS §9
+# "allow_force_raw 금지").
 RELAY_TOPICS: dict[str, tuple[str, str]] = {
     "/safety/status": ("nail_msgs/SafetyState", "safety"),
     "/process/status": ("nail_msgs/ProcessState", "state"),
-    "/stiffness/map": ("nail_msgs/StiffnessMap", "map"),
-    "/validation/result": ("nail_msgs/ValidationResult", "verdict"),
-    "/force/data_ui": ("nail_msgs/ForceSample", "force"),
 }
 
 RUN_SESSION_ACTION = "/session/run"

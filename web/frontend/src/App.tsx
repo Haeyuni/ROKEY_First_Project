@@ -1,12 +1,9 @@
 import { ErrorBanner } from "./components/ErrorBanner";
-import { ForceGraph } from "./components/ForceGraph";
 import { ProcessStageStepper } from "./components/ProcessStageStepper";
 import { SafetyBanner } from "./components/SafetyBanner";
 import { SessionResultBanner } from "./components/SessionResultBanner";
 import { SessionStart } from "./components/SessionStart";
-import { StiffnessHeatmap } from "./components/StiffnessHeatmap";
 import { UvWarningBanner } from "./components/UvWarningBanner";
-import { VerdictPanel } from "./components/VerdictPanel";
 import { useRosWebSocket } from "./hooks/useWebSocket";
 import { SEV_SAFETY } from "./types";
 
@@ -23,8 +20,7 @@ const ACTIVE_STAGES = new Set([
 ]);
 
 export default function App() {
-  const { connected, safety, processState, map, verdicts, sessionResult, latestForce } =
-    useRosWebSocket();
+  const { connected, safety, processState, sessionResult } = useRosWebSocket();
 
   const activeSessionId =
     processState && ACTIVE_STAGES.has(processState.stage) ? processState.session_id : null;
@@ -50,21 +46,6 @@ export default function App() {
           <ProcessStageStepper processState={processState} />
           <ErrorBanner error={processState?.last_error} />
           <SessionResultBanner result={sessionResult} />
-        </section>
-
-        <section className="panel">
-          <h2>강성 히트맵</h2>
-          <StiffnessHeatmap map={map} />
-        </section>
-
-        <section className="panel">
-          <h2>접촉력</h2>
-          <ForceGraph latest={latestForce} />
-        </section>
-
-        <section className="panel panel--wide">
-          <h2>판정 결과</h2>
-          <VerdictPanel verdicts={verdicts} />
         </section>
       </main>
     </div>

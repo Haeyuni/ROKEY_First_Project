@@ -2,7 +2,7 @@
 
 하이브리드 아키텍처: rosbridge_server(nail_bridge, 포트 9090)를 실시간
 중계 레이어로 그대로 쓰고, 이 FastAPI는
-  1) roslibpy로 rosbridge에 붙어 5개 릴레이 토픽을 구독 + `/ws`로 재중계
+  1) roslibpy로 rosbridge에 붙어 릴레이 토픽을 구독 + `/ws`로 재중계
      (type-envelope, 접속 시 스냅샷 — web.md §4.3, IR-05)
   2) REST(recipes/sessions/health)와 Postgres 저장을 담당한다.
 
@@ -41,14 +41,10 @@ async def lifespan(app: FastAPI):
         # roslibpy 콜백 스레드에서 call_soon_threadsafe로 넘어온 뒤,
         # 여기서부터는 이벤트 루프 위이므로 안전하게 태스크를 만들 수 있다.
         asyncio.create_task(ws_manager.broadcast({"type": ws_type, "data": data}))
-        # Day2: 실시간 중계와 별개로 판정/강성맵/상태전이를 Postgres에 반영한다
-        # (FR-41~44). 저장 실패가 공정에 영향을 주면 안 되므로(FR-45) 예외를
-        # 여기서 흡수한다 — WS 브로드캐스트는 저장 성패와 무관하게 이미 끝났다.
-        if ws_type == "verdict":
-            asyncio.create_task(_safe(persistence.save_verdict(data)))
-        elif ws_type == "map":
-            asyncio.create_task(_safe(persistence.upsert_stiffness_map(data)))
-        elif ws_type == "state":
+        # Day2: 실시간 중계와 별개로 상태전이를 Postgres에 반영한다(FR-44).
+        # 저장 실패가 공정에 영향을 주면 안 되므로(FR-45) 예외를 여기서
+        # 흡수한다 — WS 브로드캐스트는 저장 성패와 무관하게 이미 끝났다.
+        if ws_type == "state":
             session_id = data.get("session_id", "")
             asyncio.create_task(_safe(persistence.log_event(session_id, "state", data)))
 

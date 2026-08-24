@@ -10,69 +10,10 @@ from __future__ import annotations
 import datetime as dt
 import logging
 
-from sqlalchemy import select
-
 from .db import SessionLocal
-from .models import EventRecord, SessionRecord, StiffnessMapRecord, VerdictRecord
+from .models import EventRecord, SessionRecord
 
 logger = logging.getLogger("nail_web.persistence")
-
-
-async def save_verdict(data: dict) -> None:
-    """FR-41/42, DR-01/02: ValidationResult 수신 시마다 저장."""
-    session_id = data.get("session_id")
-    if not session_id:
-        logger.warning("verdict에 session_id가 없어 저장을 건너뜁니다: %s", data)
-        return
-
-    result = data.get("result", "")
-    waveform = data.get("waveform") or None
-    if result == "FAIL" and not waveform:
-        logger.warning(
-            "FAIL 판정인데 waveform이 비어 있습니다 (DR-01 위반 가능, session=%s)", session_id
-        )
-
-    position = data.get("position") or {}
-    record = VerdictRecord(
-        session_id=session_id,
-        layer_index=data.get("layer_index", 0),
-        point_label=data.get("point_label", ""),
-        x=position.get("x", 0.0),
-        y=position.get("y", 0.0),
-        release_force_n=data.get("release_force_n", 0.0),
-        threshold_n=data.get("threshold_n", 0.0),
-        result=result,
-        waveform=waveform,
-    )
-    async with SessionLocal() as db:
-        db.add(record)
-        await db.commit()
-
-
-async def upsert_stiffness_map(data: dict) -> None:
-    """FR-43: 세션당 1건 — 있으면 갱신, 없으면 새로 만든다."""
-    session_id = data.get("session_id")
-    if not session_id:
-        logger.warning("map에 session_id가 없어 저장을 건너뜁니다")
-        return
-
-    region = data.get("region") or {}
-    async with SessionLocal() as db:
-        existing = await db.execute(
-            select(StiffnessMapRecord).where(StiffnessMapRecord.session_id == session_id)
-        )
-        record = existing.scalar_one_or_none()
-        if record is None:
-            record = StiffnessMapRecord(session_id=session_id)
-            db.add(record)
-
-        record.points = data.get("points", [])
-        record.boundary = region.get("boundary_polygon", [])
-        record.forbidden = region.get("forbidden_polygon", [])
-        record.threshold_k = data.get("threshold_k_n_per_mm")
-        record.separation_margin = data.get("separation_margin")
-        record.valid = data.get("valid", False)
-        await db.commit()
 
 
 async def finalize_session(session_id: str, result: dict) -> None:
