@@ -101,22 +101,17 @@ frames:
   #    "손톱 끝이 로봇 +X 를 향한다"는 뜻). 안착 지그가 고정이면 한 번만
   #    재면 된다.
   #
-  # 아래 x/y/z 는 예전 targets.yaml 의 `stone_place`(스톤 부착 위치, 펜던트
-  # get_current_posx 실측)에서 옮겨온 값이다 — 이 워크스페이스에 있던
-  # "손톱 표면 위 점" 중 유일하게 실측된 좌표라 출발점으로 삼았고,
-  # targets.yaml 쪽 항목은 중복이라 지웠다.
-  # ⚠️ 그리퍼/툴 끝이 아니라 **플랜지 기준**으로 읽은 값이고 손톱 정중앙이라는
-  #    보장도 없다. 실기 투입 전에 다음 순서로 반드시 다시 티칭할 것:
-  #      1) 손을 안착시킨다
-  #      2) 툴을 뺀 상태로 그리퍼를 손톱 정중앙 표면에 살짝 닿게 내린다
-  #      3) 펜던트 TASK-BASE 화면의 X/Y/Z 를 여기에 그대로 적는다
+  # 아래 x/y/z 는 2026-08-24, 위 절차 그대로(툴 없이 그리퍼만 든 채 손톱
+  # 정중앙 표면에 근접) 재실측한 값이다. robot_skill_node 가 안 떠 있어
+  # get_current_posx 대신 `tf2(base_link->tool0)` 로 읽었다 — 플랜지/TCP
+  # 기준이라는 한계는 이전과 동일. get_current_posx 로 재확인 권장.
   #    확인: `ros2 run tf2_ros tf2_echo base_link nail_local_frame`
   nail_local_frame:
     parent_frame: base_link
     absolute: true
-    x_mm: 325.55
-    y_mm: -21.85
-    z_mm: 394.80
+    x_mm: 377.33
+    y_mm: -22.16
+    z_mm: 396.70
     roll_deg: 0.0
     pitch_deg: 0.0
     yaw_deg: 0.0
