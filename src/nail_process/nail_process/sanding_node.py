@@ -79,6 +79,21 @@ def _rotate90(v):
     return (-v[1], v[0])
 
 
+def _oscillating_sweep(points, oscillations):
+    """points(2D xy 또는 3D xyz 튜플 목록)를 앞뒤로 oscillations 번 왕복하는
+    순서로 펼친다. 매 왕복이 시작점으로 돌아오므로, 반복 경계에서 좌표가
+    겹치는(이동거리 0) waypoint 는 한 번만 남긴다."""
+    if len(points) < 2:
+        return list(points)
+    backward = list(reversed(points))[1:]
+    sweep = list(points)
+    for i in range(oscillations):
+        if i > 0:
+            sweep.extend(points[1:])
+        sweep.extend(backward)
+    return sweep
+
+
 class SandingNode(Node):
 
     def __init__(self):
@@ -271,79 +286,91 @@ class SandingNode(Node):
         feed_speed = self._val(goal.feed_speed_mms, 'feed_speed_mms')
         max_duration = self._val(goal.max_duration_s, 'max_duration_s')
         margin_mm = self._val(goal.travel_limit_margin_mm, 'travel_limit_margin_mm')
-
-        # --- 손톱 경계 (파라미터 재확인 — 실기에서 param set 으로 바뀔 수 있다) -------
-        boundary_xy = self._nail_boundary()
-        if len(boundary_xy) < 3:
-            detail = ('손톱 경계 생성 실패 — nail_size_x_mm='
-                      f"{self.get_parameter('nail_size_x_mm').value}, nail_size_y_mm="
-                      f"{self.get_parameter('nail_size_y_mm').value}, nail_boundary_points="
-                      f"{self.get_parameter('nail_boundary_points').value}")
-            self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
-            return result
+        oscillations = max(1, int(self.get_parameter('oscillations').value))
 
         base_xy, approach_vec_3d = self._approach_vector(approach_side, pitch_deg)
-        start_xy = self._entry_point(base_xy, boundary_xy)
-        if start_xy is None:
-            detail = f'approach_side="{approach_side}" 방향이 boundary_polygon 과 교차하지 않음'
-            self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
-            return result
 
-        # --- travel_limit_mm ★ ----------------------------------------------------
-        travel_limit_mm = self._compute_travel_limit(
-            start_xy, base_xy, boundary_xy, margin_mm)
-        if travel_limit_mm is None or travel_limit_mm <= 0.0:
-            detail = (f'travel_limit_mm={travel_limit_mm} <= 0 — 접근 방향("{approach_side}") '
-                      f'또는 travel_limit_margin_mm({margin_mm}) 재검토 필요. '
-                      'NFR-09: 이 값이 유일한 피부 접촉 방어선.')
-            self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
-            return result
-        result.computed_travel_limit_mm = travel_limit_mm
+        # --- 수동 지정 waypoints ★ — 있으면 경계 계산을 전부 건너뛰고 그 점들
+        #     자체를 오실레이션 왕복 경로로 쓴다 (nail_local_frame, m, x/y/z
+        #     전부 사용 — passes 의 z 스텝은 이 모드에서 무시된다).
+        custom_xyz_mm = [(p.x * 1000.0, p.y * 1000.0, p.z * 1000.0) for p in goal.waypoints]
+        use_custom_waypoints = len(custom_xyz_mm) >= 2
+        travel_limit_mm = None
 
-        engagement_mm = self.get_parameter('engagement_depth_mm').value
-        if engagement_mm > travel_limit_mm:
-            detail = (f'engagement_depth_mm({engagement_mm}) > travel_limit_mm'
-                      f'({travel_limit_mm:.2f}) — 피부 접촉 방어선(NFR-09) 초과 위험')
-            self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
-            return result
+        if use_custom_waypoints:
+            self.get_logger().warn(
+                f'SandSurface: waypoints {len(custom_xyz_mm)}개 수동 지정 — 경계/진입점/'
+                'travel_limit_mm/engagement_depth_mm 검증을 전부 건너뛴다. '
+                '좌표가 안전한지는 호출자 책임(NFR-09 방어선 없음).')
+            sweep_xyz_mm = _oscillating_sweep(custom_xyz_mm, oscillations)
+        else:
+            # --- 손톱 경계 (파라미터 재확인 — 실기에서 param set 으로 바뀔 수 있다) ---
+            boundary_xy = self._nail_boundary()
+            if len(boundary_xy) < 3:
+                detail = ('손톱 경계 생성 실패 — nail_size_x_mm='
+                          f"{self.get_parameter('nail_size_x_mm').value}, nail_size_y_mm="
+                          f"{self.get_parameter('nail_size_y_mm').value}, nail_boundary_points="
+                          f"{self.get_parameter('nail_boundary_points').value}")
+                self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
+                goal_handle.abort()
+                result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
+                return result
 
-        # --- 이송 경로: 진입측 호(arc)를 압입 깊이만큼 눌러 넣은 곡선 -----------------
-        # 힘 센서가 없어 compliance 로 곡률을 못 따라가므로(§ 논의 참고),
-        # boundary_xy(타원 근사 다각형) 중 진입점 쪽 절반을 feed_axis 순으로
-        # 뽑아 그 곡선 자체를 waypoint 로 쓴다. base_xy(approach_vec) 방향으로
-        # engagement_depth_mm 만큼 offset 해서 실제 연마 깊이를 만든다.
-        feed_axis = _rotate90(base_xy)
-        centroid_xy = centroid(boundary_xy)
-        arc_points = sorted(
-            (p for p in boundary_xy if _dot(_sub(p, centroid_xy), base_xy) <= 0.0),
-            key=lambda p: _dot(_sub(p, start_xy), feed_axis))
-        if len(arc_points) < 2:
-            arc_points = [start_xy, start_xy]
-        engaged_arc = [_add_scaled(p, base_xy, engagement_mm) for p in arc_points]
+            start_xy = self._entry_point(base_xy, boundary_xy)
+            if start_xy is None:
+                detail = f'approach_side="{approach_side}" 방향이 boundary_polygon 과 교차하지 않음'
+                self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
+                goal_handle.abort()
+                result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
+                return result
 
-        # 왕복(오실레이션) 스트로크 N회 — 매번 진입점으로 되돌아오므로 반복
-        # 경계에서 좌표가 겹치는(이동 거리 0) waypoint 는 한 번만 남긴다.
-        oscillations = max(1, int(self.get_parameter('oscillations').value))
-        backward = list(reversed(engaged_arc))[1:]
-        sweep_xy_mm = list(engaged_arc)
-        for i in range(oscillations):
-            if i > 0:
-                sweep_xy_mm.extend(engaged_arc[1:])
-            sweep_xy_mm.extend(backward)
+            # --- travel_limit_mm ★ ------------------------------------------------
+            travel_limit_mm = self._compute_travel_limit(
+                start_xy, base_xy, boundary_xy, margin_mm)
+            if travel_limit_mm is None or travel_limit_mm <= 0.0:
+                detail = (f'travel_limit_mm={travel_limit_mm} <= 0 — 접근 방향("{approach_side}") '
+                          f'또는 travel_limit_margin_mm({margin_mm}) 재검토 필요. '
+                          'NFR-09: 이 값이 유일한 피부 접촉 방어선.')
+                self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
+                goal_handle.abort()
+                result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
+                return result
+            result.computed_travel_limit_mm = travel_limit_mm
 
-        def mm_to_pose(xy_mm, z_mm):
+            engagement_mm = self.get_parameter('engagement_depth_mm').value
+            if engagement_mm > travel_limit_mm:
+                detail = (f'engagement_depth_mm({engagement_mm}) > travel_limit_mm'
+                          f'({travel_limit_mm:.2f}) — 피부 접촉 방어선(NFR-09) 초과 위험')
+                self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
+                goal_handle.abort()
+                result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
+                return result
+
+            # --- 이송 경로: 진입측 호(arc)를 압입 깊이만큼 눌러 넣은 곡선 -------------
+            # 힘 센서가 없어 compliance 로 곡률을 못 따라가므로(§ 논의 참고),
+            # boundary_xy(타원 근사 다각형) 중 진입점 쪽 절반을 feed_axis 순으로
+            # 뽑아 그 곡선 자체를 waypoint 로 쓴다. base_xy(approach_vec) 방향으로
+            # engagement_depth_mm 만큼 offset 해서 실제 연마 깊이를 만든다.
+            feed_axis = _rotate90(base_xy)
+            centroid_xy = centroid(boundary_xy)
+            arc_points = sorted(
+                (p for p in boundary_xy if _dot(_sub(p, centroid_xy), base_xy) <= 0.0),
+                key=lambda p: _dot(_sub(p, start_xy), feed_axis))
+            if len(arc_points) < 2:
+                arc_points = [start_xy, start_xy]
+            engaged_arc = [_add_scaled(p, base_xy, engagement_mm) for p in arc_points]
+
+            # 왕복(오실레이션) 스트로크 N회
+            sweep_xy_mm = _oscillating_sweep(engaged_arc, oscillations)
+
+        def mm_to_pose(xyz_or_xy_mm, z_mm=None):
+            """xyz_or_xy_mm 이 3요소면 그 z 를 쓰고(수동 waypoints 모드),
+            2요소면 인자로 받은 z_mm(패스별 작업 높이)을 쓴다(경계 모드)."""
             pose = Pose()
-            pose.position.x = xy_mm[0] / 1000.0
-            pose.position.y = xy_mm[1] / 1000.0
-            pose.position.z = z_mm / 1000.0
+            pose.position.x = xyz_or_xy_mm[0] / 1000.0
+            pose.position.y = xyz_or_xy_mm[1] / 1000.0
+            z = xyz_or_xy_mm[2] if len(xyz_or_xy_mm) > 2 else z_mm
+            pose.position.z = z / 1000.0
             pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = \
                 _FACE_DOWN_QUAT
             return pose
@@ -382,10 +409,14 @@ class SandingNode(Node):
             lc_goal = LateralContact.Goal()
             lc_goal.approach_vector = Vector3(x=approach_vec_3d[0], y=approach_vec_3d[1],
                                                z=approach_vec_3d[2])
-            lc_goal.waypoints = [mm_to_pose(p, z_mm) for p in sweep_xy_mm]
+            if use_custom_waypoints:
+                lc_goal.waypoints = [mm_to_pose(p) for p in sweep_xyz_mm]
+                lc_goal.work_plane_offset_mm = sweep_xyz_mm[0][2]
+            else:
+                lc_goal.waypoints = [mm_to_pose(p, z_mm) for p in sweep_xy_mm]
+                lc_goal.work_plane_offset_mm = z_mm
             lc_goal.frame_id = 'nail_local_frame'
             lc_goal.session_id = goal.session_id
-            lc_goal.work_plane_offset_mm = z_mm
             lc_goal.target_force_n = target_force
             lc_goal.max_force_n = max_force
             lc_goal.jam_force_n = jam_force
