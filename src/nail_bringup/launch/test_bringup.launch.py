@@ -326,7 +326,6 @@ def _launch_setup(context, *args, **kwargs):
 
     use_mock = LaunchConfiguration('use_mock_hardware').perform(context)
     sync_tcp_on_startup = LaunchConfiguration('sync_tcp_on_startup').perform(context)
-    require_handrest = LaunchConfiguration('require_handrest').perform(context)
     heartbeat_timeout_ms = LaunchConfiguration('heartbeat_timeout_ms').perform(context)
     safety_publish_rate_hz = LaunchConfiguration('safety_publish_rate_hz').perform(context)
     dsr_prefix = LaunchConfiguration('dsr_prefix').perform(context)
@@ -367,7 +366,6 @@ def _launch_setup(context, *args, **kwargs):
             params['targets_yaml_path'] = targets_yaml_path
             params['base_frame_id'] = base_frame_id
         if token == 'safety':
-            params['require_handrest'] = require_handrest == 'true'
             params['heartbeat_timeout_ms'] = int(heartbeat_timeout_ms)
             params['publish_rate_hz'] = int(safety_publish_rate_hz)
         if token in _NAIL_REGION_TOKENS:
@@ -422,13 +420,6 @@ def generate_launch_description():
                 'safety_monitor 에 전달. 낮출수록(예: 5~10) 두산 컨트롤러 서비스 '
                 '호출 빈도가 줄어 다른 노드와의 경합/FAULT_COMM_LOST 오탐이 준다 — '
                 '단 안전 상태 갱신도 그만큼 느려진다. 스캔 중 오탐으로 5까지 낮춤.')),
-        DeclareLaunchArgument(
-            'require_handrest', default_value='false',
-            description=(
-                'safety_monitor 에 전달. FAULT_NO_HANDREST 는 실시간 결함이라 '
-                'ResetSafety 로 안 풀리고 handrest 센서(DI)가 "안착"으로 바뀌어야만 '
-                '자동 해제된다. 현재 하드웨어에 안착 센서가 미장착이라 기본값을 '
-                'false 로 꺼둠 — 안착 센서가 실제로 달리면 true 로 되돌려서 재검증할 것.')),
         DeclareLaunchArgument(
             'sync_tcp_on_startup', default_value='true',
             description=(

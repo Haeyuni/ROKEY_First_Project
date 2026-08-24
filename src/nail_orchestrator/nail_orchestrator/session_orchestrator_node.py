@@ -270,14 +270,14 @@ class SessionOrchestratorNode(Node):
             return None, err
         return work_result, None
 
-    # --- PRECHECK (NIS §8: 안착 · 툴 랙 전수 · 통신 · E-Stop 해제) -----------------
+    # --- PRECHECK (NIS §8: 툴 랙 전수 · 통신 · E-Stop 해제) -----------------------
+    # 안착 센서는 현재 하드웨어에 미장착이라 판정 자체가 불가능해 이 precheck
+    # 에서 뺐다(safety_monitor_node.py 도 동일) — 센서가 설치되면 되살릴 것.
     def _run_precheck(self, required_tools):
         reasons = []
         safety = self._latest_safety
         if safety is None:
             return False, ['안전 상태 미수신']
-        if not safety.handrest_seated:
-            reasons.append('안착 센서 OFF')
         if not safety.comm_ok:
             reasons.append('통신 두절')
         if not safety.estop_released:
