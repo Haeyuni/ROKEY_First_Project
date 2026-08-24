@@ -139,13 +139,31 @@ tweezers: # 핀셋 - 완
 #    형식으로 하나 더 티칭해서(예: workbench_transit) 여기에 연결할 것.
 
 sander_work: # 네일 파일 작업 시작 자세 - 재실측 (2026-08-24, get_current_posx)
-  x_mm: 377.86
-  y_mm: -6.18
-  z_mm: 397.61
+  x_mm: 370.07
+  y_mm: -16.42
+  z_mm: 396.82
   frame_id: base_link
-  rz1_deg: 62.39
-  ry_deg: -177.27
-  rz2_deg: 62.17
+  rz1_deg: 6.78
+  ry_deg: 179.93
+  rz2_deg: 6.89
+
+sand_work_r: # SandSurface approach_side='right' 작업 시작 자세 (2026-08-24, get_current_posx)
+  x_mm: 380.04
+  y_mm: -12.55
+  z_mm: 393.82
+  frame_id: base_link
+  rz1_deg: 91.89
+  ry_deg: -178.54
+  rz2_deg: 119.15
+
+sand_work_l: # SandSurface approach_side='left' 작업 시작 자세 (2026-08-24, get_current_posx)
+  x_mm: 370.12
+  y_mm: -2.14
+  z_mm: 391.11
+  frame_id: base_link
+  rz1_deg: 76.93
+  ry_deg: -176.01
+  rz2_deg: 34.45
 
 brush_work: # 붓 작업 시작 자세 - 완 (get_current_posx 실측)
   x_mm: 380.71
