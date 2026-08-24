@@ -111,21 +111,18 @@ class CuringNode(Node):
         d('dwell_s_per_point', 6.0)
         d('entry_direction', 'from_side')
         d('park_distance_mm', 120.0)
-        # goal.waypoints 가 비어 있을 때 자동으로 쓸 기본 수동 왕복 경로
-        # (sanding_node의 default_waypoints/oscillations 와 동일 패턴).
-        # base_link 절대좌표로 해석되므로(코드 참고) targets.yaml 값을 변환
-        # 없이 그대로 넣으면 된다. quaternion 이 아니라 TaskPose와 동일한
-        # x_mm,y_mm,z_mm,rz1_deg,ry_deg,rz2_deg 6개씩 묶어 점 개수만큼
-        # 이어붙인 float64[] — 길이가 6의 배수이고 점이 2개 이상이어야
-        # 적용된다. 빈 배열이면(기본) 기존처럼 nail_size_x_mm/y_mm 기반
-        # dwell 지점 계산으로 대체한다.
-        # 빈 리스트([])를 기본값으로 주면 rclpy 가 타입을 추론 못 해
-        # byte_array 로 잘못 선언된다(ParameterDescriptor.type 지정도 안
-        # 먹힘 — declare 시 값에서의 타입 추론이 우선함, 실기 확인). 원소
-        # 1개짜리 double 리스트를 기본값으로 줘서 double_array 로 추론되게
-        # 하고, _default_waypoints_taskposes() 의 길이<12 조건으로 "미설정"
-        # 취급한다.
-        d('default_waypoints', [0.0])
+        # goal.waypoints 가 비어 있을 때(=session_orchestrator 의 CureUV 호출
+        # 포함) 자동으로 쓸 기본 수동 왕복 경로 — uv_work_r/uv_work/
+        # uv_work_l(targets.yaml) 의 base_link 절대좌표를 변환 없이 그대로
+        # 쓴다(2026-08-24). sanding_node의 default_waypoints/oscillations 와
+        # 동일 패턴 — TaskPose와 동일한 x_mm,y_mm,z_mm,rz1_deg,ry_deg,rz2_deg
+        # 6개씩 묶어 점 개수만큼 이어붙인 float64[]. 비우면(길이<12) 기존처럼
+        # nail_size_x_mm/y_mm 기반 dwell 지점 계산으로 대체한다.
+        d('default_waypoints', [
+            520.38, 75.54, 353.14, 38.79, -138.43, 19.12,
+            376.61, 65.83, 401.75, 88.60, -159.24, 88.43,
+            210.66, 20.91, 359.81, 162.35, -141.34, 153.80,
+        ])
         d('oscillations', 1)
         d('max_duration_s', 120.0)
         # MoveTo 는 speed_ratio(0~1) 를 받는다 — robot_skill_node 의
