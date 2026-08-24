@@ -69,14 +69,14 @@ stone_tray: # 스톤 공급 트레이 - 완 (get_current_posx 실측)
 # ※ 탐침(구 probe / probe_work)도 빠졌다 — ProbePoint 스킬과 scan_node /
 #   inspection_node 가 폐지되어 이 툴을 집을 일이 없다.
 
-sander: # 네일 파일 - 완
-  x_mm: 502.28
-  y_mm: 34.55
-  z_mm: 251.00
+sander: # 네일 파일 - 재실측 (2026-08-24, get_current_posx)
+  x_mm: 501.57
+  y_mm: 58.46
+  z_mm: 270.33
   frame_id: base_link
-  rz1_deg: 120.60
-  ry_deg: -179.83
-  rz2_deg: 120.09
+  rz1_deg: 37.48
+  ry_deg: -177.99
+  rz2_deg: 37.13
   via_key: rack_transit
 
 
@@ -138,14 +138,14 @@ tweezers: # 핀셋 - 완
 #    있다 — 작업대 앞에도 안전한 경유점이 필요하면 rack_transit 과 같은
 #    형식으로 하나 더 티칭해서(예: workbench_transit) 여기에 연결할 것.
 
-sander_work: # 네일 파일 작업 시작 자세 - clear
-  x_mm: 375.38
-  y_mm: -18.63
-  z_mm: 383.78
+sander_work: # 네일 파일 작업 시작 자세 - 재실측 (2026-08-24, get_current_posx)
+  x_mm: 377.86
+  y_mm: -6.18
+  z_mm: 397.61
   frame_id: base_link
-  rz1_deg: 89.83
-  ry_deg: -179.15
-  rz2_deg: 89.68
+  rz1_deg: 62.39
+  ry_deg: -177.27
+  rz2_deg: 62.17
 
 brush_work: # 붓 작업 시작 자세 - 완 (get_current_posx 실측)
   x_mm: 380.71
