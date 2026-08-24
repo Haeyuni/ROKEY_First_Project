@@ -16,9 +16,11 @@ float64 path_speed_mms
 float64 park_distance_mm
 float64 max_duration_s                  # 모션 타임아웃 (램프 아님)
 
-# (선택) 수동 지정 왕복 경로 — nail_local_frame 기준, 2개 이상이면
+# (선택) 수동 지정 왕복 경로 — base_link 절대좌표 기준(targets.yaml 값을
+# 변환 없이 그대로 넣을 수 있게 하기 위함). 2개 이상이면
 # dwell_points/nail_size_x_mm/y_mm 기반 계산을 건너뛰고 이 지점들을 그대로
-# 오실레이션 왕복하며 각 점에서 dwell_s_per_point 초씩 머문다.
+# 오실레이션 왕복하며 각 점에서 dwell_s_per_point 초씩 머문다(그 기본
+# 계산 경로는 nail_local_frame 기준 그대로).
 # SandSurface.waypoints와 동일한 패턴·이유로 nail_msgs/TaskPose 를 쓴다
 # (geometry_msgs/Pose 아님 — quaternion 변환 없이 x_mm/y_mm/z_mm/A/B/C
 # 그대로). 안전 확인은 호출자 책임.

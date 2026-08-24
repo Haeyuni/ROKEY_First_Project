@@ -141,17 +141,18 @@ class SandingNode(Node):
         d('oscillations', 3)
         # goal.waypoints 가 비어 있을 때(=session_orchestrator 등 대부분의
         # 호출) 자동으로 쓸 기본 수동 왕복 경로 — sander_work/sand_work_r/
-        # sand_work_l(targets.yaml) 위치를 nail_local_frame 상대좌표(mm)로
-        # 옮기고 자세(A/B/C, deg)는 그대로 쓴 값, 거기서 Y를 전체 -1mm 한
-        # 값이다(2026-08-24 실측 조정). quaternion 이 아니라 TaskPose와 동일한
-        # x_mm,y_mm,z_mm,rz1_deg,ry_deg,rz2_deg 6개씩 묶어 점 개수만큼
-        # 이어붙인 float64[] — 길이가 6의 배수이고 점이 2개 이상이어야
-        # 적용된다. 빈 배열이면(기본) goal.waypoints 가 비었을 때 기존처럼
-        # 경계 계산으로 대체한다.
+        # sand_work_l(targets.yaml)의 base_link 절대좌표(mm)를 변환 없이
+        # 그대로 쓴 값, 거기서 Y만 전체 -1mm 한 값이다(2026-08-24 실측 조정).
+        # custom waypoints 모드는 base_link 로 해석되므로(코드 참고)
+        # targets.yaml 값을 그대로 복사해 넣으면 된다 — nail_local_frame
+        # 상대좌표로 옮길 필요 없음. TaskPose와 동일한 x_mm,y_mm,z_mm,
+        # rz1_deg,ry_deg,rz2_deg 6개씩 묶어 점 개수만큼 이어붙인 float64[] —
+        # 길이가 6의 배수이고 점이 2개 이상이어야 적용된다. 빈 배열이면(기본)
+        # goal.waypoints 가 비었을 때 기존처럼 경계 계산으로 대체한다.
         d('default_waypoints', [
-            -6.44, 3.96, 0.67, 6.78, 179.93, 6.89,
-            3.53, 7.83, -2.33, 91.89, -178.54, 119.15,
-            -6.39, 18.24, -5.04, 76.93, -176.01, 34.45,
+            370.07, -17.42, 396.82, 6.78, 179.93, 6.89,
+            380.04, -13.55, 393.82, 91.89, -178.54, 119.15,
+            370.12, -3.14, 391.11, 76.93, -176.01, 34.45,
         ])
         # 손톱 경계 ★ — launch 가 static_frames.yaml 의 nail_region 에서 주입한다.
         # 여기 기본값은 launch 없이 `ros2 run` 으로 띄웠을 때만 쓰인다.
@@ -435,12 +436,16 @@ class SandingNode(Node):
             lc_goal.approach_vector = Vector3(x=approach_vec_3d[0], y=approach_vec_3d[1],
                                                z=approach_vec_3d[2])
             if use_custom_waypoints:
+                # targets.yaml 값을 변환 없이 그대로 붙여넣을 수 있도록
+                # base_link 절대좌표로 해석한다(nail_local_frame 상대좌표
+                # 변환은 실수하기 쉬워 반복적으로 문제가 됐음).
                 lc_goal.waypoints = list(sweep_poses)
                 lc_goal.work_plane_offset_mm = sweep_poses[0].position.z * 1000.0
+                lc_goal.frame_id = 'base_link'
             else:
                 lc_goal.waypoints = [mm_to_pose(p, z_mm) for p in sweep_xy_mm]
                 lc_goal.work_plane_offset_mm = z_mm
-            lc_goal.frame_id = 'nail_local_frame'
+                lc_goal.frame_id = 'nail_local_frame'
             lc_goal.session_id = goal.session_id
             lc_goal.target_force_n = target_force
             lc_goal.max_force_n = max_force

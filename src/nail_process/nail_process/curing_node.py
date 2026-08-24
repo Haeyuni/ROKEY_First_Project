@@ -113,10 +113,12 @@ class CuringNode(Node):
         d('park_distance_mm', 120.0)
         # goal.waypoints 가 비어 있을 때 자동으로 쓸 기본 수동 왕복 경로
         # (sanding_node의 default_waypoints/oscillations 와 동일 패턴).
-        # quaternion 이 아니라 TaskPose와 동일한 x_mm,y_mm,z_mm,rz1_deg,
-        # ry_deg,rz2_deg 6개씩 묶어 점 개수만큼 이어붙인 float64[] — 길이가
-        # 6의 배수이고 점이 2개 이상이어야 적용된다. 빈 배열이면(기본)
-        # 기존처럼 nail_size_x_mm/y_mm 기반 dwell 지점 계산으로 대체한다.
+        # base_link 절대좌표로 해석되므로(코드 참고) targets.yaml 값을 변환
+        # 없이 그대로 넣으면 된다. quaternion 이 아니라 TaskPose와 동일한
+        # x_mm,y_mm,z_mm,rz1_deg,ry_deg,rz2_deg 6개씩 묶어 점 개수만큼
+        # 이어붙인 float64[] — 길이가 6의 배수이고 점이 2개 이상이어야
+        # 적용된다. 빈 배열이면(기본) 기존처럼 nail_size_x_mm/y_mm 기반
+        # dwell 지점 계산으로 대체한다.
         # 빈 리스트([])를 기본값으로 주면 rclpy 가 타입을 추론 못 해
         # byte_array 로 잘못 선언된다(ParameterDescriptor.type 지정도 안
         # 먹힘 — declare 시 값에서의 타입 추론이 우선함, 실기 확인). 원소
@@ -297,16 +299,21 @@ class CuringNode(Node):
             custom_poses = self._default_waypoints_taskposes()
             source = 'default_waypoints 파라미터'
 
-        if len(custom_poses) >= 2:
+        use_custom_waypoints = len(custom_poses) >= 2
+        if use_custom_waypoints:
             self.get_logger().warn(
                 f'CureUV: waypoints {len(custom_poses)}개 수동 지정({source}, TaskPose, 자세 '
                 '포함) — dwell_points/nail_size_x_mm/y_mm 기반 계산을 건너뛰고 그 점들을 '
-                '오실레이션 왕복하며 각 지점에서 머문다. 좌표·자세 안전은 호출자 책임.')
+                'base_link 절대좌표로 그대로 오실레이션 왕복하며 각 지점에서 머문다 '
+                '(targets.yaml 값을 변환 없이 그대로 붙여넣을 수 있게 하기 위함). '
+                '좌표·자세 안전은 호출자 책임.')
             dwell_poses = [task_pose_to_ros_pose(tp)
                            for tp in oscillating_sweep(custom_poses, oscillations)]
+            dwell_frame_id = 'base_link'
         else:
             dwell_xy = self._generate_dwell_points(boundary_xy, dwell_points_n)
             dwell_poses = [self._pose_at(xy, standoff) for xy in dwell_xy]
+            dwell_frame_id = 'nail_local_frame'
 
         center = centroid(boundary_xy)
         ex, ey = self._entry_offset_xy(self.get_parameter('entry_direction').value)
@@ -342,7 +349,8 @@ class CuringNode(Node):
                         f'max_duration_s({max_duration}) 초과'
                     break
                 reason, mv_result = self._move(target_pose, speed_ratio, goal_handle,
-                                                max(1.0, deadline - time.monotonic()))
+                                                max(1.0, deadline - time.monotonic()),
+                                                frame_id=dwell_frame_id)
                 if reason != 'ok':
                     abort_code, abort_detail = self._reason_to_code(reason, mv_result)
                     break
@@ -419,10 +427,11 @@ class CuringNode(Node):
         return code, detail
 
     # --- MoveTo 클라이언트 헬퍼 (§3.3 취소 전파) -----------------------------------
-    def _move(self, pose, speed_ratio, our_goal_handle, timeout_s, ignore_cancel=False):
+    def _move(self, pose, speed_ratio, our_goal_handle, timeout_s, ignore_cancel=False,
+              frame_id='nail_local_frame'):
         goal = MoveTo.Goal()
         goal.target = pose
-        goal.frame_id = 'nail_local_frame'
+        goal.frame_id = frame_id
         goal.linear = True
         goal.speed_ratio = speed_ratio
         goal.accel_ratio = speed_ratio
