@@ -334,11 +334,14 @@ class CuringNode(Node):
         abort_code = None
         abort_detail = ''
 
-        # 1) 대기 위치로 먼저 이동 (측면 진입 — entry_direction)
-        reason, mv_result = self._move(park_pose, speed_ratio, goal_handle,
-                                        max(1.0, deadline - time.monotonic()))
-        if reason != 'ok':
-            abort_code, abort_detail = self._reason_to_code(reason, mv_result)
+        # 1) 대기 위치로 먼저 이동 (측면 진입 — entry_direction). 수동
+        #    waypoints 모드는 이 경유 없이 바로 waypoints[0]로 간다(요청) —
+        #    이탈(3번)은 안전 대응이라 모드 상관없이 그대로 유지한다.
+        if not use_custom_waypoints:
+            reason, mv_result = self._move(park_pose, speed_ratio, goal_handle,
+                                            max(1.0, deadline - time.monotonic()))
+            if reason != 'ok':
+                abort_code, abort_detail = self._reason_to_code(reason, mv_result)
 
         # 2) 체류 지점 순회
         if abort_code is None:
