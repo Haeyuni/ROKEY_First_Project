@@ -165,8 +165,11 @@ class RobotSkillNode(Node):
         d('force_ui_rate_hz', 20)
         d('pose_pub_rate_hz', 50)
         d('ft_filter_cutoff_hz', 10.0)
-        # 이동 기본값
-        d('approach_height_mm', 20.0)
+        # 이동 기본값 — PickPlace/ProbePoint 가 goal.approach_height_mm 을
+        # 안 채웠을 때 공유하는 fallback. 0 이면 접근 지점이 목표 z와 같아져
+        # 위로 뜨지 않고 바로 그 자리에서 시작한다(실기: origin_z_mm 이 이미
+        # 표면 위 호버링 높이라 여기서 더 뜨면 탐색이 표면에 못 닿음).
+        d('approach_height_mm', 0.0)
         # PLACE 시 목표 z 를 이만큼 올려서 놓는다(mm). 0 이면 PICK 과 정확히
         # 같은 높이. 이동 중 툴이 그리퍼 안에서 미끄러지면 그만큼 슬롯 바닥을
         # 눌러버리므로, 실기에서는 1~3mm 를 줘서 살짝 떨어뜨리는 편이 안전하다.
@@ -190,11 +193,16 @@ class RobotSkillNode(Node):
         # ProbePoint
         d('probe_speed_mms', 2.0)
         d('probe_contact_threshold_n', 0.3)
+        # 접촉 판정 기준(raw TCP z 힘, N — tare 적용 전 원값). 실기 실측:
+        # probe 하강 중 미접촉 시 fz ≈ -12N(툴 자중), 0.8N 만 올라도(-11.2N)
+        # 이미 실제 접촉임을 확인함 — 툴/TCP 바뀌면 자중이 달라지므로 다시
+        # 실측해서 맞출 것.
+        d('probe_contact_fz_n', -11.2)
         d('probe_max_depth_mm', 1.0)
         d('probe_max_force_n', 3.0)
         d('probe_regression_min_samples', 10)
         d('release_speed_mms', 1.0)
-        d('probe_search_step_mm', 0.1)
+        d('probe_search_step_mm', 0.2)
         # ContactPath
         d('contact_search_speed_mms', 5.0)
         d('contact_search_max_depth_mm', 15.0)
@@ -708,10 +716,13 @@ class RobotSkillNode(Node):
         return GoalResponse.ACCEPT
 
     def _cleanup_normal(self, goal_handle, retreat_mm=None):
-        """법선 접근 이탈: +Z 후퇴 후 컴플라이언스/힘 해제 (SDS §3.2)."""
+        """법선 접근 이탈: -Z 후퇴 후 컴플라이언스/힘 해제 (SDS §3.2).
+
+        실기 확인: 이 툴 자세(ry≈-179°)에서는 tool +Z 가 표면 쪽이라
+        후퇴(표면에서 멀어짐)는 -Z 다."""
         try:
             self._adapter.start_move_rel_tool_z(
-                (retreat_mm or self._retreat_mm), 10.0, 50.0)
+                -(retreat_mm or self._retreat_mm), 10.0, 50.0)
             self._monitor(goal_handle, 10.0, 10.0, lambda: None)
         finally:
             self._adapter.compliance_off()
@@ -776,7 +787,8 @@ class RobotSkillNode(Node):
                 result.base = self._finish_from_reason(reason, goal_handle, started_at,
                                                          context='ContactPath 탐색')
                 return result
-            self._adapter.start_move_rel_tool_z(-step_mm, search_speed, search_speed * 2)
+            # ProbePoint 와 동일한 이유로 부호 반전(+Z = 표면 쪽, 실기 확인).
+            self._adapter.start_move_rel_tool_z(step_mm, search_speed, search_speed * 2)
             self._monitor(goal_handle, 5.0, 20.0, lambda: None)
             travelled += step_mm
             w = self._adapter.read_wrench()
@@ -1202,6 +1214,7 @@ class RobotSkillNode(Node):
             self.get_parameter('probe_speed_mms').value
         contact_threshold = goal.contact_threshold_n if goal.contact_threshold_n > 0.0 else \
             self.get_parameter('probe_contact_threshold_n').value
+        contact_fz_n = self.get_parameter('probe_contact_fz_n').value
         max_depth = goal.max_depth_mm if goal.max_depth_mm > 0.0 else \
             self.get_parameter('probe_max_depth_mm').value
         max_force = goal.max_force_n if goal.max_force_n > 0.0 else \
@@ -1232,20 +1245,59 @@ class RobotSkillNode(Node):
                                   target_base.z * 1000.0 + approach_height,
                                   current.rz1_deg, current.ry_deg, current.rz2_deg)
 
-        self._adapter.start_move_line(approach_pose, approach_speed * 4, approach_speed * 8)
-        reason = self._monitor(goal_handle, self.get_parameter('motion_timeout_s').value, 10.0,
-                                lambda: None)
-        if reason != 'ok':
-            result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                     context='ProbePoint 접근')
-            return result
-
+        # 접근 이동(approach_pose 까지)도 힘을 감시한다. target 이 참조하는
+        # 프레임(예: nail_frame) 좌표가 아직 미실측이면 approach_pose 자체가
+        # 이미 실제 표면과 같거나 그 아래일 수 있는데, 이 이동은 원래
+        # 위치제어로만 빠르게(approach_speed*4) 갔다 — 실기에서 표면에 힘
+        # 감시 없이 그대로 부딪히는 문제가 확인됨. 이동 전에 미리 tare 해두고
+        # (자세는 이동 중 안 바뀌므로 그대로 재사용 가능) 도중에 힘이
+        # max_force_n 을 넘으면 즉시 멈추고 위로 후퇴한다.
         try:
             tare = self._adapter.read_wrench()
         except DsrAdapterError as e:
             goal_handle.abort()
             result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED,
                                               f'힘 센서 조회 실패: {e}', started_at)
+            return result
+
+        approach_hit = {'value': False}
+
+        def approach_should_abort():
+            if goal_handle.is_cancel_requested or not self._safe_to_move():
+                return True
+            try:
+                w = self._adapter.read_wrench()
+            except DsrAdapterError:
+                return False
+            mag = math.sqrt((w.fx_n - tare.fx_n) ** 2 + (w.fy_n - tare.fy_n) ** 2 +
+                             (w.fz_n - tare.fz_n) ** 2)
+            if mag >= max_force:
+                approach_hit['value'] = True
+                return True
+            return False
+
+        self._adapter.start_move_line(approach_pose, approach_speed * 4, approach_speed * 8)
+        completed = self._adapter.wait_motion_done(
+            self.get_parameter('motion_timeout_s').value, 10.0, on_tick=None,
+            should_abort=approach_should_abort)
+
+        if approach_hit['value']:
+            # 표면 쪽에서 후퇴 = -Z (실기 확인, 위 주석들과 동일한 부호).
+            self._adapter.start_move_rel_tool_z(-self._retreat_mm, 10.0, 30.0)
+            self._monitor(goal_handle, 10.0, 10.0, lambda: None)
+            self._log_abort(ErrorCode.E_OVERFORCE,
+                             'ProbePoint 접근 중 예상 밖 접촉 감지 — target/frame_id 좌표 확인 필요 '
+                             '(nail_frame 등 미실측 프레임일 수 있음)')
+            goal_handle.abort()
+            result.base = self._result_base(False, ErrorCode.E_OVERFORCE,
+                                              '접근 이동 중 예상 밖 접촉 — 목표 좌표 확인 필요',
+                                              started_at)
+            return result
+        if not completed:
+            reason = 'cancel' if goal_handle.is_cancel_requested else \
+                ('safety' if not self._safe_to_move() else 'timeout')
+            result.base = self._finish_from_reason(reason, goal_handle, started_at,
+                                                     context='ProbePoint 접근')
             return result
 
         def relative(w):
@@ -1270,13 +1322,21 @@ class RobotSkillNode(Node):
                 result.base = self._finish_from_reason(reason, goal_handle, started_at,
                                                          context='ProbePoint 하강')
                 return result
-            self._adapter.start_move_rel_tool_z(-step_mm, approach_speed, approach_speed * 2)
+            # 실기 확인: 이 툴 자세(ry≈-179°)에서는 tool +Z 가 표면 쪽이다
+            # (아래 주석의 "-Z=표면" 가정이 뒤집혀 있었음 — probe_depth_mm 을
+            # 올렸더니 반대로 위로 올라가는 게 확인됨).
+            self._adapter.start_move_rel_tool_z(step_mm, approach_speed, approach_speed * 2)
             self._monitor(goal_handle, 5.0, 20.0, lambda: None)
             travelled += step_mm
             w = self._adapter.read_wrench()
             waveform.append(self._wrench_to_msg(w))
             r = relative(w)
-            feedback(travelled, r.fz_n)
+            # 손톱이 빗각(경사면)이면 접촉력이 fz 축에만 안 실리고 fx/fy 로도
+            # 많이 샌다 — fz 성분만 보면 접촉을 못 알아채고 계속 눌러 옆으로
+            # 미끄러지는 문제가 실기에서 확인됨. 합력 크기로 접촉/한계를
+            # 판정해 경사면에서도 실제로 부딪힌 힘 전체를 본다.
+            force_mag = math.sqrt(r.fx_n ** 2 + r.fy_n ** 2 + r.fz_n ** 2)
+            feedback(travelled, force_mag)
 
             if math.hypot(r.fx_n, r.fy_n) > lateral_limit:
                 self._probe_retreat(approach_pose)
@@ -1286,10 +1346,14 @@ class RobotSkillNode(Node):
                 result.waveform = waveform
                 return result
 
-            samples.append((travelled, r.fz_n))
-            if abs(r.fz_n) >= contact_threshold:
+            samples.append((travelled, force_mag))
+            # raw TCP z 힘(w.fz_n, tare 전)이 실측 기준값(probe_contact_fz_n,
+            # 기본 -10.5N)보다 커지면(덜 눌린 쪽으로 읽히면) 접촉으로 본다 —
+            # 미접촉 시 -12N(툴 자중) → 접촉 시 -9N까지 오르는 실측 패턴.
+            # force_mag(상대값) 기준도 그대로 두어 OR 로 판정한다.
+            if force_mag >= contact_threshold or w.fz_n >= contact_fz_n:
                 contacted = True
-            if abs(r.fz_n) >= max_force:
+            if force_mag >= max_force:
                 # SDS §5.1: "probe_max_depth_mm 또는 probe_max_force_n 도달까지
                 # 계속 하강" — contact_threshold 를 넘긴 직후 멈추면 회귀에 쓸
                 # 표본이 1개뿐이라 compute_stiffness 가 거의 항상 실패한다.
@@ -1327,14 +1391,18 @@ class RobotSkillNode(Node):
                 if goal_handle.is_cancel_requested or not self._safe_to_move():
                     break
                 step = min(step_mm, retract_total - retracted)
-                self._adapter.start_move_rel_tool_z(step, release_speed, release_speed * 2)
+                # 후퇴 = -Z (위 주석들과 동일한 부호, 실기 확인).
+                self._adapter.start_move_rel_tool_z(-step, release_speed, release_speed * 2)
                 self._monitor(goal_handle, 5.0, 20.0, lambda: None)
                 retracted += step
                 w = self._adapter.read_wrench()
                 waveform.append(self._wrench_to_msg(w))
                 r = relative(w)
                 min_fz = min(min_fz, r.fz_n)
-                feedback(max(travelled - retracted, 0.0), r.fz_n)
+                # 접촉점 기준 깊이(음수 = 접촉점 위로 후퇴한 거리). retreat_mm
+                # 만큼 계속 물러나는데 0으로 clamp 하면 물러나는 중에도
+                # depth_mm 이 0에 멈춰 있는 것처럼 보여 헷갈린다(실기 확인됨).
+                feedback(travelled - retracted, r.fz_n)
             release_force_n = min_fz
         else:
             self._probe_retreat(approach_pose)
