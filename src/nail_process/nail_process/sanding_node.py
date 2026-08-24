@@ -151,6 +151,19 @@ class SandingNode(Node):
         # 실제 손질처럼 한 번 왕복으로 안 끝내고 N번 문질러야 한다는 요청으로
         # 추가(2026-08-24). 1이면 기존과 동일(진입→반대편→원위치 1회).
         d('oscillations', 3)
+        # goal.waypoints 가 비어 있을 때(=session_orchestrator 등 대부분의
+        # 호출) 자동으로 쓸 기본 수동 왕복 경로 — sander_work/sand_work_r/
+        # sand_work_l(targets.yaml) 위치를 nail_local_frame 상대좌표로 옮기고
+        # 자세는 그대로 quaternion 변환한 값, 거기서 Y를 전체 -1mm(-0.001m)
+        # 한 값이다(2026-08-24 실측 조정). 값 7개(x,y,z,qx,qy,qz,qw)씩 묶어
+        # 점 개수만큼 이어붙인 float64[] — 길이가 7의 배수이고 점이 2개
+        # 이상이어야 적용된다. 빈 배열이면(기본) goal.waypoints 가 비었을 때
+        # 기존처럼 경계 계산으로 대체한다.
+        d('default_waypoints', [
+            -0.00644, 0.00396, 0.00067, 0.00096, 0.999999, 0.000073, 0.000607,
+            0.00353, 0.00783, -0.00233, 0.235632, 0.971759, -0.012276, 0.003409,
+            -0.00639, 0.01824, -0.00504, -0.362056, 0.931506, -0.028755, -0.019623,
+        ])
         # 손톱 경계 ★ — launch 가 static_frames.yaml 의 nail_region 에서 주입한다.
         # 여기 기본값은 launch 없이 `ros2 run` 으로 띄웠을 때만 쓰인다.
         d('nail_size_x_mm', 16.0)
@@ -179,6 +192,23 @@ class SandingNode(Node):
         if self._lateral_goal_handle is not None:
             self._lateral_goal_handle.cancel_goal_async()
         return CancelResponse.ACCEPT
+
+    # --- 기본 수동 왕복 경로 (goal.waypoints 비었을 때 대체) -----------------------
+    def _default_waypoints_poses(self):
+        """default_waypoints 파라미터(x,y,z,qx,qy,qz,qw 를 점 개수만큼 이어붙인
+        float64[])를 Pose 리스트로 변환. 길이가 7의 배수가 아니거나 점이
+        2개 미만이면 빈 리스트(=경계 계산으로 대체)."""
+        flat = list(self.get_parameter('default_waypoints').value)
+        if len(flat) < 14 or len(flat) % 7 != 0:
+            return []
+        poses = []
+        for i in range(0, len(flat), 7):
+            pose = Pose()
+            pose.position.x, pose.position.y, pose.position.z = flat[i:i + 3]
+            (pose.orientation.x, pose.orientation.y,
+             pose.orientation.z, pose.orientation.w) = flat[i + 3:i + 7]
+            poses.append(pose)
+        return poses
 
     # --- 손톱 경계 (v0.3: 스캔 대신 티칭값) ----------------------------------------
     def _nail_boundary(self):
@@ -290,19 +320,26 @@ class SandingNode(Node):
 
         base_xy, approach_vec_3d = self._approach_vector(approach_side, pitch_deg)
 
-        # --- 수동 지정 waypoints ★ — 있으면 경계 계산을 전부 건너뛰고 그 Pose들
-        #     자체(위치+자세, nail_local_frame, m)를 오실레이션 왕복 경로로
-        #     쓴다 — passes 의 z 스텝은 이 모드에서 무시된다. 경계 모드와 달리
-        #     face-down 을 강제하지 않고 각 Pose 의 orientation 을 그대로 쓴다.
-        use_custom_waypoints = len(goal.waypoints) >= 2
+        # --- 수동 지정 waypoints ★ — 있으면(goal 이 직접 주거나, goal 이
+        #     비어서 default_waypoints 파라미터로 대체됐으면) 경계 계산을
+        #     전부 건너뛰고 그 Pose들(위치+자세, nail_local_frame, m)을
+        #     오실레이션 왕복 경로로 쓴다 — passes 의 z 스텝은 이 모드에서
+        #     무시된다. 경계 모드와 달리 face-down 을 강제하지 않고 각 Pose 의
+        #     orientation 을 그대로 쓴다.
+        custom_poses = list(goal.waypoints)
+        source = 'goal.waypoints'
+        if len(custom_poses) < 2:
+            custom_poses = self._default_waypoints_poses()
+            source = 'default_waypoints 파라미터'
+        use_custom_waypoints = len(custom_poses) >= 2
         travel_limit_mm = None
 
         if use_custom_waypoints:
             self.get_logger().warn(
-                f'SandSurface: waypoints {len(goal.waypoints)}개 수동 지정(Pose, 자세 포함) — '
-                '경계/진입점/travel_limit_mm/engagement_depth_mm 검증을 전부 건너뛴다. '
-                '좌표·자세가 안전한지는 호출자 책임(NFR-09 방어선 없음).')
-            sweep_poses = _oscillating_sweep(list(goal.waypoints), oscillations)
+                f'SandSurface: waypoints {len(custom_poses)}개 수동 지정({source}, Pose, '
+                '자세 포함) — 경계/진입점/travel_limit_mm/engagement_depth_mm 검증을 전부 '
+                '건너뛴다. 좌표·자세가 안전한지는 호출자 책임(NFR-09 방어선 없음).')
+            sweep_poses = _oscillating_sweep(custom_poses, oscillations)
         else:
             # --- 손톱 경계 (파라미터 재확인 — 실기에서 param set 으로 바뀔 수 있다) ---
             boundary_xy = self._nail_boundary()
