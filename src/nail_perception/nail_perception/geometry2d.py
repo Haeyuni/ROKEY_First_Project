@@ -162,3 +162,20 @@ def nail_boundary_polygon(size_x_mm, size_y_mm, n_points=24):
     return [(a * math.cos(2.0 * math.pi * i / n_points),
              b * math.sin(2.0 * math.pi * i / n_points))
             for i in range(n_points)]
+
+
+def oscillating_sweep(points, oscillations):
+    """points(임의 튜플/객체 목록 — 2D xy, 3D xyz, geometry_msgs/Pose 등)를
+    앞뒤로 oscillations 번 왕복하는 순서로 펼친다. sanding_node/curing_node
+    가 공유하는 "수동 지정 waypoints를 N회 왕복"용 헬퍼 — 매 왕복이 시작점
+    으로 돌아오므로, 반복 경계에서 좌표가 겹치는(이동거리 0) 항목은 한 번만
+    남긴다."""
+    if len(points) < 2:
+        return list(points)
+    backward = list(reversed(points))[1:]
+    sweep = list(points)
+    for i in range(oscillations):
+        if i > 0:
+            sweep.extend(points[1:])
+        sweep.extend(backward)
+    return sweep

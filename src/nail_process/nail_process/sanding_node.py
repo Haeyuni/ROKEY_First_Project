@@ -34,7 +34,9 @@ from nail_msgs.action import LateralContact, SandSurface
 from nail_msgs.msg import ErrorCode, ResultBase, SafetyState, ToolState
 from nail_msgs.srv import ValidatePrecondition
 
-from nail_perception.geometry2d import centroid, nail_boundary_polygon, ray_polygon_distance
+from nail_perception.geometry2d import (
+    centroid, nail_boundary_polygon, oscillating_sweep, ray_polygon_distance,
+)
 
 SEVERITY_BY_CODE = {
     ErrorCode.OK: ErrorCode.SEV_NONE,
@@ -77,21 +79,6 @@ def _dot(a, b):
 def _rotate90(v):
     """반시계 90도 회전 — 접근축에 수직인 이송축(feed_axis)을 얻는다."""
     return (-v[1], v[0])
-
-
-def _oscillating_sweep(points, oscillations):
-    """points(2D xy 또는 3D xyz 튜플 목록)를 앞뒤로 oscillations 번 왕복하는
-    순서로 펼친다. 매 왕복이 시작점으로 돌아오므로, 반복 경계에서 좌표가
-    겹치는(이동거리 0) waypoint 는 한 번만 남긴다."""
-    if len(points) < 2:
-        return list(points)
-    backward = list(reversed(points))[1:]
-    sweep = list(points)
-    for i in range(oscillations):
-        if i > 0:
-            sweep.extend(points[1:])
-        sweep.extend(backward)
-    return sweep
 
 
 class SandingNode(Node):
@@ -339,7 +326,7 @@ class SandingNode(Node):
                 f'SandSurface: waypoints {len(custom_poses)}개 수동 지정({source}, Pose, '
                 '자세 포함) — 경계/진입점/travel_limit_mm/engagement_depth_mm 검증을 전부 '
                 '건너뛴다. 좌표·자세가 안전한지는 호출자 책임(NFR-09 방어선 없음).')
-            sweep_poses = _oscillating_sweep(custom_poses, oscillations)
+            sweep_poses = oscillating_sweep(custom_poses, oscillations)
         else:
             # --- 손톱 경계 (파라미터 재확인 — 실기에서 param set 으로 바뀔 수 있다) ---
             boundary_xy = self._nail_boundary()
@@ -398,7 +385,7 @@ class SandingNode(Node):
             engaged_arc = [_add_scaled(p, base_xy, engagement_mm) for p in arc_points]
 
             # 왕복(오실레이션) 스트로크 N회
-            sweep_xy_mm = _oscillating_sweep(engaged_arc, oscillations)
+            sweep_xy_mm = oscillating_sweep(engaged_arc, oscillations)
 
         def mm_to_pose(xy_mm, z_mm):
             """경계 모드 전용 — face-down 고정 자세로 Pose 를 만든다. 수동
