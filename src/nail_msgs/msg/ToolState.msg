@@ -9,6 +9,4 @@ string TWEEZERS = "tweezers"
 
 string  current_tool
 string  active_tcp                    # tcp_sander, tcp_coater, …
-float64 grip_width_mm
-float64 expected_width_mm
-bool    grip_verified
+float64 grip_width_mm                 # 마지막 그리퍼 명령 폭(실측값 아님)

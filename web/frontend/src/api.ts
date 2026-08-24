@@ -13,7 +13,6 @@ export interface CreateSessionBody {
   shape_profile_id: string;
   target_material: string;
   layer_total: number;
-  max_rework: number;
   enable_brush: boolean;
   enable_stone: boolean;
 }

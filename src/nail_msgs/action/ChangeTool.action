@@ -1,12 +1,8 @@
 string  target_tool                     # ToolState 상수. "none"이면 반납만
-float64 expected_width_mm
-float64 width_tolerance_mm
-bool    verify_after_grip
 string  park_facing                     # UV 반납 자세 지정
 ---
 nail_msgs/ResultBase base
 nail_msgs/ToolState state
-float64 measured_width_mm
 ---
-int32   step                            # 0=반납 1=랙이동 2=픽업 3=TCP 4=검증
+int32   step                            # 0=반납 1=랙이동 2=픽업 3=TCP 4=상태확정
 float64 percent

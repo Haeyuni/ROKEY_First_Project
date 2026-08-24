@@ -1,6 +1,4 @@
 string  session_id
-float64 target_force_n
-float64 max_force_n
 int32   passes
 float64 path_pitch_mm
 float64 feed_speed_mms

@@ -5,10 +5,6 @@ export interface SafetyState {
   safe_to_move: boolean;
   estop_released: boolean;
   comm_ok: boolean;
-  handrest_seated: boolean;
-  dust_extraction_on: boolean;
-  tool_grip_ok: boolean;
-  scan_valid: boolean;
   active_faults: string[];
   reason: string;
 }
@@ -31,7 +27,6 @@ export interface ProcessState {
   stage: string;
   layer_index: number;
   layer_total: number;
-  rework_count: number;
   stage_percent: number;
   session_percent: number;
   current_tool: string;
@@ -48,7 +43,6 @@ export interface RunSessionResult {
     | "ABORTED_SAFETY"
     | "CANCELLED"
     | string;
-  total_rework: number;
   warn_count: number;
   final_error: ErrorCode;
 }

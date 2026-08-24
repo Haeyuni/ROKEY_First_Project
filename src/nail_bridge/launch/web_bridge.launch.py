@@ -35,9 +35,8 @@ subscribe 쪽만 `relay_topics` 로 연다.
 **`max_relay_rate_hz` 를 서버가 강제하지 않는 이유**: rosbridge 의 rate
 제한은 구독 요청 시 클라이언트가 보내는 `throttle_rate` 필드를 그대로
 따르는 클라이언트-주도 방식이다 — 서버 쪽 상한을 강제하는 파라미터가 없다.
-다만 화이트리스트 토픽은 소스 자체가 이미 20Hz 이하로 발행하므로
-(`/force/data_ui` 는 robot_skill_node 의 `force_ui_rate_hz` 기본 20,
-`/safety/status` 는 safety_monitor 의 `publish_rate_hz` 기본 3(FAULT_COMM_LOST
+다만 화이트리스트 토픽은 소스 자체가 이미 낮은 주기로 발행하므로
+(`/safety/status` 는 safety_monitor 의 `publish_rate_hz` 기본 3(FAULT_COMM_LOST
 오탐 대응으로 하향), 나머지는
 이벤트/변경 기반으로 더 느리다) 이 상한은 설계상 이미 지켜진다 — 여기서
 추가로 스로틀링 코드를 만들지 않는다.
@@ -70,14 +69,6 @@ def _launch_setup(context, *args, **kwargs):
         cfg = (yaml.safe_load(f) or {}).get('web_bridge', {})
 
     relay_topics = list(cfg.get('relay_topics', []))
-    if cfg.get('allow_force_raw', False):
-        # NIS §9 경고: "true 금지". 그래도 파라미터가 존재하는 이상 켰을 때
-        # 실제로 뚫리는지는 구현해야 한다 — 대신 크게 경고한다.
-        print('[web_bridge] allow_force_raw=true — /force/data(100Hz) 를 '
-              '웹에 노출합니다. NIS §9: "WebSocket이 못 버팁니다". 디버깅 '
-              '전용으로만 쓰세요.')
-        relay_topics = relay_topics + ['/force/data']
-
     allowed_action = cfg.get('allowed_action', '/session/run')
     allowed_service = cfg.get('allowed_service', '/safety/reset')
 

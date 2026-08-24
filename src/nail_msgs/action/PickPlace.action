@@ -6,21 +6,16 @@ string  target_key             # targets.yaml 키
 string  frame_id
 float64 approach_height_mm
 float64 grip_width_mm          # PICK 시 목표 폭
-float64 expected_width_mm
-float64 width_tolerance_mm
-bool    verify_grip
 bool    already_holding        # 그리퍼가 이미 툴(예: 핀셋)을 쥔 채로 호출됨.
                                 # PICK: 하강 전 완전개방(gripper_open_width_mm)을
                                 # 건너뛰고 지금 쥔 폭 그대로 목표 위치로 내려가
-                                # grip_width_mm/expected_width_mm 로 좁힌다 —
+                                # grip_width_mm 로 좁힌다 —
                                 # 완전개방하면 쥐고 있던 툴 자체를 놓친다.
-                                # PLACE: 완전개방 대신 grip_width_mm/
-                                # expected_width_mm 폭까지만 벌려서 놓는다 —
+                                # PLACE: 완전개방 대신 grip_width_mm 폭까지만
+                                # 벌려서 놓는다 —
                                 # 예: 스톤만 놓고 핀셋 손잡이는 계속 쥔 채 유지.
 ---
 nail_msgs/ResultBase base
-float64 measured_width_mm
-bool    grip_verified
 ---
-int32   step                   # 0=이동 1=하강 2=그립 3=검증 4=상승
+int32   step                   # 0=이동 1=하강 2=그립 4=상승
 float64 percent
