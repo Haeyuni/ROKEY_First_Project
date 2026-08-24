@@ -132,7 +132,7 @@ class ToolManagerNode(Node):
         d('dsr_prefix', 'dsr01')
         d('robot_model', 'm0609')
         d('safety_topic', '/safety/status')
-        d('safety_status_timeout_s', 0.2)
+        d('safety_status_timeout_s', 1.0)
         d('node_timeout_s', 120.0)
         d('log_force_data', False)
         d('use_mock_hardware', False)

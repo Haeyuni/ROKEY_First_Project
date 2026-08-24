@@ -99,7 +99,7 @@ class CuringNode(Node):
     def _declare_parameters(self):
         d = self.declare_parameter
         d('safety_topic', '/safety/status')
-        d('safety_status_timeout_s', 0.2)
+        d('safety_status_timeout_s', 1.0)
         d('node_timeout_s', 120.0)
         d('log_force_data', False)
         d('uv_always_on', True)  # v0.2 고정. false 미지원 — 값을 바꿔도 동작 안 변함

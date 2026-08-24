@@ -151,7 +151,7 @@ class RobotSkillNode(Node):
         d('base_frame_id', 'base_0')
         d('node_timeout_s', 120.0)
         d('safety_topic', '/safety/status')
-        d('safety_status_timeout_s', 0.2)
+        d('safety_status_timeout_s', 1.0)
         d('log_force_data', False)
         # use_mock_hardware: NIS §3.6 공통 파라미터로 선언만 한다. 이 노드는
         # mock 분기를 두지 않는다 — 로봇 없이 검증할 때는 두산 공식 가상

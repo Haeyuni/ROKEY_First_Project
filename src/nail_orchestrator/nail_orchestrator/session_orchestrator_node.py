@@ -117,7 +117,7 @@ class SessionOrchestratorNode(Node):
     def _declare_parameters(self):
         d = self.declare_parameter
         d('node_timeout_s', 0.0)  # 세션 전체는 여러 단계 타임아웃의 합 — 자체 상한 없음
-        d('safety_status_timeout_s', 0.2)
+        d('safety_status_timeout_s', 1.0)
         d('log_force_data', False)
         d('layer_total', 2)
         d('enable_stone', False)
