@@ -132,6 +132,10 @@ class SandingNode(Node):
         d('step_over_mm', 1.5)
         d('feed_speed_mms', 8.0)
         d('max_duration_s', 60.0)
+        # 한 pass(z 높이 고정) 안에서 진입측 호를 앞뒤로 왕복하는 횟수 —
+        # 실제 손질처럼 한 번 왕복으로 안 끝내고 N번 문질러야 한다는 요청으로
+        # 추가(2026-08-24). 1이면 기존과 동일(진입→반대편→원위치 1회).
+        d('oscillations', 3)
         # 손톱 경계 ★ — launch 가 static_frames.yaml 의 nail_region 에서 주입한다.
         # 여기 기본값은 launch 없이 `ros2 run` 으로 띄웠을 때만 쓰인다.
         d('nail_size_x_mm', 16.0)
@@ -324,7 +328,16 @@ class SandingNode(Node):
         if len(arc_points) < 2:
             arc_points = [start_xy, start_xy]
         engaged_arc = [_add_scaled(p, base_xy, engagement_mm) for p in arc_points]
-        sweep_xy_mm = engaged_arc + list(reversed(engaged_arc[:-1]))
+
+        # 왕복(오실레이션) 스트로크 N회 — 매번 진입점으로 되돌아오므로 반복
+        # 경계에서 좌표가 겹치는(이동 거리 0) waypoint 는 한 번만 남긴다.
+        oscillations = max(1, int(self.get_parameter('oscillations').value))
+        backward = list(reversed(engaged_arc))[1:]
+        sweep_xy_mm = list(engaged_arc)
+        for i in range(oscillations):
+            if i > 0:
+                sweep_xy_mm.extend(engaged_arc[1:])
+            sweep_xy_mm.extend(backward)
 
         def mm_to_pose(xy_mm, z_mm):
             pose = Pose()
