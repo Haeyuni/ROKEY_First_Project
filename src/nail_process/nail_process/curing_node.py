@@ -35,12 +35,13 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from nail_msgs.action import CureUV, MoveTo
-from nail_msgs.msg import ErrorCode, ResultBase, SafetyState, ToolState
+from nail_msgs.msg import ErrorCode, ResultBase, SafetyState, TaskPose, ToolState
 from nail_msgs.srv import ValidatePrecondition
 
 from nail_perception.geometry2d import (
     centroid, nail_boundary_polygon, oscillating_sweep, polygon_area, raster_fill,
 )
+from nail_skill.conversions import task_pose_to_ros_pose
 
 SEVERITY_BY_CODE = {
     ErrorCode.OK: ErrorCode.SEV_NONE,
@@ -112,10 +113,17 @@ class CuringNode(Node):
         d('park_distance_mm', 120.0)
         # goal.waypoints 가 비어 있을 때 자동으로 쓸 기본 수동 왕복 경로
         # (sanding_node의 default_waypoints/oscillations 와 동일 패턴).
-        # 값 7개(x,y,z,qx,qy,qz,qw)씩 묶어 점 개수만큼 이어붙인 float64[] —
-        # 길이가 7의 배수이고 점이 2개 이상이어야 적용된다. 빈 배열이면(기본)
+        # quaternion 이 아니라 TaskPose와 동일한 x_mm,y_mm,z_mm,rz1_deg,
+        # ry_deg,rz2_deg 6개씩 묶어 점 개수만큼 이어붙인 float64[] — 길이가
+        # 6의 배수이고 점이 2개 이상이어야 적용된다. 빈 배열이면(기본)
         # 기존처럼 nail_size_x_mm/y_mm 기반 dwell 지점 계산으로 대체한다.
-        d('default_waypoints', [])
+        # 빈 리스트([])를 기본값으로 주면 rclpy 가 타입을 추론 못 해
+        # byte_array 로 잘못 선언된다(ParameterDescriptor.type 지정도 안
+        # 먹힘 — declare 시 값에서의 타입 추론이 우선함, 실기 확인). 원소
+        # 1개짜리 double 리스트를 기본값으로 줘서 double_array 로 추론되게
+        # 하고, _default_waypoints_taskposes() 의 길이<12 조건으로 "미설정"
+        # 취급한다.
+        d('default_waypoints', [0.0])
         d('oscillations', 1)
         d('max_duration_s', 120.0)
         # MoveTo 는 speed_ratio(0~1) 를 받는다 — robot_skill_node 의
@@ -130,20 +138,20 @@ class CuringNode(Node):
         d('nail_boundary_points', 24)
 
     # --- 기본 수동 왕복 경로 (goal.waypoints 비었을 때 대체) -----------------------
-    def _default_waypoints_poses(self):
-        """default_waypoints 파라미터(x,y,z,qx,qy,qz,qw 를 점 개수만큼 이어붙인
-        float64[])를 Pose 리스트로 변환. 길이가 7의 배수가 아니거나 점이
-        2개 미만이면 빈 리스트(=dwell 지점 계산으로 대체)."""
+    def _default_waypoints_taskposes(self):
+        """default_waypoints 파라미터(x_mm,y_mm,z_mm,rz1_deg,ry_deg,rz2_deg 를
+        점 개수만큼 이어붙인 float64[])를 TaskPose 리스트로 변환. 길이가
+        6의 배수가 아니거나 점이 2개 미만이면 빈 리스트(=dwell 지점 계산으로
+        대체)."""
         flat = list(self.get_parameter('default_waypoints').value)
-        if len(flat) < 14 or len(flat) % 7 != 0:
+        if len(flat) < 12 or len(flat) % 6 != 0:
             return []
         poses = []
-        for i in range(0, len(flat), 7):
-            pose = Pose()
-            pose.position.x, pose.position.y, pose.position.z = flat[i:i + 3]
-            (pose.orientation.x, pose.orientation.y,
-             pose.orientation.z, pose.orientation.w) = flat[i + 3:i + 7]
-            poses.append(pose)
+        for i in range(0, len(flat), 6):
+            tp = TaskPose()
+            (tp.x_mm, tp.y_mm, tp.z_mm,
+             tp.rz1_deg, tp.ry_deg, tp.rz2_deg) = flat[i:i + 6]
+            poses.append(tp)
         return poses
 
     # --- 안전 -----------------------------------------------------------------
@@ -286,15 +294,16 @@ class CuringNode(Node):
         custom_poses = list(goal.waypoints)
         source = 'goal.waypoints'
         if len(custom_poses) < 2:
-            custom_poses = self._default_waypoints_poses()
+            custom_poses = self._default_waypoints_taskposes()
             source = 'default_waypoints 파라미터'
 
         if len(custom_poses) >= 2:
             self.get_logger().warn(
-                f'CureUV: waypoints {len(custom_poses)}개 수동 지정({source}, Pose, 자세 '
+                f'CureUV: waypoints {len(custom_poses)}개 수동 지정({source}, TaskPose, 자세 '
                 '포함) — dwell_points/nail_size_x_mm/y_mm 기반 계산을 건너뛰고 그 점들을 '
                 '오실레이션 왕복하며 각 지점에서 머문다. 좌표·자세 안전은 호출자 책임.')
-            dwell_poses = oscillating_sweep(custom_poses, oscillations)
+            dwell_poses = [task_pose_to_ros_pose(tp)
+                           for tp in oscillating_sweep(custom_poses, oscillations)]
         else:
             dwell_xy = self._generate_dwell_points(boundary_xy, dwell_points_n)
             dwell_poses = [self._pose_at(xy, standoff) for xy in dwell_xy]

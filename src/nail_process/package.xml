@@ -11,6 +11,7 @@
   <depend>rclpy</depend>
   <depend>nail_msgs</depend>
   <depend>nail_perception</depend>
+  <depend>nail_skill</depend>
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
 

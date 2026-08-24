@@ -14,6 +14,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/SafetyState.msg"
   "msg/ToolState.msg"
   "msg/ProcessState.msg"
+  "msg/TaskPose.msg"
   "srv/ValidatePrecondition.srv"
   "srv/ResetSafety.srv"
   "srv/GetToolInfo.srv"
