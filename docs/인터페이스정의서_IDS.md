@@ -46,6 +46,20 @@
 | `SandSurface.forbidden_margin_mm` | 필드 | `forbidden_polygon` 을 측정할 수단이 없음 |
 | `PlaceStone` 의 `press_force_n`, `position_tolerance_mm`, `max_retry`, `verify_enabled`, `verify_probe_count`, `position_error_mm`, `retry_count` | 필드 | 힘 제어 하강·부착 검증 폐지 |
 
+### v1.1 문서 확정 이후 실기 커미셔닝에서 추가로 폐지된 것 ★
+
+ProbePoint 계열 정리와는 별개로, 같은 날(2026-08-24) 실기 커미셔닝 중
+안착 센서·더스트 컬렉터가 하드웨어에 실제로 없다는 것이 확인되어 관련
+판정 자체를 제거했다.
+
+| 항목 | 종류 | 사유 |
+|---|---|---|
+| `SafetyState.handrest_seated` | 필드 | 안착 센서 미장착 |
+| `SafetyState.dust_extraction_on` | 필드 | 더스트 컬렉터 미장착 |
+| `SafetyState.FAULT_NO_HANDREST` | 결함 코드 | 위와 동일 |
+| `SafetyState.FAULT_NO_DUST` | 결함 코드 | 위와 동일 |
+| `sanding_node`의 `require_dust_collector` | 파라미터 (node, msg 아님) | 위와 동일 |
+
 **v1.0 에서 이미 폐지된 것들** (v0.x 문서에 있었다면 삭제)
 
 | 항목 | 사유 |
@@ -270,21 +284,21 @@ bool safe_to_move                     # 전 노드가 이 값 하나로 판단
 
 bool estop_released
 bool comm_ok
-bool handrest_seated
-bool dust_extraction_on
 bool tool_grip_ok
 
 string FAULT_ESTOP        = "FAULT_ESTOP"
 string FAULT_COMM_LOST    = "FAULT_COMM_LOST"
 string FAULT_TOOL_DROP    = "FAULT_TOOL_DROP"
-string FAULT_NO_HANDREST  = "FAULT_NO_HANDREST"
-string FAULT_NO_DUST      = "FAULT_NO_DUST"
 
 string[] active_faults                # 비어 있어야 safe_to_move 가능
 string   reason                       # 사람이 읽을 설명
 ```
 
 > **UV 관련 필드가 없습니다.** 상시 ON 정책이므로 소프트웨어가 UV 상태를 소유하지 않습니다. UV 차단은 물리 결선(SDS §9.3)이 담당합니다.
+>
+> **삭제됨(2026-08-24)**: `handrest_seated`, `dust_extraction_on`,
+> `FAULT_NO_HANDREST`, `FAULT_NO_DUST` — 안착 센서·더스트 컬렉터 모두
+> 하드웨어 미장착으로 판정 자체가 불가능해 필드째 제거됨.
 
 ### 3.5 ToolState.msg
 
