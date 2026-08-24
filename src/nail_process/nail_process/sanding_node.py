@@ -53,6 +53,15 @@ def _severity_for(code):
     return SEVERITY_BY_CODE.get(code, ErrorCode.SEV_ABORT)
 
 
+# 툴이 nail_local_frame 의 -Z(표면) 를 향하도록 고정하는 자세 — 로컬 X축
+# 기준 180도 회전 (curing_node._FACE_DOWN_QUAT 와 동일). nail_local_frame
+# 은 roll/pitch/yaw 가 전부 0(수평, identity)이라 orientation.w=1.0 을
+# 그대로 쓰면 base_link 기준 A=0,B=0,C=0 이 되어 이 워크스페이스의 모든
+# 실측 좌표(B≈±180°)와 반대 방향이 된다 — 실기에서 큰 B축 재정렬 도중
+# 특이점/도달불가로 ABORT 되는 것으로 확인됨.
+_FACE_DOWN_QUAT = (1.0, 0.0, 0.0, 0.0)  # (x, y, z, w)
+
+
 def _sub(a, b):
     return (a[0] - b[0], a[1] - b[1])
 
@@ -304,7 +313,8 @@ class SandingNode(Node):
             pose.position.x = xy_mm[0] / 1000.0
             pose.position.y = xy_mm[1] / 1000.0
             pose.position.z = z_mm / 1000.0
-            pose.orientation.w = 1.0
+            pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = \
+                _FACE_DOWN_QUAT
             return pose
 
         def feedback(pct, current_pass, travel_mm, wrench=None):
