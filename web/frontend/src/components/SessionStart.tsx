@@ -80,7 +80,6 @@ export const SessionStart = memo(function SessionStart({
         shape_profile_id: shapeProfileId,
         target_material: targetMaterial,
         layer_total: layerTotal,
-        enable_brush: true,
         enable_stone: enableStone,
       });
       setMessage(`세션 시작됨: ${session_id}`);

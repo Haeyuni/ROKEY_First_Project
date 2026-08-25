@@ -4,7 +4,6 @@ string  shape_profile_id
 string  target_material                 # 안전 검증용. 사람 신체 금지 (BR-029)
 
 int32   layer_total
-bool    enable_brush
 bool    enable_stone
 ---
 string RESULT_COMPLETED       = "COMPLETED"
