@@ -17,18 +17,48 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_db
-from ..models import SessionRecord
+from ..models import EventRecord, SessionRecord
 from ..ros_bridge import RunSessionTimeoutError, make_run_session_goal, new_session_id
 from ..schemas import (
     ALLOWED_TARGET_MATERIALS,
     CreateSessionRequest,
     CreateSessionResponse,
+    EventItem,
+    SessionListItem,
     SessionReportResponse,
 )
 
 logger = logging.getLogger("nail_web.sessions")
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+
+
+# 관리자 대시보드: 세션 이력 목록(최신순, 페이지네이션 + 결과 코드 필터).
+@router.get("", response_model=list[SessionListItem])
+async def list_sessions(
+    db: AsyncSession = Depends(get_db),
+    limit: int = 50,
+    offset: int = 0,
+    result_code: str | None = None,
+) -> list[SessionListItem]:
+    stmt = select(SessionRecord).order_by(SessionRecord.created_at.desc()).limit(limit).offset(offset)
+    if result_code is not None:
+        stmt = stmt.where(SessionRecord.result_code == result_code)
+    rows = (await db.execute(stmt)).scalars().all()
+    return [
+        SessionListItem(
+            id=r.id,
+            recipe_id=r.recipe_id,
+            target_material=r.target_material,
+            layer_total=r.layer_total,
+            result_code=r.result_code,
+            abort_reason=r.abort_reason,
+            started_at=r.started_at,
+            finished_at=r.finished_at,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
 
 
 @router.post("", response_model=CreateSessionResponse, status_code=201)
@@ -138,3 +168,18 @@ async def get_session_report(
         started_at=session.started_at,
         finished_at=session.finished_at,
     )
+
+
+# 관리자 대시보드: 세션 하나의 시계열 이벤트(state/error/safety) 로그.
+@router.get("/{session_id}/events", response_model=list[EventItem])
+async def get_session_events(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> list[EventItem]:
+    session = await db.get(SessionRecord, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+
+    stmt = select(EventRecord).where(EventRecord.session_id == session_id).order_by(EventRecord.ts.asc())
+    rows = (await db.execute(stmt)).scalars().all()
+    return [EventItem(id=r.id, ts=r.ts, mtype=r.mtype, detail=r.detail) for r in rows]

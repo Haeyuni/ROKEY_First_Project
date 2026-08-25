@@ -61,3 +61,29 @@ export interface Recipe {
   layer_total: number;
   description: string;
 }
+
+// 관리자 대시보드: 세션 이력 목록 + 세션별 이벤트 로그.
+export interface SessionListItem {
+  id: string;
+  recipe_id: string;
+  target_material: string;
+  layer_total: number;
+  result_code: string | null;
+  abort_reason: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+}
+
+export interface SessionEvent {
+  id: number;
+  ts: string;
+  mtype: string;
+  detail: Record<string, unknown>;
+}
+
+export interface HealthResponse {
+  status: string;
+  ros_connected: boolean;
+  db_ok: boolean;
+}
