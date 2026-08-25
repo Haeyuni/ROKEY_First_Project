@@ -35,11 +35,12 @@ def build_surface_path(config_path, surface_name, pitch_mm, inset_mm,
                        arc_min_radius_mm=1.0, arc_max_radius_mm=100.0,
                        arc_max_z_change_mm=2.0, arc_max_orientation_change_deg=10.0,
                        lift_between_rungs_mm=0.0):
-    """브러시 여섯 티칭 Pose를 순서대로 잇는 곡면 경로를 만든다.
+    """세 곡선을 왕복하는 브러시 경로를 만든다.
 
-    P1→P2→P3, P4→P5→P6은 각각 실제 티칭한 경유점을 쓰는 MoveC 원호다.
-    P3→P4와 반복 시 P6→P1은 별도 경유점이 없어 MoveL로 연결한다. 브러시는
-    티칭한 경계까지 쓸어야 하므로 coverage_margin_mm은 0만 허용한다.
+    위(P1→P2→P3), 중앙(각 위·아래 Pose의 중점), 아래(P4→P5→P6)를
+    순서대로 실행한 뒤 역순으로 한 번 더 실행한다. 곡선 사이는 표면에서
+    lift_between_rungs_mm만큼 이탈해 이동한다. 첫 P1도 같은 높이로 먼저
+    접근해 브러시가 표면을 긁지 않게 한다.
     """
     entry = _load_surface(config_path, surface_name)
     poses = [_pose_from_entry(entry['poses'], f'p{i}') for i in range(1, 7)]
@@ -47,8 +48,10 @@ def build_surface_path(config_path, surface_name, pitch_mm, inset_mm,
 
     pitch_mm = float(pitch_mm)
     inset_mm = float(inset_mm)
-    if pitch_mm <= 0.0 or inset_mm < 0.0:
-        raise SurfaceConfigError('path_pitch_mm은 양수, 경계 여유는 0 이상이어야 함')
+    lift_between_rungs_mm = float(lift_between_rungs_mm)
+    if pitch_mm <= 0.0 or inset_mm < 0.0 or lift_between_rungs_mm < 0.0:
+        raise SurfaceConfigError(
+            'path_pitch_mm은 양수, 경계 여유와 stroke_transfer_lift_mm은 0 이상이어야 함')
     if inset_mm != 0.0:
         raise SurfaceConfigError(
             '브러시 곡면 경로는 티칭 경계까지 실행하므로 coverage_margin_mm은 0이어야 함')
@@ -56,9 +59,34 @@ def build_surface_path(config_path, surface_name, pitch_mm, inset_mm,
     boundary = [Point(x=pose.position.x, y=pose.position.y, z=pose.position.z)
                 for pose in (p1, p2, p3, p4, p5, p6)]
 
-    waypoints = poses
+    middle = [_blend_pose(top, bottom, 0.5)
+              for top, bottom in ((p1, p6), (p2, p5), (p3, p4))]
+    strokes = (
+        (p1, p2, p3),
+        tuple(middle),
+        (p4, p5, p6),
+        (p6, p5, p4),
+        tuple(reversed(middle)),
+        (p3, p2, p1),
+    )
+
+    waypoints = []
     circular_via_indices = []
-    for start_index, via_index, end_index in ((0, 1, 2), (3, 4, 5)):
+    for stroke in strokes:
+        if lift_between_rungs_mm > 0.0:
+            if waypoints:
+                waypoints.append(_lift_pose(waypoints[-1], lift_between_rungs_mm))
+                # 아래 곡선 끝 P6에서 곧바로 역방향 곡선을 시작할 때는
+                # 같은 상승점을 두 번 명령하지 않는다.
+                if _position_distance_mm(waypoints[-2], stroke[0]) > 1e-6:
+                    waypoints.append(_lift_pose(stroke[0], lift_between_rungs_mm))
+            else:
+                waypoints.append(_lift_pose(stroke[0], lift_between_rungs_mm))
+
+        start_index = len(waypoints)
+        waypoints.extend(stroke)
+        via_index = start_index + 1
+        end_index = start_index + 2
         if _arc_is_valid(
                 waypoints[start_index], waypoints[via_index], waypoints[end_index],
                 float(arc_min_sagitta_mm), float(arc_min_radius_mm),
@@ -71,7 +99,7 @@ def build_surface_path(config_path, surface_name, pitch_mm, inset_mm,
         waypoints=waypoints,
         circular_via_indices=circular_via_indices,
         allowed_polygon=boundary,
-        row_count=2,
+        row_count=len(strokes),
     )
 
 
@@ -165,13 +193,15 @@ def _zyz_quaternion(rz1_deg, ry_deg, rz2_deg):
 
 
 def _lift_pose(pose, lift_mm):
-    """pose 를 표면 반대 방향(local -Z, robot_skill_node 의 "tool +Z가
-    표면 쪽" 관례와 동일)으로 lift_mm 만큼 들어올린 Pose. 자세는 그대로."""
-    axis = _local_z_axis(pose.orientation)
+    """브러시 연결 이동용으로 base_link +Z만 lift_mm 만큼 올린 Pose.
+
+    티칭 경계 꼭짓점에서는 툴 축 방향 상승이 X/Y를 경계 밖으로 밀 수 있어,
+    수평 위치를 유지하는 수직 상승을 사용한다.
+    """
     lifted = Pose()
-    lifted.position.x = pose.position.x - axis[0] * lift_mm / 1000.0
-    lifted.position.y = pose.position.y - axis[1] * lift_mm / 1000.0
-    lifted.position.z = pose.position.z - axis[2] * lift_mm / 1000.0
+    lifted.position.x = pose.position.x
+    lifted.position.y = pose.position.y
+    lifted.position.z = pose.position.z + lift_mm / 1000.0
     lifted.orientation = pose.orientation
     return lifted
 
