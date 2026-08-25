@@ -25,6 +25,9 @@ def generate_launch_description():
             'home_target_key', default_value='rack_transit',
             description='실패·취소 시 복귀할 targets.yaml의 티칭 target_key'),
         DeclareLaunchArgument(
+            'sanding_path_y_offset_mm', default_value='0.5',
+            description='샌딩 기본 3-Pose 전체에 적용할 base_link Y 보정(mm)'),
+        DeclareLaunchArgument(
             'log_level', default_value='info',
             description='ROS 로그 레벨'),
         IncludeLaunchDescription(
@@ -33,6 +36,7 @@ def generate_launch_description():
                 'nodes': 'all',
                 'dsr_prefix': LaunchConfiguration('dsr_prefix'),
                 'home_target_key': LaunchConfiguration('home_target_key'),
+                'sanding_path_y_offset_mm': LaunchConfiguration('sanding_path_y_offset_mm'),
                 'log_level': LaunchConfiguration('log_level'),
             }.items()),
     ])
