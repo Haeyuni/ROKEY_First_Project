@@ -82,7 +82,7 @@ class StoneNode(Node):
         d('safety_topic', '/safety/status')
         d('safety_status_timeout_s', 1.0)
         d('node_timeout_s', 120.0)
-        d('press_duration_s', 2.0)
+        d('press_duration_s', 3.0)
         d('stone_config_path', '')
 
     def _on_safety_status(self, msg):

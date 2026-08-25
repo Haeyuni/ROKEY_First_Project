@@ -21,4 +21,4 @@ surfaces:
       p1: {x_mm: 418.65, y_mm: 168.43, z_mm: 357.69, rz1_deg: 78.13, ry_deg: -132.42, rz2_deg: 54.26}
       p2: {x_mm: 407.19, y_mm: 186.42, z_mm: 322.43, rz1_deg: 81.75, ry_deg: -127.77, rz2_deg: 51.93}
       p3: {x_mm: 401.05, y_mm: 196.65, z_mm: 322.98, rz1_deg: 82.47, ry_deg: -128.07, rz2_deg: 52.29}
-      p4: {x_mm: , y_mm: , z_mm: , rz1_deg: , ry_deg: , rz2_deg: }
+      p4: {x_mm: 401.05, y_mm: 196.65, z_mm: 357.69, rz1_deg: 82.47, ry_deg: -128.07, rz2_deg: 52.29}

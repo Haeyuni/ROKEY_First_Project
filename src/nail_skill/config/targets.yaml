@@ -52,14 +52,14 @@ rack_transit: # 랙 진입 전 경유점 - 완 (get_current_posx 실측)
   ry_deg: -178.81
   rz2_deg: 144.12
 
-stone_tray: # 스톤 공급 트레이 - 완 (get_current_posx 실측)
-  x_mm: 408.56
-  y_mm: 126.22
-  z_mm: 284.95
+stone_tray: # 스톤 공급 트레이 - 완 (get_current_posx 실측, 2026-08-25)
+  x_mm: 409.13
+  y_mm: 125.04
+  z_mm: 291.37
   frame_id: base_link
-  rz1_deg: 30.29    # A
-  ry_deg: -179.01   # B
-  rz2_deg: 30.43   # C
+  rz1_deg: 23.22    # A
+  ry_deg: -178.48   # B
+  rz2_deg: 23.50   # C
 
 # ※ 스톤 부착 위치(구 stone_place)는 여기서 빠졌다 — 그 실측 좌표는
 #   nail_bringup/config/static_frames.yaml 의 `nail_local_frame` 으로
@@ -149,41 +149,41 @@ tweezers: # 핀셋 - 완
 # Z축 정렬하지 않는다. 파츠 결에 맞춘 기울어진 A/B/C를 그대로 유지한다.
 # taught_stone.yaml의 configured=false 동안에는 이 0 값으로 이동하지 않는다.
 
-stone_pick_approach:
-  x_mm: 0.0
-  y_mm: 0.0
-  z_mm: 0.0
+stone_pick_approach: # stone_pick 대비 z+30mm (2026-08-25)
+  x_mm: 409.13
+  y_mm: 125.04
+  z_mm: 321.37
   frame_id: base_link
-  rz1_deg: 0.0
-  ry_deg: 0.0
-  rz2_deg: 0.0
+  rz1_deg: 23.22
+  ry_deg: -178.48
+  rz2_deg: 23.50
 
-stone_pick:
-  x_mm: 0.0
-  y_mm: 0.0
-  z_mm: 0.0
+stone_pick: # get_current_posx 실측 (2026-08-25)
+  x_mm: 409.13
+  y_mm: 125.04
+  z_mm: 291.37
   frame_id: base_link
-  rz1_deg: 0.0
-  ry_deg: 0.0
-  rz2_deg: 0.0
+  rz1_deg: 23.22
+  ry_deg: -178.48
+  rz2_deg: 23.50
 
-stone_place_approach:
-  x_mm: 0.0
-  y_mm: 0.0
-  z_mm: 0.0
+stone_place_approach: # get_current_posx 실측 (2026-08-25)
+  x_mm: 424.44
+  y_mm: -5.87
+  z_mm: 421.81
   frame_id: base_link
-  rz1_deg: 0.0
-  ry_deg: 0.0
-  rz2_deg: 0.0
+  rz1_deg: 86.27
+  ry_deg: -177.45
+  rz2_deg: 171.07
 
-stone_place:
-  x_mm: 0.0
-  y_mm: 0.0
-  z_mm: 0.0
+stone_place: # get_current_posx 실측 (2026-08-25)
+  x_mm: 427.81
+  y_mm: 38.49
+  z_mm: 389.50
   frame_id: base_link
-  rz1_deg: 0.0
-  ry_deg: 0.0
-  rz2_deg: 0.0
+  rz1_deg: 84.48
+  ry_deg: -165.15
+  rz2_deg: 170.01
 
 sander_work: # 네일 파일 작업 시작 자세 - 재실측 (2026-08-24, get_current_posx)
   x_mm: 370.07
