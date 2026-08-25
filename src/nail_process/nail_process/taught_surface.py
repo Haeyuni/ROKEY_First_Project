@@ -1,9 +1,12 @@
-"""여섯 티칭 Pose로 브러싱/코팅 공용 곡면 왕복 경로를 만든다."""
+"""여섯 티칭 Pose로 브러싱 곡면 왕복 경로를 만든다 (coater 는 3점 반복,
+build_repeat_path 참고)."""
 import math
 from dataclasses import dataclass
 
 import yaml
 from geometry_msgs.msg import Point, Pose
+
+from nail_perception.geometry2d import oscillating_sweep
 
 
 class SurfaceConfigError(ValueError):
@@ -105,6 +108,25 @@ def build_surface_path(config_path, surface_name, pitch_mm, inset_mm,
         circular_via_indices=circular_via_indices,
         allowed_polygon=boundary,
         row_count=len(rungs),
+    )
+
+
+def build_repeat_path(config_path, surface_name, repeats=1):
+    """p1, p2, p3 세 점만 그대로 waypoint 로 삼아 그 순서(p1→p2→p3)를
+    repeats 번 왕복한다 — coater 전용(요청, 2026-08-25). pitch/inset
+    세분화나 곡선 피팅 없이 세 점을 직선으로 잇는다."""
+    entry = _load_surface(config_path, surface_name)
+    poses = [_pose_from_entry(entry['poses'], f'p{i}') for i in range(1, 4)]
+    boundary = [Point(x=pose.position.x, y=pose.position.y, z=pose.position.z)
+                for pose in poses]
+    repeats = max(1, int(repeats))
+    waypoints = oscillating_sweep(poses, repeats)
+    return SurfacePath(
+        frame_id=str(entry.get('frame_id') or 'base_link'),
+        waypoints=waypoints,
+        circular_via_indices=[],
+        allowed_polygon=boundary,
+        row_count=repeats,
     )
 
 

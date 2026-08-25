@@ -5,8 +5,9 @@
 추정치일 뿐 실제 도포량이 아니며 판정 기준이 아니다 — result 에 두께
 필드를 두지 않는다.
 
-코터 전용 여섯 티칭 Pose로 만든 경계에서 `boundary_offset_mm`만큼 안쪽만
-도포한다. 실제 이동은 robot_skill_node의 `/skill/contact_path`가 담당한다.
+코터 전용 세 티칭 Pose(p1/p2/p3)를 그 순서(p1→p2→p3)로 `repeats`번
+왕복한다(2026-08-25 변경 — 6-Pose 쌍 기반에서 3점 반복으로 단순화).
+실제 이동은 robot_skill_node의 `/skill/contact_path`가 담당한다.
 """
 import threading
 import time
@@ -22,8 +23,7 @@ from nail_msgs.action import CoatGel, ContactPath
 from nail_msgs.msg import ErrorCode, ResultBase, SafetyState, ToolState
 from nail_msgs.srv import ValidatePrecondition
 
-from .taught_surface import (SurfaceConfigError, build_surface_path,
-                             surface_is_configured)
+from .taught_surface import SurfaceConfigError, build_repeat_path, surface_is_configured
 
 SEVERITY_BY_CODE = {
     ErrorCode.OK: ErrorCode.SEV_NONE,
@@ -79,25 +79,15 @@ class CoatingNode(Node):
         d('safety_topic', '/safety/status')
         d('safety_status_timeout_s', 1.0)
         d('node_timeout_s', 120.0)
-        d('boundary_offset_mm', 1.0)
-        d('path_pitch_mm', 1.5)
         d('feed_speed_mms', 10.0)
-        d('passes', 1)
         d('max_duration_s', 45.0)
         d('contact_offset_mm', 0.0)
         d('surface_config_path', '')
         d('surface_name', 'coater')
-        d('arc_segment_length_mm', 4.0)
-        d('arc_min_sagitta_mm', 0.05)
-        d('arc_min_radius_mm', 1.0)
-        d('arc_max_radius_mm', 100.0)
-        d('arc_max_z_change_mm', 2.0)
-        d('arc_max_orientation_change_deg', 10.0)
-        # p1-p6/p2-p5/p3-p4 세 쌍 사이를 바로 잇지 않고, 표면 반대 방향으로
-        # 이만큼 들어올렸다가 다음 쌍으로 넘어가게 한다(요청) — 젤이 쌍
-        # 사이를 이동할 때 표면에 끌리지 않게 하려는 목적. brush 는 이
-        # 파라미터가 없어(기본 0.0) 기존과 동일하게 바로 잇는다.
-        d('lift_between_rungs_mm', 5.0)
+        # coater 는 6점(P1~P6, 쌍 3개)이 아니라 p1/p2/p3 세 점만 받아서 그
+        # 순서(p1→p2→p3)를 이 횟수만큼 왕복한다(요청, 2026-08-25) —
+        # pitch/inset 세분화·곡선 피팅·쌍 사이 lift 개념은 이 모델에 없다.
+        d('repeats', 3)
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg):
@@ -147,7 +137,7 @@ class CoatingNode(Node):
                 self.get_parameter('surface_config_path').value,
                 self.get_parameter('surface_name').value):
             self.get_logger().warn(
-                'CoatGel REJECT: E_INVALID_GOAL (코터 6-Pose 티칭 미설정)')
+                'CoatGel REJECT: E_INVALID_GOAL (코터 3-Pose 티칭 미설정)')
             return GoalResponse.REJECT
         ok, reasons = self._call_validate_precondition(goal_request.session_id)
         if not ok:
@@ -165,24 +155,14 @@ class CoatingNode(Node):
         started_at = time.monotonic()
         result = CoatGel.Result()
 
-        boundary_offset = self._val(goal.boundary_offset_mm, 'boundary_offset_mm')
-        path_pitch = self._val(goal.path_pitch_mm, 'path_pitch_mm')
         feed_speed = self._val(goal.feed_speed_mms, 'feed_speed_mms')
-        passes = int(self._val(goal.passes, 'passes'))
         max_duration = self._val(goal.max_duration_s, 'max_duration_s')
+        repeats = int(self._val(goal.passes, 'repeats'))
 
         p = self.get_parameter
         try:
-            path = build_surface_path(
-                p('surface_config_path').value, p('surface_name').value,
-                path_pitch, boundary_offset,
-                p('arc_segment_length_mm').value,
-                p('arc_min_sagitta_mm').value,
-                p('arc_min_radius_mm').value,
-                p('arc_max_radius_mm').value,
-                p('arc_max_z_change_mm').value,
-                p('arc_max_orientation_change_deg').value,
-                p('lift_between_rungs_mm').value)
+            path = build_repeat_path(
+                p('surface_config_path').value, p('surface_name').value, repeats)
         except SurfaceConfigError as exc:
             detail = f'코터 티칭 경로 생성 실패: {exc}'
             self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
@@ -199,7 +179,7 @@ class CoatingNode(Node):
         cp_goal.feed_speed_mms = feed_speed
         cp_goal.contact_offset_mm = self.get_parameter('contact_offset_mm').value
         cp_goal.allowed_polygon = path.allowed_polygon
-        cp_goal.passes = passes
+        cp_goal.passes = 1  # 반복은 이미 waypoints 에 오실레이션으로 포함됨
         cp_goal.max_duration_s = max_duration
 
         def feedback(pct, current_pass):
@@ -216,9 +196,10 @@ class CoatingNode(Node):
         cp_result, err_code, err_detail = self._call_contact_path(
             cp_goal, goal_handle, timeout_s, on_cp_feedback)
 
-        # 센서가 없으므로 실제 젤 면적이 아니라 계획한 pass 완료 비율만 기록한다.
+        # 센서가 없으므로 실제 젤 면적이 아니라 ContactPath 완료 여부만 기록한다
+        # (반복은 이미 waypoints 오실레이션에 포함돼 cp_goal.passes 는 항상 1).
         completed_passes = cp_result.passes_done if cp_result is not None else 0
-        coverage_ratio = min(1.0, completed_passes / max(passes, 1))
+        coverage_ratio = min(1.0, float(completed_passes))
 
         if err_code == 'CANCELLED':
             goal_handle.canceled()
