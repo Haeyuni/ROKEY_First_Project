@@ -67,8 +67,14 @@ def build_surface_path(config_path, surface_name, pitch_mm, inset_mm,
                 f'({rung_length_mm:.2f}mm)에 비해 너무 큼')
         t0 = inset_mm / rung_length_mm
         t1 = 1.0 - t0
-        segment_count = max(1, int(math.ceil(
-            (rung_length_mm * (t1 - t0)) / max(float(pitch_mm), 0.1))))
+        # pitch_mm 세분화 제거 — 쌍마다 한 번에 이동해도 된다는 요청으로,
+        # 항상 구간 1개(시작→끝)만 만든다. amovel이 매 waypoint마다 완전히
+        # 정지했다 다음으로 가는 구조라(연속 블렌딩 없음), 구간을 잘게
+        # 쪼갤수록 가속-즉시감속만 반복돼 feed_speed_mms를 올려도 체감
+        # 속도가 안 변하는 문제가 있었다(실기 확인). pitch_mm 인자는
+        # BrushDust/CoatGel.action 호환을 위해 시그니처에 남겨두되 더 이상
+        # 쓰지 않는다.
+        segment_count = 1
         ts = [t0 + (t1 - t0) * i / segment_count for i in range(segment_count + 1)]
 
         def rung_pose(t, start_pose=start_pose, end_pose=end_pose):
