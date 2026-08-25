@@ -18,7 +18,7 @@ surfaces:
     poses:
       p1: {x_mm: 379.26, y_mm: -26.27, z_mm: 431.32, rz1_deg: 35.70, ry_deg: -178.55, rz2_deg: 33.95}
       p2: {x_mm: 382.04, y_mm: -26.33, z_mm: 432.61, rz1_deg: 38.11, ry_deg: -178.56, rz2_deg: 36.32}
-      p3: {x_mm: 384.37, y_mm: -25.29, z_mm: 430.63, rz1_deg: 40.06, ry_deg: -178.51, rz2_deg: 38.08}
+      p3: {x_mm: 382.40, y_mm: -26.79, z_mm: 428.56, rz1_deg: 32.00, ry_deg: -178.22, rz2_deg: 29.87}
       p4: {x_mm: 384.06, y_mm: -19.73, z_mm: 427.21, rz1_deg: 39.63, ry_deg: -178.48, rz2_deg: 37.47}
       p5: {x_mm: 380.68, y_mm: -18.42, z_mm: 428.19, rz1_deg: 49.12, ry_deg: -178.32, rz2_deg: 46.78}
       p6: {x_mm: 377.08, y_mm: -20.10, z_mm: 428.42, rz1_deg: 53.90, ry_deg: -178.22, rz2_deg: 51.76}
