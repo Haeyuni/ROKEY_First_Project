@@ -6,6 +6,9 @@ string  target_key             # targets.yaml 키
 string  frame_id
 float64 approach_height_mm
 float64 grip_width_mm          # PICK 시 목표 폭
+string  approach_key           # 비어 있으면 target 위 자동 접근, 있으면 티칭된 접근 Pose
+string  retreat_key            # 비어 있으면 기존 상승, 있으면 그립 뒤 티칭된 이탈 Pose
+float64 move_speed_ratio       # 0이면 기존 기본값(0.3)
 bool    already_holding        # 그리퍼가 이미 툴(예: 핀셋)을 쥔 채로 호출됨.
                                 # PICK: 하강 전 완전개방(gripper_open_width_mm)을
                                 # 건너뛰고 지금 쥔 폭 그대로 목표 위치로 내려가

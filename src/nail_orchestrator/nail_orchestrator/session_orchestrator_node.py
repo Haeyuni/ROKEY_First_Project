@@ -17,8 +17,7 @@ scan_node(강성 스캔)와 inspection_node(택프리 3점 검사)가 폐지되�
     로 줄었다. probe 툴을 집는 단계가 없어 `ChangeTool` 횟수도 준다.
   - 경화 상태를 자동 판정하거나 다시 굽는 루프는 없다. 경화 부족은 사람이
     확인하고 `curing_node`의 `dwell_s_per_point`를 조정한다.
-  - 손톱 경계가 스캔 결과가 아니라 설정값이 됐으므로(`nail_local_frame` +
-    `nail_region`), 스톤 부착 목표점은 그 프레임의 원점(0,0,0)이다.
+   - 스톤 부착 위치와 기울어진 자세는 stone_node의 4-Pose 티칭 설정으로 정한다.
 
 **문서에 없어서 이 구현이 채운 빈틈들**:
 
@@ -33,10 +32,8 @@ scan_node(강성 스캔)와 inspection_node(택프리 3점 검사)가 폐지되�
    PRECHECK 단계는 "설정 완결성"만 검증하고, 실제 부재는 이후 첫
    `ChangeTool` 실행 중 `E_GRIP_FAILED` 로 늦게 드러난다 — PickPlace 의
    그리퍼 폭이 명령값이지 실측이 아닌 것과 같은 종류의 하드웨어 한계다.
-3. **`PlaceStone.target_position`**: `RunSession.Goal` 에 스톤 부착 좌표를
-   실어 보낼 필드가 아예 없다. `enable_stone=true` 인 세션에서는
-   `nail_local_frame` 원점(= 티칭된 손톱 중심, yaw=0)에 놓는다 — 정확한
-   부착 위치 결정 로직은 이 문서 범위 밖이라 자리표시자로만 채운다.
+3. **스톤 부착 위치**: `RunSession.Goal`에는 스톤 부착 좌표 필드가 없다.
+   `enable_stone=true`인 세션에서는 stone_node의 고정 4-Pose 티칭 설정을 쓴다.
 4. **진행률**: 각 스테이지에 동일 가중치를 준 "몇 번째 단계/전체 단계"
    비율에, 현재 하위 액션이 보내는 feedback.percent 를 그 단계 내 분수로
    얹는다. NIS 는 가중치 산정 방식을 규정하지 않는다.
@@ -44,7 +41,7 @@ scan_node(강성 스캔)와 inspection_node(택프리 3점 검사)가 폐지되�
 import threading
 import time
 
-from geometry_msgs.msg import Point, Pose
+from geometry_msgs.msg import Pose
 import rclpy
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -599,9 +596,7 @@ class SessionOrchestratorNode(Node):
             emit(ProcessState.STAGE_STONE, 0.0)
             stone_goal = PlaceStone.Goal()
             stone_goal.session_id = session_id
-            # nail_local_frame 원점 = 티칭된 손톱 중심 (docstring #3).
-            stone_goal.target_position = Point(x=0.0, y=0.0, z=0.0)
-            stone_goal.target_yaw_deg = 0.0
+            # 부착 위치와 기울어진 자세는 stone_node의 4-Pose 티칭 설정이 정한다.
 
             def on_stone_fb(fb_msg):
                 emit(ProcessState.STAGE_STONE, fb_msg.feedback.percent)
