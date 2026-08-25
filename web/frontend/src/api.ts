@@ -28,10 +28,11 @@ export async function fetchHealth(): Promise<HealthResponse> {
   return res.json();
 }
 
+// layer_total은 보내지 않는다 — 한 번만 코팅하는 제품이라 백엔드가 항상 1로
+// 고정한다(FIXED_LAYER_TOTAL, web/backend/app/schemas.py).
 export interface CreateSessionBody {
   shape_profile_id: string;
   target_material: string;
-  layer_total: number;
   enable_stone: boolean;
 }
 

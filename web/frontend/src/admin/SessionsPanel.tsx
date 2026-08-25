@@ -125,7 +125,6 @@ export function SessionsPanel() {
           <tr>
             <th>세션</th>
             <th>소재</th>
-            <th>레이어</th>
             <th>결과</th>
             <th>시작</th>
             <th>소요</th>
@@ -135,14 +134,14 @@ export function SessionsPanel() {
         <tbody>
           {sessions === null && (
             <tr>
-              <td colSpan={7} className="table__empty">
+              <td colSpan={6} className="table__empty">
                 불러오는 중...
               </td>
             </tr>
           )}
           {sessions !== null && sessions.length === 0 && (
             <tr>
-              <td colSpan={7} className="table__empty">
+              <td colSpan={6} className="table__empty">
                 세션 기록이 없습니다.
               </td>
             </tr>
@@ -154,7 +153,6 @@ export function SessionsPanel() {
                   {s.id.slice(0, 8)}…
                 </td>
                 <td>{s.target_material}</td>
-                <td>{s.layer_total}</td>
                 <td>{resultBadge(s.result_code)}</td>
                 <td className="table__muted">{fmtTime(s.started_at)}</td>
                 <td className="table__muted">{fmtDuration(s.started_at, s.finished_at)}</td>
@@ -166,7 +164,7 @@ export function SessionsPanel() {
               </tr>
               {expandedId === s.id && (
                 <tr className="events-row">
-                  <td colSpan={7}>
+                  <td colSpan={6}>
                     {s.abort_reason && <div className="events-row__abort">중단 사유: {s.abort_reason}</div>}
                     {eventsError && <div className="alert alert--danger">{eventsError}</div>}
                     {!eventsCache[s.id] && !eventsError && <div className="table__muted">이벤트 불러오는 중...</div>}

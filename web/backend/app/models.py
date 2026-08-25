@@ -25,7 +25,7 @@ class SessionRecord(Base):
     recipe_id: Mapped[str] = mapped_column(String, nullable=False)
     shape_profile_id: Mapped[str | None] = mapped_column(String, nullable=True)
     target_material: Mapped[str] = mapped_column(String, nullable=False)
-    layer_total: Mapped[int] = mapped_column(Integer, default=2)
+    layer_total: Mapped[int] = mapped_column(Integer, default=1)
 
     # RunSession 결과 코드(RunSession.action §7.1): COMPLETED / COMPLETED_WITH_WARN /
     # FAILED / ABORTED_SAFETY / CANCELLED. 진행 중에는 NULL.

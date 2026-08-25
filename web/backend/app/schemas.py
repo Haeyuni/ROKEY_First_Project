@@ -7,10 +7,15 @@ from pydantic import BaseModel, Field
 ALLOWED_TARGET_MATERIALS = ("silicone_model", "artificial_tip")
 
 
+# 한 번만 코팅하는 제품이라 레이어 개념이 없다 — layer_total은 RunSession.action
+# 계약(로봇팀)상 여전히 필요한 필드라 항상 1로 고정해서 보낸다.
+FIXED_LAYER_TOTAL = 1
+
+
 class CreateSessionRequest(BaseModel):
     shape_profile_id: str
     target_material: str
-    layer_total: int = Field(default=2, ge=1, le=5)
+    layer_total: int = Field(default=FIXED_LAYER_TOTAL, ge=1, le=1)
     enable_stone: bool = False
 
 

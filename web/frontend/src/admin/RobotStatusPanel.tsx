@@ -129,12 +129,6 @@ export function RobotStatusPanel() {
               <span className="badge badge--info">{STAGE_LABEL_KO[processState.stage] ?? processState.stage}</span>
             </div>
             <div className="status-row">
-              <span className="table__muted">레이어</span>
-              <span>
-                {processState.layer_index + 1} / {processState.layer_total}
-              </span>
-            </div>
-            <div className="status-row">
               <span className="table__muted">현재 툴</span>
               <span>{processState.current_tool || "—"}</span>
             </div>

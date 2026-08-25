@@ -57,7 +57,6 @@ export default function App() {
       const { session_id } = await createSession({
         shape_profile_id: settings.shapeProfileId,
         target_material: settings.targetMaterial,
-        layer_total: settings.layerTotal,
         enable_stone: enableStone,
       });
       void session_id; // WS의 ProcessState.session_id로 화면을 갱신하므로 별도 보관은 불필요

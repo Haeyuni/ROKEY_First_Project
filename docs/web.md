@@ -53,6 +53,19 @@ FastAPI가 구독하고 WebSocket `/ws`로 중계하는 토픽은 두 개다.
 | `/safety/status` | `nail_msgs/SafetyState` | `safety` | 안전 배너와 시작 차단 |
 | `/process/status` | `nail_msgs/ProcessState` | `state` | 단계·진행률·현재 툴·에러 |
 
+`ProcessState` 필드(`nail_msgs/ProcessState.msg`):
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `session_id` | string | 현재 세션 ID |
+| `stage` | string | `IDLE`\|`PRECHECK`\|`SAND`\|`BRUSH`\|`COAT`\|`CURE`\|`STONE`\|`FINISH`\|`ABORTED` |
+| `layer_index` | int32 | 진행 중인 레이어(0-base) |
+| `layer_total` | int32 | 전체 레이어 수 |
+| `stage_percent` | float64 | 현재 단계 진행률(0–100), FR-10 |
+| `session_percent` | float64 | 전체 세션 진행률(0–100), FR-10 |
+| `current_tool` | string | 장착 중인 툴 |
+| `last_error` | `nail_msgs/ErrorCode` | `code`/`severity`/`detail` — FR-32·33·35 판단 기준 |
+
 세션 종료 시 백엔드는 `RunSession` result를 `type: result`로 전송한다. 별도
 `error` 채널은 필요하지 않으며 현재 에러는 `ProcessState.last_error`를 쓴다.
 새 WebSocket 연결에는 최신 `safety`와 `state` 스냅샷을 즉시 보낸다.
@@ -70,15 +83,24 @@ FastAPI가 구독하고 WebSocket `/ws`로 중계하는 토픽은 두 개다.
 
 | Method | Path | 설명 |
 |---|---|---|
-| `GET` | `/api/recipes` | 레시피 목록 |
 | `POST` | `/api/sessions` | 세션 생성과 시작 |
 | `POST` | `/api/sessions/{id}/cancel` | 취소 요청 |
 | `GET` | `/api/sessions/{id}/report` | 세션 기본 결과 |
+| `GET` | `/api/sessions` | 세션 목록(관리자 대시보드, 페이지네이션·결과 필터) |
+| `GET` | `/api/sessions/{id}/events` | 세션 이벤트 로그(관리자 대시보드) |
 | `GET` | `/api/health` | ROS·DB 상태 |
 
-`POST /api/sessions` 입력은 `recipe_id`, `shape_profile_id`, `target_material`,
-`layer_total`, `enable_brush`, `enable_stone`이다. report는 세션 ID, 레시피,
-소재, 레이어 수, 결과 코드, 중단 사유와 시작·종료 시각만 반환한다.
+레시피 개념은 제거됐다(웹 레이어에서 recipes.yaml·선택 UI·CRUD 전부 삭제).
+`RunSession.action`의 `recipe_id` 필드는 로봇팀과의 계약이라 값은 여전히
+필요해서, 백엔드가 고정값(`"default"`)을 채워 보낸다.
+
+한 번만 코팅하는 제품이라 레이어 개념도 없다. `RunSession.action`의
+`layer_total` 필드는 계약상 남아 있지만 백엔드가 항상 `1`로 고정해서
+보낸다 — 프론트는 `layer_total`을 요청 본문에 넣지 않는다.
+
+`POST /api/sessions` 입력은 `shape_profile_id`, `target_material`,
+`enable_stone`이다. report는 세션 ID, 소재, 결과 코드, 중단 사유와
+시작·종료 시각만 반환한다.
 
 ## 5. 저장 계약
 
