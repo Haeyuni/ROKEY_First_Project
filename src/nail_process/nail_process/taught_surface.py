@@ -73,15 +73,13 @@ def build_surface_path(config_path, surface_name, pitch_mm, inset_mm,
     waypoints = []
     circular_via_indices = []
     for stroke in strokes:
-        if lift_between_rungs_mm > 0.0:
-            if waypoints:
-                waypoints.append(_lift_pose(waypoints[-1], lift_between_rungs_mm))
-                # 아래 곡선 끝 P6에서 곧바로 역방향 곡선을 시작할 때는
-                # 같은 상승점을 두 번 명령하지 않는다.
-                if _position_distance_mm(waypoints[-2], stroke[0]) > 1e-6:
-                    waypoints.append(_lift_pose(stroke[0], lift_between_rungs_mm))
-            else:
-                waypoints.append(_lift_pose(stroke[0], lift_between_rungs_mm))
+        # 첫 P1 접근에만 lift_between_rungs_mm 만큼 띄워서 진입한다(브러시가
+        # 표면을 긁지 않게). 이후 곡선 사이 전환마다 매번 띄우면 그때마다
+        # 표면 접촉이 끊겨 브러싱이 제대로 안 되는 문제가 있어(실기 확인,
+        # 2026-08-25) 첫 접근 이후로는 표면에서 이탈하지 않고 바로 다음
+        # 곡선으로 이어간다.
+        if lift_between_rungs_mm > 0.0 and not waypoints:
+            waypoints.append(_lift_pose(stroke[0], lift_between_rungs_mm))
 
         start_index = len(waypoints)
         waypoints.extend(stroke)
@@ -245,12 +243,6 @@ def _slerp(first, second, t):
         right = math.sin(t * angle) / scale
         values = [left * x + right * y for x, y in zip(a, b)]
     return Quaternion(x=values[0], y=values[1], z=values[2], w=values[3])
-
-
-def _position_distance_mm(first, second):
-    return math.dist(
-        (first.position.x, first.position.y, first.position.z),
-        (second.position.x, second.position.y, second.position.z)) * 1000.0
 
 
 def _arc_is_valid(start, via, end, min_sagitta_mm, min_radius_mm, max_radius_mm,

@@ -5,12 +5,14 @@ surfaces:
     configured: true
     frame_id: base_link
     poses:
-      p1: {x_mm: 373.26, y_mm: -27.07, z_mm: 494.69, rz1_deg: 30.37, ry_deg: -179.56, rz2_deg: 30.51}
-      p2: {x_mm: 377.60, y_mm: -27.86, z_mm: 496.48, rz1_deg: 31.72, ry_deg: -179.53, rz2_deg: 31.39}
+      # 이전 값: x_mm: 373.26, y_mm: -27.07, z_mm: 494.69, rz1_deg: 30.37, ry_deg: -179.56, rz2_deg: 30.51
+      p1: {x_mm: 371.09, y_mm: -27.33, z_mm: 494.71, rz1_deg: 25.77, ry_deg: -179.36, rz2_deg: 25.41}
+      p2: {x_mm: 373.26, y_mm: -27.07, z_mm: 494.69, rz1_deg: 30.37, ry_deg: -179.56, rz2_deg: 30.51}
       p3: {x_mm: 382.18, y_mm: -27.02, z_mm: 494.69, rz1_deg: 19.79, ry_deg: -179.32, rz2_deg: 19.84}
       p4: {x_mm: 383.72, y_mm: -22.80, z_mm: 492.36, rz1_deg: 15.79, ry_deg: -179.05, rz2_deg: 15.60}
-      p5: {x_mm: 380.42, y_mm: -21.69, z_mm: 494.02, rz1_deg: 17.31, ry_deg: -179.10, rz2_deg: 16.95}
-      p6: {x_mm: 378.11, y_mm: -22.91, z_mm: 492.90, rz1_deg: 13.58, ry_deg: -178.93, rz2_deg: 13.32}
+      p5: {x_mm: 378.11, y_mm: -22.91, z_mm: 492.90, rz1_deg: 13.58, ry_deg: -178.93, rz2_deg: 13.32}
+      # 이전 값: x_mm: 371.67, y_mm: -20.87, z_mm: 492.89, rz1_deg: 20.31, ry_deg: -179.26, rz2_deg: 19.55
+      p6: {x_mm: 371.51, y_mm: -18.48, z_mm: 492.54, rz1_deg: 40.45, ry_deg: -179.04, rz2_deg: 38.67}
 
   # coater 는 6점(쌍 3개)이 아니라 p1..pN 을 순서대로 쓴다(2026-08-25 변경,
   # 이후 p4 추가) — coating_node 가 이 순서(p1→p2→p3→p4)를 repeats 번 왕복한다.
