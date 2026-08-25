@@ -112,11 +112,22 @@ def build_surface_path(config_path, surface_name, pitch_mm, inset_mm,
 
 
 def build_repeat_path(config_path, surface_name, repeats=1):
-    """p1, p2, p3 세 점만 그대로 waypoint 로 삼아 그 순서(p1→p2→p3)를
-    repeats 번 왕복한다 — coater 전용(요청, 2026-08-25). pitch/inset
-    세분화나 곡선 피팅 없이 세 점을 직선으로 잇는다."""
+    """poses 에 정의된 p1, p2, ... 를 그 순서 그대로 waypoint 로 삼아
+    repeats 번 왕복한다 — coater 전용(요청, 2026-08-25). 점 개수는
+    p1..pN 이 몇 개까지 정의됐는지로 자동 결정된다(최소 2개 필요).
+    pitch/inset 세분화나 곡선 피팅 없이 점들을 직선으로 잇는다."""
     entry = _load_surface(config_path, surface_name)
-    poses = [_pose_from_entry(entry['poses'], f'p{i}') for i in range(1, 4)]
+    poses_dict = entry['poses']
+    point_keys = []
+    i = 1
+    while f'p{i}' in poses_dict:
+        point_keys.append(f'p{i}')
+        i += 1
+    if len(point_keys) < 2:
+        raise SurfaceConfigError(
+            f'surfaces.{surface_name}.poses 에 p1, p2 이상 최소 2점이 필요함 '
+            f'(현재 {len(point_keys)}개)')
+    poses = [_pose_from_entry(poses_dict, key) for key in point_keys]
     boundary = [Point(x=pose.position.x, y=pose.position.y, z=pose.position.z)
                 for pose in poses]
     repeats = max(1, int(repeats))
@@ -153,7 +164,10 @@ def _load_surface(config_path, surface_name):
 def _pose_from_entry(entries, key):
     entry = entries.get(key)
     required = ('x_mm', 'y_mm', 'z_mm', 'rz1_deg', 'ry_deg', 'rz2_deg')
-    if not isinstance(entry, dict) or any(name not in entry for name in required):
+    # `x_mm: ` 처럼 키는 있지만 값이 비어(None) 있으면 yaml 파싱은 통과하므로
+    # "name not in entry" 만으론 못 걸러낸다 — None 도 함께 검사한다(실기
+    # 확인: 안 그러면 float(None) 에서 처리 안 된 TypeError 로 죽음).
+    if not isinstance(entry, dict) or any(entry.get(name) is None for name in required):
         raise SurfaceConfigError(f'{key}에 X/Y/Z/A/B/C 여섯 값이 모두 필요함')
 
     pose = Pose()
