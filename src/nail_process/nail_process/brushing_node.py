@@ -81,7 +81,7 @@ class BrushingNode(Node):
         d('passes', 2)
         d('path_pitch_mm', 2.0)
         d('feed_speed_mms', 20.0)
-        d('coverage_margin_mm', 2.0)
+        d('coverage_margin_mm', 0.0)
         d('max_duration_s', 30.0)
         d('contact_offset_mm', 0.0)
         d('surface_config_path', '')
