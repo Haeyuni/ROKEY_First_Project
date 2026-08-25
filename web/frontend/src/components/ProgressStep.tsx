@@ -41,6 +41,13 @@ export function ProgressStep({ safety, connected, processState, enableStone, loc
   const currentIndex = stations.indexOf(stage as Stage);
 
   const activeLabel = currentIndex >= 0 ? STAGE_LABEL_KO[stations[currentIndex]] : null;
+  const stageTitle = isAborted
+    ? "공정이 중단됐어요"
+    : isFinished
+      ? "코팅이 마무리되고 있어요"
+      : activeLabel
+        ? `${activeLabel} 중이에요`
+        : "코팅을 준비하고 있어요";
   const caption = isAborted
     ? "공정이 중단됐어요"
     : isFinished
@@ -66,7 +73,7 @@ export function ProgressStep({ safety, connected, processState, enableStone, loc
       />
 
       <div className="title-row">
-        <h1>코팅이 진행되고 있어요</h1>
+        <h1>{stageTitle}</h1>
       </div>
 
       <div className="journey">

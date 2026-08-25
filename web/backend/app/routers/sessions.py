@@ -32,6 +32,11 @@ logger = logging.getLogger("nail_web.sessions")
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
+# 레시피 개념은 웹에서 제거됐지만(레시피 CRUD·선택 UI 전부 삭제),
+# RunSession.action의 recipe_id 필드는 orchestrator 쪽 계약이라 여전히
+# 값이 필요하다 — orchestrator는 분기에 쓰지 않는 메타데이터라 고정값으로 채운다.
+DEFAULT_RECIPE_ID = "default"
+
 
 # 관리자 대시보드: 세션 이력 목록(최신순, 페이지네이션 + 결과 코드 필터).
 @router.get("", response_model=list[SessionListItem])
@@ -48,7 +53,6 @@ async def list_sessions(
     return [
         SessionListItem(
             id=r.id,
-            recipe_id=r.recipe_id,
             target_material=r.target_material,
             layer_total=r.layer_total,
             result_code=r.result_code,
@@ -84,7 +88,7 @@ async def create_session(
     session_id = new_session_id()
     record = SessionRecord(
         id=session_id,
-        recipe_id=body.recipe_id,
+        recipe_id=DEFAULT_RECIPE_ID,
         shape_profile_id=body.shape_profile_id,
         target_material=body.target_material,
         layer_total=body.layer_total,
@@ -95,7 +99,7 @@ async def create_session(
 
     goal = make_run_session_goal(
         session_id=session_id,
-        recipe_id=body.recipe_id,
+        recipe_id=DEFAULT_RECIPE_ID,
         shape_profile_id=body.shape_profile_id,
         target_material=body.target_material,
         layer_total=body.layer_total,
@@ -159,7 +163,6 @@ async def get_session_report(
 
     return SessionReportResponse(
         session_id=session.id,
-        recipe_id=session.recipe_id,
         target_material=session.target_material,
         layer_total=session.layer_total,
         result_code=session.result_code,

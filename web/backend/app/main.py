@@ -4,7 +4,7 @@
 중계 레이어로 그대로 쓰고, 이 FastAPI는
   1) roslibpy로 rosbridge에 붙어 릴레이 토픽을 구독 + `/ws`로 재중계
      (type-envelope, 접속 시 스냅샷 — web.md §4.3, IR-05)
-  2) REST(recipes/sessions/health)와 Postgres 저장을 담당한다.
+  2) REST(sessions/health)와 Postgres 저장을 담당한다.
 
 실행 전제: nail_bridge의 rosbridge_websocket이 먼저 떠 있어야 한다.
   ros2 launch nail_bridge web_bridge.launch.py
@@ -23,7 +23,7 @@ from . import persistence
 from .config import settings
 from .db import init_db
 from .ros_bridge import RosBridgeClient
-from .routers import health, recipes, sessions
+from .routers import health, sessions
 from .ws_manager import WsConnectionManager
 
 logging.basicConfig(level=logging.INFO)
@@ -95,7 +95,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(recipes.router)
 app.include_router(sessions.router)
 app.include_router(health.router)
 

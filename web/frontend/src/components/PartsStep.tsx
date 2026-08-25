@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
-import { fetchRecipes } from "../api";
-import type { Recipe, SafetyState } from "../types";
+import { useState } from "react";
+import type { SafetyState } from "../types";
 import { CUBICS, TARGET_MATERIALS, cubicName, designName, type CubicId, type DesignId } from "../options";
 import { ColorCubicPreview } from "../mascot";
 import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, ChevronDownIcon, GearIcon } from "../icons";
@@ -8,7 +7,6 @@ import { TopBar } from "./TopBar";
 import { StepDots } from "./StepDots";
 
 export interface StartSettings {
-  recipeId: string;
   shapeProfileId: string;
   targetMaterial: string;
   layerTotal: number;
@@ -27,7 +25,7 @@ interface Props {
   errorMessage: string | null;
 }
 
-// Step 2 — 파츠(큐빅) 선택 + 레시피/소재/형상/레이어 수 같은 기술 파라미터를
+// Step 2 — 파츠(큐빅) 선택 + 소재/형상/레이어 수 같은 기술 파라미터를
 // 담는 접이식 "고급 설정"(기존 SessionStart의 나머지 필드들).
 export function PartsStep({
   safety,
@@ -41,34 +39,13 @@ export function PartsStep({
   safeToMove,
   errorMessage,
 }: Props) {
-  const [recipes, setRecipes] = useState<Recipe[]>([]);
-  const [recipeId, setRecipeId] = useState("");
   const [shapeProfileId, setShapeProfileId] = useState("default");
   const [targetMaterial, setTargetMaterial] = useState<string>(TARGET_MATERIALS[0]);
   const [layerTotal, setLayerTotal] = useState(2);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetchRecipes()
-      .then((list) => {
-        setRecipes(list);
-        if (list.length > 0) {
-          setRecipeId(list[0].id);
-          setLayerTotal(list[0].layer_total);
-        }
-      })
-      .catch((err) => setLoadError(String(err)));
-  }, []);
-
-  function handleRecipeChange(id: string) {
-    setRecipeId(id);
-    const recipe = recipes.find((r) => r.id === id);
-    if (recipe) setLayerTotal(recipe.layer_total);
-  }
 
   function handleStart() {
-    onStart({ recipeId, shapeProfileId, targetMaterial, layerTotal });
+    onStart({ shapeProfileId, targetMaterial, layerTotal });
   }
 
   return (
@@ -126,22 +103,12 @@ export function PartsStep({
 
       <button type="button" className="settings-bar" onClick={() => setSettingsOpen((o) => !o)} aria-expanded={settingsOpen}>
         <GearIcon size={20} />
-        <span className="settings-bar__text">고급 설정 · 레시피 / 소재 / 레이어 수</span>
+        <span className="settings-bar__text">고급 설정 · 소재 / 레이어 수</span>
         <ChevronDownIcon size={16} />
       </button>
 
       {settingsOpen && (
         <div className="settings-panel">
-          <label>
-            레시피
-            <select value={recipeId} onChange={(e) => handleRecipeChange(e.target.value)} disabled={busy}>
-              {recipes.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name}
-                </option>
-              ))}
-            </select>
-          </label>
           <label>
             소재
             <select value={targetMaterial} onChange={(e) => setTargetMaterial(e.target.value)} disabled={busy}>
@@ -167,7 +134,6 @@ export function PartsStep({
               disabled={busy}
             />
           </label>
-          {loadError && <p className="settings-panel__error">{loadError}</p>}
         </div>
       )}
 
@@ -178,7 +144,7 @@ export function PartsStep({
           <ArrowLeftIcon />
           이전
         </button>
-        <button type="button" className="btn-fill" onClick={handleStart} disabled={busy || !safeToMove || !recipeId}>
+        <button type="button" className="btn-fill" onClick={handleStart} disabled={busy || !safeToMove}>
           코팅 시작!
           <ArrowRightIcon />
         </button>

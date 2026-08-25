@@ -1,10 +1,9 @@
 import { useState } from "react";
 import "./admin.css";
-import { RecipesPanel } from "./RecipesPanel";
 import { RobotStatusPanel } from "./RobotStatusPanel";
 import { SessionsPanel } from "./SessionsPanel";
 
-type Tab = "status" | "recipes" | "sessions";
+type Tab = "status" | "sessions";
 
 export default function AdminApp() {
   const [tab, setTab] = useState<Tab>("status");
@@ -26,13 +25,6 @@ export default function AdminApp() {
           </button>
           <button
             type="button"
-            className={`admin-tabs__item ${tab === "recipes" ? "admin-tabs__item--active" : ""}`}
-            onClick={() => setTab("recipes")}
-          >
-            레시피
-          </button>
-          <button
-            type="button"
             className={`admin-tabs__item ${tab === "sessions" ? "admin-tabs__item--active" : ""}`}
             onClick={() => setTab("sessions")}
           >
@@ -43,7 +35,6 @@ export default function AdminApp() {
 
       <main className="admin-main">
         {tab === "status" && <RobotStatusPanel />}
-        {tab === "recipes" && <RecipesPanel />}
         {tab === "sessions" && <SessionsPanel />}
       </main>
     </div>
