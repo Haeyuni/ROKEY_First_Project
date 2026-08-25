@@ -177,8 +177,16 @@ class DsrAdapter:
             self._amovel(p, vel=float(vel_mms), acc=float(acc_mms2), ref=_ref, mod=mod)
 
     def start_move_joint_to_pose(self, pose: TaskPose, vel_mms: float, acc_mms2: float,
-                                  ref=None, sol: int = 0):
-        """movejx: 목표는 task pose 지만 관절 보간으로 이동 (MoveTo linear=false)."""
+                                  ref=None, sol: int = 2):
+        """movejx: 목표는 task pose 지만 관절 보간으로 이동 (MoveTo linear=false).
+
+        sol(관절 해 분기) 기본값을 0에서 2로 변경 — 이 로봇/셀은
+        get_current_posx 로 실측할 때마다 항상 분기 2가 나왔다(실기 확인,
+        2026-08-24/25). sol=0 으로 두면 로봇이 목표 바로 옆에 있어도
+        그 분기에서 IK 가 안 풀려 amovejx 가 즉시(수십 ms) 조용히 실패한다
+        (반환값을 확인 안 해 예외도 안 남) — ContactPath 접근(movejx) 이
+        NOT REACHABLE 로 즉시 ABORT 되는 문제의 원인이었다.
+        """
         p = self._posx(pose.x_mm, pose.y_mm, pose.z_mm,
                         pose.rz1_deg, pose.ry_deg, pose.rz2_deg)
         _ref = self._DR_BASE if ref is None else ref
