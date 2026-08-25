@@ -230,31 +230,35 @@ coater_work: # 이전 단일 코터 접촉점 기록 (현재 공정 미사용)
   ry_deg: -178.71
   rz2_deg: 25.38
 
-uv_work: # UV 조사 작업 시작 자세 - 재실측 (2026-08-24, get_current_posx)
-  # 이전 값: x_mm: 376.61, y_mm: 65.83, z_mm: 401.75,
+uv_work: # UV 조사 작업 시작 자세 - 재실측 (2026-08-25, get_current_posx)
+  # 이전 값: x_mm: 371.85, y_mm: 115.89, z_mm: 385.62,
   #         rz1_deg: 88.60, ry_deg: -159.24, rz2_deg: 88.43
-  x_mm: 371.85
-  y_mm: 115.89
-  z_mm: 385.62
+  x_mm: 373.27
+  y_mm: 106.30
+  z_mm: 401.46
   frame_id: base_link
-  rz1_deg: 88.60
-  ry_deg: -159.24
-  rz2_deg: 88.43
+  rz1_deg: 91.21
+  ry_deg: -150.64
+  rz2_deg: 90.18
   
-uv_work_l: # UV 왕복운동(sanding과 동일 방식) approach_side='left' 작업 시작 자세 (2026-08-24, get_current_posx)
-  x_mm: 210.66
-  y_mm: 20.91
-  z_mm: 359.81
+uv_work_l: # UV 왕복운동(sanding과 동일 방식) approach_side='left' 작업 시작 자세 (2026-08-25, get_current_posx)
+  # 이전 값: x_mm: 210.66, y_mm: 20.91, z_mm: 359.81,
+  #         rz1_deg: 162.35, ry_deg: -141.34, rz2_deg: 153.80
+  x_mm: 221.88
+  y_mm: 22.05
+  z_mm: 383.40
   frame_id: base_link
-  rz1_deg: 162.35
-  ry_deg: -141.34
-  rz2_deg: 153.80
+  rz1_deg: 164.97
+  ry_deg: -145.98
+  rz2_deg: 151.07
 
-uv_work_r: # UV 왕복운동(sanding과 동일 방식) approach_side='right' 작업 시작 자세 (2026-08-24, get_current_posx)
-  x_mm: 520.38
-  y_mm: 75.54
-  z_mm: 353.14
+uv_work_r: # UV 왕복운동(sanding과 동일 방식) approach_side='right' 작업 시작 자세 (2026-08-25, get_current_posx)
+  # 이전 값: x_mm: 520.38, y_mm: 75.54, z_mm: 353.14,
+  #         rz1_deg: 38.79, ry_deg: -138.43, rz2_deg: 19.12
+  x_mm: 499.75
+  y_mm: 10.81
+  z_mm: 397.37
   frame_id: base_link
-  rz1_deg: 38.79
-  ry_deg: -138.43
-  rz2_deg: 19.12
+  rz1_deg: 26.29
+  ry_deg: -150.92
+  rz2_deg: 29.43
