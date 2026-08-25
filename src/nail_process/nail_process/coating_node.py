@@ -93,6 +93,11 @@ class CoatingNode(Node):
         d('arc_max_radius_mm', 100.0)
         d('arc_max_z_change_mm', 2.0)
         d('arc_max_orientation_change_deg', 10.0)
+        # p1-p6/p2-p5/p3-p4 세 쌍 사이를 바로 잇지 않고, 표면 반대 방향으로
+        # 이만큼 들어올렸다가 다음 쌍으로 넘어가게 한다(요청) — 젤이 쌍
+        # 사이를 이동할 때 표면에 끌리지 않게 하려는 목적. brush 는 이
+        # 파라미터가 없어(기본 0.0) 기존과 동일하게 바로 잇는다.
+        d('lift_between_rungs_mm', 5.0)
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg):
@@ -176,7 +181,8 @@ class CoatingNode(Node):
                 p('arc_min_radius_mm').value,
                 p('arc_max_radius_mm').value,
                 p('arc_max_z_change_mm').value,
-                p('arc_max_orientation_change_deg').value)
+                p('arc_max_orientation_change_deg').value,
+                p('lift_between_rungs_mm').value)
         except SurfaceConfigError as exc:
             detail = f'코터 티칭 경로 생성 실패: {exc}'
             self._log_abort(ErrorCode.E_INVALID_GOAL, detail)

@@ -32,17 +32,24 @@ def surface_is_configured(config_path, surface_name):
 def build_surface_path(config_path, surface_name, pitch_mm, inset_mm,
                        arc_segment_length_mm=4.0, arc_min_sagitta_mm=0.05,
                        arc_min_radius_mm=1.0, arc_max_radius_mm=100.0,
-                       arc_max_z_change_mm=2.0, arc_max_orientation_change_deg=10.0):
+                       arc_max_z_change_mm=2.0, arc_max_orientation_change_deg=10.0,
+                       lift_between_rungs_mm=0.0):
     """p1↔p6, p2↔p5, p3↔p4 세 쌍을 그 순서 그대로 왕복하는 경로를 만든다
     (요청 — 예전의 top(p1-p2-p3)/bottom(p6-p5-p4) 곡선 피팅 + 가로 래스터
     방식 대신, 각 쌍을 직선 하나로 잇는 3개의 통과선으로 바뀌었다). 각 쌍
-    내부는 pitch_mm 간격으로 점을 채우고 자세는 SLERP 로 보간한다."""
+    내부는 pitch_mm 간격으로 점을 채우고 자세는 SLERP 로 보간한다.
+
+    lift_between_rungs_mm > 0 이면 한 쌍이 끝날 때마다 표면 반대 방향으로
+    그만큼 들어올린 뒤, 다음 쌍 시작점 위에서도 같은 높이로 들어올렸다가
+    내려가는 두 경유점을 끼워 넣는다(요청 — coater 전용. 기본값 0이면
+    brush 처럼 기존과 동일하게 쌍 사이를 바로 이동한다)."""
     entry = _load_surface(config_path, surface_name)
     poses = [_pose_from_entry(entry['poses'], f'p{i}') for i in range(1, 7)]
     p1, p2, p3, p4, p5, p6 = poses
 
     pitch_mm = float(pitch_mm)
     inset_mm = float(inset_mm)
+    lift_between_rungs_mm = float(lift_between_rungs_mm)
     if pitch_mm <= 0.0 or inset_mm < 0.0:
         raise SurfaceConfigError('path_pitch_mm은 양수, 경계 여유는 0 이상이어야 함')
 
@@ -66,6 +73,10 @@ def build_surface_path(config_path, surface_name, pitch_mm, inset_mm,
 
         def rung_pose(t, start_pose=start_pose, end_pose=end_pose):
             return _blend_pose(start_pose, end_pose, t)
+
+        if lift_between_rungs_mm > 0.0 and waypoints:
+            waypoints.append(_lift_pose(waypoints[-1], lift_between_rungs_mm))
+            waypoints.append(_lift_pose(rung_pose(ts[0]), lift_between_rungs_mm))
 
         waypoints.append(rung_pose(ts[0]))
         for seg_start_t, seg_end_t in zip(ts, ts[1:]):
@@ -139,6 +150,27 @@ def _zyz_quaternion(rz1_deg, ry_deg, rz2_deg):
         math.sin(b) * math.cos(a - c),
         math.cos(b) * math.sin(a + c),
         math.cos(b) * math.cos(a + c),
+    )
+
+
+def _lift_pose(pose, lift_mm):
+    """pose 를 표면 반대 방향(local -Z, robot_skill_node 의 "tool +Z가
+    표면 쪽" 관례와 동일)으로 lift_mm 만큼 들어올린 Pose. 자세는 그대로."""
+    axis = _local_z_axis(pose.orientation)
+    lifted = Pose()
+    lifted.position.x = pose.position.x - axis[0] * lift_mm / 1000.0
+    lifted.position.y = pose.position.y - axis[1] * lift_mm / 1000.0
+    lifted.position.z = pose.position.z - axis[2] * lift_mm / 1000.0
+    lifted.orientation = pose.orientation
+    return lifted
+
+
+def _local_z_axis(q):
+    """quaternion 의 로컬 +Z 축을 world(base) 좌표 단위벡터로 변환."""
+    return (
+        2.0 * (q.x * q.z + q.y * q.w),
+        2.0 * (q.y * q.z - q.x * q.w),
+        1.0 - 2.0 * (q.x * q.x + q.y * q.y),
     )
 
 
