@@ -13,7 +13,7 @@ surfaces:
       p6: {x_mm: 378.11, y_mm: -22.91, z_mm: 492.90, rz1_deg: 13.58, ry_deg: -178.93, rz2_deg: 13.32}
 
   coater:
-    configured: false
+    configured: true
     frame_id: base_link
     poses:
       p1: {x_mm: 379.26, y_mm: -26.27, z_mm: 431.32, rz1_deg: 35.70, ry_deg: -178.55, rz2_deg: 33.95}
