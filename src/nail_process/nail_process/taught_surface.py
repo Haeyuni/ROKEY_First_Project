@@ -6,8 +6,6 @@ from dataclasses import dataclass
 import yaml
 from geometry_msgs.msg import Point, Pose
 
-from nail_perception.geometry2d import oscillating_sweep
-
 
 class SurfaceConfigError(ValueError):
     pass
@@ -112,10 +110,12 @@ def build_surface_path(config_path, surface_name, pitch_mm, inset_mm,
 
 
 def build_repeat_path(config_path, surface_name, repeats=1):
-    """poses 에 정의된 p1, p2, ... 를 그 순서 그대로 waypoint 로 삼아
-    repeats 번 왕복한다 — coater 전용(요청, 2026-08-25). 점 개수는
-    p1..pN 이 몇 개까지 정의됐는지로 자동 결정된다(최소 2개 필요).
-    pitch/inset 세분화나 곡선 피팅 없이 점들을 직선으로 잇는다."""
+    """poses 에 정의된 p1, p2, ... 를 그 순서 그대로 waypoint 로 삼아,
+    매번 마지막 점에서 p1으로 되돌아가는 닫힌 루프(p1→p2→...→pN→p1)를
+    repeats 번 도는 경로를 만든다 — coater 전용(요청, 2026-08-25; 왕복이
+    아니라 항상 p1→...→pN→p1 방향으로만 순환). 점 개수는 p1..pN 이 몇
+    개까지 정의됐는지로 자동 결정된다(최소 2개 필요). pitch/inset
+    세분화나 곡선 피팅 없이 점들을 직선으로 잇는다."""
     entry = _load_surface(config_path, surface_name)
     poses_dict = entry['poses']
     point_keys = []
@@ -131,7 +131,10 @@ def build_repeat_path(config_path, surface_name, repeats=1):
     boundary = [Point(x=pose.position.x, y=pose.position.y, z=pose.position.z)
                 for pose in poses]
     repeats = max(1, int(repeats))
-    waypoints = oscillating_sweep(poses, repeats)
+    # p1→p2→...→pN 을 반복하되 매 바퀴 p1으로 되돌아간다 — 바퀴 경계에서
+    # 이동거리 0인 중복 waypoint가 안 생기게, p1은 각 바퀴 "시작"에만 넣고
+    # 맨 끝에 마지막으로 한 번 더 닫아준다.
+    waypoints = poses * repeats + [poses[0]]
     return SurfacePath(
         frame_id=str(entry.get('frame_id') or 'base_link'),
         waypoints=waypoints,
