@@ -1,0 +1,19 @@
+# 리본 파츠는 핀셋으로 중앙 홈을 집는다. 모든 Pose는 TASK-BASE X/Y/Z/A/B/C다.
+# 실제 네 점을 티칭하고 공중 MoveL 검증을 끝내기 전까지 configured를 true로 바꾸지 않는다.
+configured: false
+
+# PickPlace가 targets.yaml에서 찾을 키. 키와 실제 좌표는 반드시 함께 관리한다.
+pick_approach_key: stone_pick_approach
+pick_key: stone_pick
+place_approach_key: stone_place_approach
+place_key: stone_place
+
+# RG2가 핀셋 손잡이를 조절하는 폭이다. 현재 값은 기존 stone_node 값의 임시값이다.
+# 파츠 중앙 홈을 확실히 잡는 닫힘 폭과, 파츠만 놓고 핀셋은 계속 잡는 열림 폭을
+# 실기에서 확인한 뒤 바꿔야 한다.
+pinch_width_mm: 3.0
+release_width_mm: 20.0
+
+# MoveL 속도 비율. F/T·순응제어 없이 티칭 위치로만 내려가므로 낮게 유지한다.
+pick_speed_ratio: 0.1
+place_speed_ratio: 0.1

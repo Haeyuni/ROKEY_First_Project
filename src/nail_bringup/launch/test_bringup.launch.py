@@ -331,6 +331,7 @@ def _launch_setup(context, *args, **kwargs):
     rack_config_file = LaunchConfiguration('rack_config_file').perform(context)
     targets_yaml_path = LaunchConfiguration('targets_yaml_path').perform(context)
     surface_config_path = LaunchConfiguration('surface_config_path').perform(context)
+    stone_config_path = LaunchConfiguration('stone_config_path').perform(context)
     base_frame_id = LaunchConfiguration('base_frame_id').perform(context)
     static_frames_file = LaunchConfiguration('static_frames_file').perform(context)
     log_level = LaunchConfiguration('log_level').perform(context)
@@ -366,6 +367,8 @@ def _launch_setup(context, *args, **kwargs):
             params['base_frame_id'] = base_frame_id
         if token in ('brushing', 'coating'):
             params['surface_config_path'] = surface_config_path
+        if token == 'stone':
+            params['stone_config_path'] = stone_config_path
         if token == 'safety':
             params['heartbeat_timeout_ms'] = int(heartbeat_timeout_ms)
             params['publish_rate_hz'] = int(safety_publish_rate_hz)
@@ -389,6 +392,7 @@ def generate_launch_description():
     default_rack_config = get_package_share_directory('nail_skill') + '/config/tool_rack.yaml'
     default_targets = get_package_share_directory('nail_skill') + '/config/targets.yaml'
     default_surfaces = get_package_share_directory('nail_process') + '/config/taught_surfaces.yaml'
+    default_stone_config = get_package_share_directory('nail_process') + '/config/taught_stone.yaml'
     default_static_frames = get_package_share_directory('nail_bringup') + '/config/static_frames.yaml'
 
     return LaunchDescription([
@@ -442,6 +446,11 @@ def generate_launch_description():
             'surface_config_path', default_value=default_surfaces,
             description=(
                 '브러시/코터별 6-Pose 티칭 경로 YAML. 실제 좌표 입력과 실기 검증 전에는 '
+                'configured=false를 유지할 것.')),
+        DeclareLaunchArgument(
+            'stone_config_path', default_value=default_stone_config,
+            description=(
+                '핀셋 리본 파츠의 4-Pose 티칭 키/파지 폭 YAML. 공중 MoveL 검증 전에는 '
                 'configured=false를 유지할 것.')),
         DeclareLaunchArgument(
             'base_frame_id', default_value='base_link',

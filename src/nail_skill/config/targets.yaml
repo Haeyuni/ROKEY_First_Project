@@ -138,6 +138,53 @@ tweezers: # 핀셋 - 완
 #    있다 — 작업대 앞에도 안전한 경유점이 필요하면 rack_transit 과 같은
 #    형식으로 하나 더 티칭해서(예: workbench_transit) 여기에 연결할 것.
 
+# ==========================================================================
+# 리본 파츠 부착용 핀셋 경로 — feature/stone
+# ==========================================================================
+# 모든 값은 핀셋을 RG2가 실제 작업 폭으로 잡은 상태에서 TASK-BASE 화면의
+# X/Y/Z/A/B/C를 그대로 입력한다. stone_node는 다음 네 Pose를 저속 MoveL로 잇는다.
+#   stone_pick_approach -> stone_pick
+#   stone_place_approach -> stone_place -> stone_place_approach
+# 파츠 중앙 홈을 집는 stone_pick과 네일팁 압착점 stone_place의 자세를 임의로
+# Z축 정렬하지 않는다. 파츠 결에 맞춘 기울어진 A/B/C를 그대로 유지한다.
+# taught_stone.yaml의 configured=false 동안에는 이 0 값으로 이동하지 않는다.
+
+stone_pick_approach:
+  x_mm: 0.0
+  y_mm: 0.0
+  z_mm: 0.0
+  frame_id: base_link
+  rz1_deg: 0.0
+  ry_deg: 0.0
+  rz2_deg: 0.0
+
+stone_pick:
+  x_mm: 0.0
+  y_mm: 0.0
+  z_mm: 0.0
+  frame_id: base_link
+  rz1_deg: 0.0
+  ry_deg: 0.0
+  rz2_deg: 0.0
+
+stone_place_approach:
+  x_mm: 0.0
+  y_mm: 0.0
+  z_mm: 0.0
+  frame_id: base_link
+  rz1_deg: 0.0
+  ry_deg: 0.0
+  rz2_deg: 0.0
+
+stone_place:
+  x_mm: 0.0
+  y_mm: 0.0
+  z_mm: 0.0
+  frame_id: base_link
+  rz1_deg: 0.0
+  ry_deg: 0.0
+  rz2_deg: 0.0
+
 sander_work: # 네일 파일 작업 시작 자세 - 재실측 (2026-08-24, get_current_posx)
   x_mm: 370.07
   y_mm: -16.42

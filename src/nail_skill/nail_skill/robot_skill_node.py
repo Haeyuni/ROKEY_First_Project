@@ -440,8 +440,9 @@ class RobotSkillNode(Node):
         goal = goal_handle.request
         started_at = time.monotonic()
         result = PickPlace.Result()
-        speed = self.get_parameter('move_max_speed_mms').value * 0.3
-        accel = self.get_parameter('move_max_accel_mms2').value * 0.3
+        speed_ratio = goal.move_speed_ratio if goal.move_speed_ratio > 0.0 else 0.3
+        speed = self.get_parameter('move_max_speed_mms').value * speed_ratio
+        accel = self.get_parameter('move_max_accel_mms2').value * speed_ratio
         timeout_s = self.get_parameter('motion_timeout_s').value
 
         def feedback(step, percent):
@@ -469,9 +470,19 @@ class RobotSkillNode(Node):
                     f'PickPlace place: place_clearance_mm={clearance} 적용 '
                     f'→ z {target.z_mm - clearance:.2f} → {target.z_mm:.2f}mm')
 
-        approach = TaskPose(target.x_mm, target.y_mm,
-                             target.z_mm + goal.approach_height_mm,
-                             target.rz1_deg, target.ry_deg, target.rz2_deg)
+        if goal.approach_key:
+            try:
+                approach = self._target_task_pose(goal.approach_key, goal.frame_id)
+            except Exception as e:
+                goal_handle.abort()
+                result.base = self._result_base(
+                    False, ErrorCode.E_INVALID_GOAL,
+                    f'approach_key "{goal.approach_key}" 조회 실패: {e}', started_at)
+                return result
+        else:
+            approach = TaskPose(target.x_mm, target.y_mm,
+                                target.z_mm + goal.approach_height_mm,
+                                target.rz1_deg, target.ry_deg, target.rz2_deg)
 
         def move_and_wait(pose, step, pct):
             self._adapter.start_move_line(pose, speed, accel)
@@ -573,9 +584,18 @@ class RobotSkillNode(Node):
             return result
 
         feedback(4, 90.0)
+        if goal.retreat_key:
+            try:
+                retreat = self._target_task_pose(goal.retreat_key, goal.frame_id)
+            except Exception as e:
+                goal_handle.abort()
+                result.base = self._result_base(
+                    False, ErrorCode.E_INVALID_GOAL,
+                    f'retreat_key "{goal.retreat_key}" 조회 실패: {e}', started_at)
+                return result
         # PICK 은 툴을 슬롯에서 완전히 빼내야 하므로 approach 보다 높이 든다.
         # PLACE 는 툴을 놓고 빠지는 것뿐이라 approach 로 그대로 복귀한다.
-        if goal.mode == PickPlace.Goal.MODE_PICK:
+        elif goal.mode == PickPlace.Goal.MODE_PICK:
             lift_mm = max(self.get_parameter('pick_lift_mm').value,
                           goal.approach_height_mm)
             retreat = TaskPose(target.x_mm, target.y_mm, target.z_mm + lift_mm,
