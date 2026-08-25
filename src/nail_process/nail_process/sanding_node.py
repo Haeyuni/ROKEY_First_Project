@@ -147,6 +147,10 @@ class SandingNode(Node):
             380.04, -13.55, 393.82, 91.89, -178.54, 119.15,
             370.12, -3.14, 391.11, 76.93, -176.01, 34.45,
         ])
+        # 기본 3-Pose를 같은 base_link Y 방향으로 평행 이동한다. 세 점을 같은
+        # 값으로 움직여 티칭된 궤적의 형태와 자세는 유지한다. 더미 쪽 부호는
+        # 실기에서 ±0.5 mm부터 확인하며, 안전상 ±2 mm를 넘는 보정은 거부한다.
+        d('taught_path_y_offset_mm', 0.0)
         # 손톱 경계 ★ — launch 가 static_frames.yaml 의 nail_region 에서 주입한다.
         # 여기 기본값은 launch 없이 `ros2 run` 으로 띄웠을 때만 쓰인다.
         d('nail_size_x_mm', 16.0)
@@ -184,10 +188,12 @@ class SandingNode(Node):
         if len(flat) < 12 or len(flat) % 6 != 0:
             return []
         poses = []
+        y_offset_mm = self.get_parameter('taught_path_y_offset_mm').value
         for i in range(0, len(flat), 6):
             tp = TaskPose()
             (tp.x_mm, tp.y_mm, tp.z_mm,
              tp.rz1_deg, tp.ry_deg, tp.rz2_deg) = flat[i:i + 6]
+            tp.y_mm += y_offset_mm
             poses.append(tp)
         return poses
 
@@ -307,6 +313,15 @@ class SandingNode(Node):
         custom_poses = list(goal.waypoints)
         source = 'goal.waypoints'
         if len(custom_poses) < 2:
+            y_offset_mm = self.get_parameter('taught_path_y_offset_mm').value
+            if abs(y_offset_mm) > 2.0:
+                detail = (f'taught_path_y_offset_mm({y_offset_mm})가 허용 범위 '
+                          '[-2.0, 2.0] mm를 벗어남')
+                self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
+                goal_handle.abort()
+                result.base = self._result_base(
+                    False, ErrorCode.E_INVALID_GOAL, detail, started_at)
+                return result
             custom_poses = self._default_waypoints_taskposes()
             source = 'default_waypoints 파라미터'
         use_custom_waypoints = len(custom_poses) >= 2

@@ -331,6 +331,7 @@ def _launch_setup(context, *args, **kwargs):
     targets_yaml_path = LaunchConfiguration('targets_yaml_path').perform(context)
     surface_config_path = LaunchConfiguration('surface_config_path').perform(context)
     stone_config_path = LaunchConfiguration('stone_config_path').perform(context)
+    sanding_path_y_offset_mm = LaunchConfiguration('sanding_path_y_offset_mm').perform(context)
     home_target_key = LaunchConfiguration('home_target_key').perform(context)
     base_frame_id = LaunchConfiguration('base_frame_id').perform(context)
     static_frames_file = LaunchConfiguration('static_frames_file').perform(context)
@@ -369,6 +370,8 @@ def _launch_setup(context, *args, **kwargs):
             params['surface_config_path'] = surface_config_path
         if token == 'stone':
             params['stone_config_path'] = stone_config_path
+        if token == 'sanding':
+            params['taught_path_y_offset_mm'] = float(sanding_path_y_offset_mm)
         if token == 'orchestrator':
             params['home_target_key'] = home_target_key
         if token == 'safety':
@@ -454,6 +457,11 @@ def generate_launch_description():
             description=(
                 '핀셋 리본 파츠의 4-Pose 티칭 키/파지 폭 YAML. 공중 MoveL 검증 전에는 '
                 'configured=false를 유지할 것.')),
+        DeclareLaunchArgument(
+            'sanding_path_y_offset_mm', default_value='0.0',
+            description=(
+                '샌딩 기본 3-Pose 전체에 적용할 base_link Y 보정(mm). '
+                '궤적 형태를 보존하며, 실기에서는 +/-0.5부터 확인한다.')),
         DeclareLaunchArgument(
             'home_target_key', default_value='rack_transit',
             description=(
