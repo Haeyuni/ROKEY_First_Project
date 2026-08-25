@@ -137,7 +137,10 @@ class ToolManagerNode(Node):
         d('rack_config_file', 'config/tool_rack.yaml')
         d('sync_tcp_on_startup', True)
         d('approach_height_mm', 50.0)
-        d('change_timeout_s', 60.0)
+        # 반납/파지 각각에 주는 PickPlace 타임아웃. 코터처럼 뚜껑을 여닫는
+        # 툴은 손목 감기 + 뚜껑 회전 + 되감기가 이 안에서 끝나야 한다 —
+        # 최악 ~1900°/45°/s ≈ 43s 가 여기에 더 붙는다.
+        d('change_timeout_s', 120.0)
         d('uv_park_facing', 'into_rack')
         # 랙 이동 직전 TCP 를 NEUTRAL_TCP(오프셋 0)로 되돌릴지. 기본 true.
         # false 로 두면 직전 툴의 tcp_offset 이 그대로 남아 랙 도달 높이가
@@ -446,6 +449,10 @@ class ToolManagerNode(Node):
         pick_goal.target_key = cfg['slot_frame']
         pick_goal.approach_height_mm = approach_height
         pick_goal.grip_width_mm = cfg.get('expected_grip_width_mm', 0.0)
+        # 나사로 잠긴 툴(코터 젤 병 뚜껑)은 슬롯에서 잡은 자리에서 먼저 돌려
+        # 풀고 나서 들어 올린다 — 실제 회전은 robot_skill_node 가 한다.
+        pick_goal.unscrew = bool(cfg.get('unscrew', False))
+        pick_goal.unscrew_grip_width_mm = float(cfg.get('unscrew_grip_width_mm', 0.0))
 
         feedback(2, 55.0)
         pp_result, err_code, err_detail = self._call_pick_place(pick_goal, goal_handle, timeout_s)
@@ -480,7 +487,10 @@ class ToolManagerNode(Node):
         feedback(4, 95.0)
         self._current_tool = goal.target_tool
         self._current_tcp = f'tcp_{goal.target_tool}'
-        self._grip_width_mm = pick_goal.grip_width_mm
+        # 뚜껑을 푼 툴은 푼 뒤에도 그 폭을 유지한 채 들려 있다 — 명령값을
+        # 그대로 발행해야 /tool/status 가 실제 그리퍼 명령과 어긋나지 않는다.
+        self._grip_width_mm = (pick_goal.unscrew_grip_width_mm if pick_goal.unscrew
+                                else pick_goal.grip_width_mm)
         self._publish_status()
 
         goal_handle.succeed()

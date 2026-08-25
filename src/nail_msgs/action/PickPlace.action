@@ -17,8 +17,24 @@ bool    already_holding        # 그리퍼가 이미 툴(예: 핀셋)을 쥔 채
                                 # PLACE: 완전개방 대신 grip_width_mm 폭까지만
                                 # 벌려서 놓는다 —
                                 # 예: 스톤만 놓고 핀셋 손잡이는 계속 쥔 채 유지.
+bool    unscrew                # 나사식 뚜껑(코터 젤 병). 슬롯에서 tool Z 축
+                                # 둘레로 돌려 여닫는다 —
+                                #   PICK : 잡고 → 풀고 → 들어 올린다
+                                #   PLACE: 내려놓으며 → 잠그고 → 놓는다
+                                # 회전 직전/직후로 손목 감기·되감기가 붙는다.
+                                # 회전각/피치/속도는 robot_skill_node 의
+                                # unscrew_* 파라미터.
+float64 unscrew_grip_width_mm  # unscrew 일 때 grip_width_mm 대신 쓸 파지 폭(mm).
+                                # 0 = 끝까지 오므림. RG2 가 뚜껑에 막혀 멈추고
+                                # 남은 힘을 전부 파지력으로 쓰므로, 돌릴 때
+                                # 미끄러지지 않게 하려면 0 이 기본이다.
 ---
 nail_msgs/ResultBase base
+float64 unscrew_done_deg       # 실제로 돌린 각도(deg, 부호=방향). 손목 감기/
+                                # 되감기는 빼고 뚜껑 회전만 센다. unscrew 를
+                                # 안 했으면 0. 손목 가동범위에 걸려 목표보다
+                                # 덜 돌았는지 여기서 확인한다.
 ---
 int32   step                   # 0=이동 1=하강 2=그립 4=상승
+                                # 3=손목 감기/뚜껑 회전/젤 훑기 (unscrew 전용)
 float64 percent

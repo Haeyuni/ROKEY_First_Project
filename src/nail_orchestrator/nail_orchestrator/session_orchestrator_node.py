@@ -116,7 +116,10 @@ class SessionOrchestratorNode(Node):
         d('stage_timeout_coat_s', 90.0)
         d('stage_timeout_cure_s', 150.0)
         d('stage_timeout_stone_s', 90.0)
-        d('tool_change_timeout_s', 60.0)
+        # 반납 + 파지 전체를 덮어야 한다. 코터는 반납 때 뚜껑 닫기, 파지 때
+        # 뚜껑 열기가 각각 붙고 그 앞뒤로 손목 감기/되감기까지 있어서
+        # (최악 ~1900°/45°/s ≈ 43s) × 2 회가 더 든다.
+        d('tool_change_timeout_s', 180.0)
         d('tool_status_timeout_s', 5.0)
         d('abort_return_home', True)
         d('precheck_require_all_tools', True)

@@ -70,6 +70,10 @@ class DsrAdapter:
         self._amovec = dsr.amovec
         self._check_motion = dsr.check_motion
         self._get_current_posx = dsr.get_current_posx
+        # 나사 뚜껑 풀기에서 손목(J6) 잔여 가동범위를 확인하는 데만 쓴다.
+        # 드라이버 버전에 따라 없을 수 있어 없으면 None 으로 두고, 호출부가
+        # "가동범위 확인 불가"로 처리한다.
+        self._get_current_posj = getattr(dsr, 'get_current_posj', None)
         self._set_tcp = dsr.set_tcp
         self._get_tcp = dsr.get_tcp
         self._add_tcp = dsr.add_tcp
@@ -167,14 +171,23 @@ class DsrAdapter:
 
     # --- motion (비동기 시작 + 폴링) ------------------------------------------
     def start_move_line(self, pose: TaskPose, vel_mms: float, acc_mms2: float,
-                         ref=None, relative: bool = False):
+                         ref=None, relative: bool = False,
+                         vel_degs: float = None, acc_degs2: float = None):
+        """vel_degs/acc_degs2 를 주면 amovel 에 [병진, 회전] 쌍으로 넘긴다.
+
+        스칼라만 주면 두산 컨트롤러가 회전 속도를 자기 기본값으로 정하는데,
+        자세 변화가 큰 이동(뚜껑 풀기의 tool Z 축 회전)에서는 그 기본값이
+        너무 빨라 제어가 안 된다 — 그럴 때만 회전 쪽을 따로 지정한다.
+        """
         p = self._posx(pose.x_mm, pose.y_mm, pose.z_mm,
                         pose.rz1_deg, pose.ry_deg, pose.rz2_deg)
         mod = self._DR_MV_MOD_REL if relative else self._DR_MV_MOD_ABS
         _ref = (self._DR_TOOL if ref is None else ref) if relative \
             else (self._DR_BASE if ref is None else ref)
+        vel = float(vel_mms) if vel_degs is None else [float(vel_mms), float(vel_degs)]
+        acc = float(acc_mms2) if acc_degs2 is None else [float(acc_mms2), float(acc_degs2)]
         with self._lock:
-            self._amovel(p, vel=float(vel_mms), acc=float(acc_mms2), ref=_ref, mod=mod)
+            self._amovel(p, vel=vel, acc=acc, ref=_ref, mod=mod)
 
     def start_move_joint_to_pose(self, pose: TaskPose, vel_mms: float, acc_mms2: float,
                                   ref=None, sol: int = 2):
@@ -220,6 +233,25 @@ class DsrAdapter:
                                  vel_mms: float, acc_mms2: float):
         self.start_move_line(TaskPose(float(dx_mm), float(dy_mm), float(dz_mm), 0.0, 0.0, 0.0),
                                vel_mms, acc_mms2, relative=True)
+
+    def start_rotate_tool_z(self, delta_deg: float, along_z_mm: float,
+                             vel_mms: float, acc_mms2: float,
+                             vel_degs: float, acc_degs2: float):
+        """tool +Z 축 둘레로 delta_deg 만큼 돌면서 동시에 tool Z 로 along_z_mm 이동.
+
+        나사를 푸는 움직임(회전 + 피치만큼의 축방향 이동)이 정확히 이 형태다.
+        posx 의 자세 3개는 ZYZ(A,B,C) 라서 (delta,0,0) 은 Rz(delta)·Ry(0)·Rz(0)
+        = Z축 회전 하나만 남는다. ref=DR_TOOL + mod=REL 이므로 그 Z 는 현재
+        tool 의 Z 다.
+
+        두산에는 `move_spiral` 이 따로 있지만 그건 TCP **위치**만 나선으로
+        움직이고 자세는 그대로 둔다 — 뚜껑을 옆으로 끌고 다닐 뿐 풀지 못한다.
+        나사에서 말하는 나선(회전+축방향 전진)은 이 함수 쪽이다.
+        """
+        self.start_move_line(
+            TaskPose(0.0, 0.0, float(along_z_mm), float(delta_deg), 0.0, 0.0),
+            vel_mms, acc_mms2, relative=True,
+            vel_degs=vel_degs, acc_degs2=acc_degs2)
 
     def start_move_rel_base_xyz(self, dx_mm: float, dy_mm: float, dz_mm: float,
                                  vel_mms: float, acc_mms2: float):
@@ -273,6 +305,23 @@ class DsrAdapter:
         if pos is None:
             raise DsrAdapterError('get_current_posx 응답 없음')
         return TaskPose(pos[0], pos[1], pos[2], pos[3], pos[4], pos[5])
+
+    def get_joints(self):
+        """관절 6개의 현재 각도(deg) 리스트. 드라이버가 안 주면 None.
+
+        None 을 예외 대신 돌려주는 이유: 이 값을 쓰는 곳(뚜껑 풀기의 J6 잔여
+        가동범위 계산)은 값이 없으면 "확인 불가"로 물러설 뿐 실패가 아니다.
+        """
+        if self._get_current_posj is None:
+            return None
+        with self._lock:
+            joints = self._get_current_posj()
+        # 드라이버 버전에 따라 (posj, ...) 튜플로 감싸 오는 경우가 있다.
+        if isinstance(joints, tuple) and joints and not isinstance(joints[0], float):
+            joints = joints[0]
+        if joints is None or len(joints) < 6:
+            return None
+        return [float(v) for v in joints[:6]]
 
     # --- 안전 감시용 읽기 전용 폴링 -------------------------------------------
     def read_robot_state(self):

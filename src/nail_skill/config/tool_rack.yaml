@@ -67,6 +67,20 @@
 #     컨트롤러에 자동 등록된다(sync_tcp_on_startup, 기본 true). 펜던트에서
 #     따로 등록할 필요 없이 이 파일만 고치면 된다.
 #
+# unscrew / unscrew_grip_width_mm : (선택, 기본 false / 0.0) 나사로 잠긴 툴용.
+#     코터(젤 병 뚜껑이 곧 붓)가 이 경우다. true 면 PickPlace 가 슬롯에서
+#     대칭으로 열고 닫는다:
+#       PICK  : 잡고 → tool Z 축 둘레로 풀고 → 붓의 젤 여분을 병 입구에
+#               훑고 → 들어 올린다
+#       PLACE : 내려놓으면서 → 돌려서 잠그고 → 놓는다
+#     즉 코터를 랙에 반납하면 뚜껑이 병에 다시 잠긴 채로 남는다.
+#     돌리는 동안에는 expected_grip_width_mm 대신 unscrew_grip_width_mm 으로
+#     오므리고, 푼 뒤에도 그 폭을 유지한 채 들어 올린다(도중에 벌리면 놓친다).
+#     회전 직전에는 슬롯 위 안전 높이에서 손목을 반대쪽으로 미리 감아
+#     가동범위를 확보하므로, 슬롯 자세를 티칭할 때 J6 각도를 맞출 필요는 없다.
+#     회전각·나사 피치·회전 속도·손목 가동범위는 툴이 아니라 로봇 쪽 문제라
+#     여기가 아니라 robot_skill_node 의 unscrew_* 파라미터에 있다.
+#
 # ============================================================================
 
 # ※ probe(탐침)는 목록에서 빠졌다 — ProbePoint 스킬과 그걸 쓰던
@@ -84,10 +98,14 @@ tools:
     expected_grip_width_mm: 15.0      # TODO: 손잡이 폭 실측
     tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)
 
-  coater:                             # 젤 도포기
+  coater:                             # 젤 도포기 — 병에 나사로 잠긴 뚜껑이 곧 붓
     slot_frame: coater
     expected_grip_width_mm: 16.0      # TODO: 손잡이 폭 실측
     tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)
+    unscrew: true                     # PICK 은 돌려서 열고, PLACE 는 돌려서 닫는다
+    unscrew_grip_width_mm: 0.0        # 0 = 끝까지 오므림. 돌릴 때 미끄러지지
+                                       # 않도록 최대 파지력을 쓴다 — RG2 는
+                                       # 뚜껑에 막혀 실제 폭에서 멈춘다.
 
   uv:                                 # 자외선 램프 — 상시 ON, 취급 주의
     slot_frame: uv
