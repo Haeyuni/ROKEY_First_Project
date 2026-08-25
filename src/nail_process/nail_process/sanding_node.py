@@ -310,34 +310,44 @@ class SandingNode(Node):
             custom_poses = self._default_waypoints_taskposes()
             source = 'default_waypoints 파라미터'
         use_custom_waypoints = len(custom_poses) >= 2
-        travel_limit_mm = None
-
-
         engagement_mm = self.get_parameter('engagement_depth_mm').value
-        if engagement_mm > travel_limit_mm:
-            detail = (f'engagement_depth_mm({engagement_mm}) > travel_limit_mm'
-                      f'({travel_limit_mm:.2f}) — 피부 접촉 방어선(NFR-09) 초과 위험')
-            self._log_abort(ErrorCode.E_LATERAL_LIMIT, detail)
-            goal_handle.abort()
-            result.abort_reason = 'ABORT_LATERAL_LIMIT'
-            result.base = self._result_base(
-                False, ErrorCode.E_LATERAL_LIMIT, detail, started_at)
-            return result
+        travel_limit_mm = 0.0
+        sweep_poses = []
+        sweep_xy_mm = []
 
-        # --- 이송 경로: 진입측 호(arc)를 압입 깊이만큼 눌러 넣은 곡선 -----------------
-        # 센서 없이 티칭 좌표만 사용하므로,
-        # boundary_xy(타원 근사 다각형) 중 진입점 쪽 절반을 feed_axis 순으로
-        # 뽑아 그 곡선 자체를 waypoint 로 쓴다. base_xy(approach_vec) 방향으로
-        # engagement_depth_mm 만큼 offset 해서 실제 연마 깊이를 만든다.
-        feed_axis = _rotate90(base_xy)
-        centroid_xy = centroid(boundary_xy)
-        arc_points = sorted(
-            (p for p in boundary_xy if _dot(_sub(p, centroid_xy), base_xy) <= 0.0),
-            key=lambda p: _dot(_sub(p, start_xy), feed_axis))
-        if len(arc_points) < 2:
-            arc_points = [start_xy, start_xy]
-        engaged_arc = [_add_scaled(p, base_xy, engagement_mm) for p in arc_points]
-        sweep_xy_mm = engaged_arc + list(reversed(engaged_arc[:-1]))
+        if use_custom_waypoints:
+            # 수동 티칭 경로는 SandSurface.action 계약대로 경계 계산과 안전 한계
+            # 검사를 하지 않는다. 각 Pose의 절대 좌표·자세는 티칭으로 검증한다.
+            sweep_poses = [task_pose_to_ros_pose(tp)
+                           for tp in oscillating_sweep(custom_poses, oscillations)]
+        else:
+            boundary_xy = self._nail_boundary()
+            start_xy = self._entry_point(base_xy, boundary_xy)
+            travel_limit_mm = self._compute_travel_limit(
+                start_xy, base_xy, boundary_xy, margin_mm) if start_xy is not None else None
+            if travel_limit_mm is None or engagement_mm > travel_limit_mm:
+                limit_text = '계산 실패' if travel_limit_mm is None else f'{travel_limit_mm:.2f}'
+                detail = (f'engagement_depth_mm({engagement_mm}) > travel_limit_mm'
+                          f'({limit_text}) — 피부 접촉 방어선(NFR-09) 초과 위험')
+                self._log_abort(ErrorCode.E_LATERAL_LIMIT, detail)
+                goal_handle.abort()
+                result.abort_reason = 'ABORT_LATERAL_LIMIT'
+                result.computed_travel_limit_mm = travel_limit_mm or 0.0
+                result.base = self._result_base(
+                    False, ErrorCode.E_LATERAL_LIMIT, detail, started_at)
+                return result
+
+            # 경계 곡선 자체를 base_xy 방향으로 engagement_depth_mm만큼 안쪽으로
+            # 옮긴 뒤 왕복한다. travel_limit_mm은 이 경로가 경계를 넘지 않게 한다.
+            feed_axis = _rotate90(base_xy)
+            centroid_xy = centroid(boundary_xy)
+            arc_points = sorted(
+                (p for p in boundary_xy if _dot(_sub(p, centroid_xy), base_xy) <= 0.0),
+                key=lambda p: _dot(_sub(p, start_xy), feed_axis))
+            if len(arc_points) < 2:
+                arc_points = [start_xy, start_xy]
+            engaged_arc = [_add_scaled(p, base_xy, engagement_mm) for p in arc_points]
+            sweep_xy_mm = engaged_arc + list(reversed(engaged_arc[:-1]))
 
         def mm_to_pose(xy_mm, z_mm):
             """경계 모드 전용 — face-down 고정 자세로 Pose 를 만든다. 수동
@@ -365,7 +375,8 @@ class SandingNode(Node):
         passes_done = 0
         deadline = time.monotonic() + max_duration
 
-        for pass_idx in range(passes):
+        pass_total = 1 if use_custom_waypoints else passes
+        for pass_idx in range(pass_total):
             if goal_handle.is_cancel_requested:
                 abort_code = 'CANCELLED'
                 break
@@ -395,7 +406,8 @@ class SandingNode(Node):
                 lc_goal.frame_id = 'nail_local_frame'
             lc_goal.session_id = goal.session_id
 
-            lc_goal.work_plane_offset_mm = z_mm
+            if not use_custom_waypoints:
+                lc_goal.work_plane_offset_mm = z_mm
             lc_goal.feed_speed_mms = feed_speed
             lc_goal.retreat_mm = margin_mm
             lc_goal.passes = 1
@@ -403,7 +415,7 @@ class SandingNode(Node):
 
             def on_lc_feedback(fb_msg):
                 fb = fb_msg.feedback
-                feedback(100.0 * (pass_idx + fb.percent / 100.0) / passes,
+                feedback(100.0 * (pass_idx + fb.percent / 100.0) / pass_total,
                           pass_idx, engagement_mm)
 
             lc_result, err_code, err_detail = self._call_lateral_contact(
@@ -425,6 +437,7 @@ class SandingNode(Node):
             max_travels.append(engagement_mm)
 
         result.max_travel_mm = max(max_travels) if max_travels else 0.0
+        result.computed_travel_limit_mm = travel_limit_mm
         result.passes_done = passes_done
         result.abort_reason = abort_reason
 

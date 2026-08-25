@@ -43,8 +43,7 @@ ros2 launch nail_bringup test_bringup.launch.py nodes:=safety,skill,tool,sanding
 `nodes` 토큰: `frames` `safety` `skill` `tool` `sanding` `brushing`
 `coating` `curing` `stone` `orchestrator` (또는 `all`). 콤마로 여러 개.
 
-**`scan` / `inspection` 토큰은 없어졌다** — scan_node 와 inspection_node 는
-폐지됐다. 연마·경화·스톤 경계는 `static_frames.yaml`, 브러싱·코팅 경계는
+연마·경화·스톤 경계는 `static_frames.yaml`, 브러싱·코팅 경계는
 `nail_process/config/taught_surfaces.yaml`의 툴별 6-Pose에서 온다.
 
 각 토큰이 실제로 무엇을 필요로 하는지는 NIS-NAIL-v0.3 §11.1 인터페이스
@@ -332,6 +331,7 @@ def _launch_setup(context, *args, **kwargs):
     targets_yaml_path = LaunchConfiguration('targets_yaml_path').perform(context)
     surface_config_path = LaunchConfiguration('surface_config_path').perform(context)
     stone_config_path = LaunchConfiguration('stone_config_path').perform(context)
+    home_target_key = LaunchConfiguration('home_target_key').perform(context)
     base_frame_id = LaunchConfiguration('base_frame_id').perform(context)
     static_frames_file = LaunchConfiguration('static_frames_file').perform(context)
     log_level = LaunchConfiguration('log_level').perform(context)
@@ -369,6 +369,8 @@ def _launch_setup(context, *args, **kwargs):
             params['surface_config_path'] = surface_config_path
         if token == 'stone':
             params['stone_config_path'] = stone_config_path
+        if token == 'orchestrator':
+            params['home_target_key'] = home_target_key
         if token == 'safety':
             params['heartbeat_timeout_ms'] = int(heartbeat_timeout_ms)
             params['publish_rate_hz'] = int(safety_publish_rate_hz)
@@ -416,7 +418,7 @@ def generate_launch_description():
                 'safety_monitor 에 전달. 실측: 20Hz 주기로 DI 2개+robot_state 1개를 '
                 '순차 호출하는데, robot_skill_node 등 다른 노드도 동시에 같은 두산 '
                 '컨트롤러에 서비스를 호출해서 200ms(구 기본값)는 자주 넘겨 '
-                'FAULT_COMM_LOST 가 반복적으로 래치됐다. 800, 1500 도 각각 스캔/'
+                'FAULT_COMM_LOST 가 반복적으로 래치됐다. 800, 1500 도 각각 장시간 공정/'
                 'ChangeTool(PickPlace) 처럼 서비스 호출이 몰리는 구간에서 넘겨서 '
                 '3000으로 재검증됨. (safety_monitor_node.py 자체 기본값과 별개로 '
                 '이 launch 인자가 항상 파라미터로 전달되어 덮어쓰므로, 노드 쪽 '
@@ -452,6 +454,11 @@ def generate_launch_description():
             description=(
                 '핀셋 리본 파츠의 4-Pose 티칭 키/파지 폭 YAML. 공중 MoveL 검증 전에는 '
                 'configured=false를 유지할 것.')),
+        DeclareLaunchArgument(
+            'home_target_key', default_value='rack_transit',
+            description=(
+                '실패·취소 시 복귀할 targets.yaml의 티칭된 안전 경유점. '
+                '기본 rack_transit은 임의 TF 좌표 대신 실측 target_key를 사용한다.')),
         DeclareLaunchArgument(
             'base_frame_id', default_value='base_link',
             description=(

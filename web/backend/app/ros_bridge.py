@@ -181,7 +181,6 @@ def make_run_session_goal(
     shape_profile_id: str,
     target_material: str,
     layer_total: int,
-    enable_brush: bool,
     enable_stone: bool,
 ) -> dict:
     """RunSession.action goal 필드 (IDS §7.1) 그대로."""
@@ -191,7 +190,6 @@ def make_run_session_goal(
         "shape_profile_id": shape_profile_id,
         "target_material": target_material,
         "layer_total": layer_total,
-        "enable_brush": enable_brush,
         "enable_stone": enable_stone,
     }
 

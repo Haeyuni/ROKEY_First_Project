@@ -9,23 +9,16 @@
 타임아웃 감시하며 결과 대기"라는 같은 뼈대를 쓰므로, 스킬 노드들처럼
 액션마다 개별 헬퍼를 쓰지 않고 `_call_action()` 하나로 묶었다.
 
-★ v0.3 변경 — **SCAN 과 INSPECT 스테이지가 사라졌다.**
-
-scan_node(강성 스캔)와 inspection_node(택프리 3점 검사)가 폐지되면서:
-
-  - 공정 순서가 `PRECHECK → SAND → BRUSH → COAT → CURE → STONE → FINISH`
-    로 줄었다. probe 툴을 집는 단계가 없어 `ChangeTool` 횟수도 준다.
+현재 공정 순서는 `PRECHECK → SAND → BRUSH → COAT → CURE → STONE → FINISH`다.
   - 경화 상태를 자동 판정하거나 다시 굽는 루프는 없다. 경화 부족은 사람이
     확인하고 `curing_node`의 `dwell_s_per_point`를 조정한다.
    - 스톤 부착 위치와 기울어진 자세는 stone_node의 4-Pose 티칭 설정으로 정한다.
 
 **문서에 없어서 이 구현이 채운 빈틈들**:
 
-1. **HOME 위치**: NIS 어디에도 HOME 의 좌표/TF 프레임 이름이 없다. 툴랙
-   슬롯(`slot_*`)과 같은 방식 — `static_transform_publisher` 로 고정된
-   TF 프레임을 쓴다고 가정하고, 파라미터(`home_frame_id`, 기본
-   `home_frame`)로 이름만 받는다. 실제 launch 파일에 이 프레임을
-   발행하는 노드가 있어야 동작한다.
+1. **HOME 위치**: `targets.yaml`의 티칭된 `rack_transit`을 기본 HOME으로
+   쓴다. 이는 랙과 작업대 사이 안전 경유점으로 실측된 target_key이므로,
+   임의 TF 좌표를 만들지 않는다.
 2. **PRECHECK 의 "툴 랙 전수 확인"**: `/tool/get_info` 는 랙 슬롯이
    `rack_config.yaml` 에 *설정*돼 있는지만 답한다 — 슬롯에 물리적으로
    툴이 실제로 꽂혀 있는지 확인할 센서/인터페이스가 없다. 그래서 이
@@ -41,7 +34,6 @@ scan_node(강성 스캔)와 inspection_node(택프리 3점 검사)가 폐지되�
 import threading
 import time
 
-from geometry_msgs.msg import Pose
 import rclpy
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -81,8 +73,13 @@ class SessionOrchestratorNode(Node):
         self.create_timer(1.0, self._on_publish_timer, callback_group=self._cb_client)
 
         self._active_goal_handle = None
+        self._session_running = False
+        self._latest_tool_state = None
+        self._last_tool_state_rx_monotonic = None
         self._get_tool_info_client = self.create_client(
             GetToolInfo, '/tool/get_info', callback_group=self._cb_client)
+        self.create_subscription(ToolState, '/tool/status', self._on_tool_status,
+                                 state_qos, callback_group=self._cb_client)
         self._change_tool_client = ActionClient(self, ChangeTool, '/tool/change',
                                                  callback_group=self._cb_client)
         self._sand_client = ActionClient(self, SandSurface, '/process/sand',
@@ -114,17 +111,18 @@ class SessionOrchestratorNode(Node):
         d('safety_status_timeout_s', 1.0)
         d('layer_total', 2)
         d('enable_stone', False)
-        d('enable_brush', True)
         d('stage_timeout_sand_s', 120.0)
         d('stage_timeout_brush_s', 60.0)
         d('stage_timeout_coat_s', 90.0)
         d('stage_timeout_cure_s', 150.0)
         d('stage_timeout_stone_s', 90.0)
         d('tool_change_timeout_s', 60.0)
+        d('tool_status_timeout_s', 5.0)
         d('abort_return_home', True)
         d('precheck_require_all_tools', True)
+        d('allowed_target_materials', ['silicone_model', 'artificial_tip'])
         # NIS 표에 없는 구현 보조값 — docstring 참고
-        d('home_frame_id', 'home_frame')
+        d('home_target_key', 'rack_transit')
         d('home_timeout_s', 30.0)
         # ChangeTool 직후 공통 이동: 경유점(랙 쪽 안전 지점) → <툴>_work
         # (targets.yaml). 대각선 이동으로 방금 집은 툴이 다른 것과 부딪히는
@@ -142,6 +140,10 @@ class SessionOrchestratorNode(Node):
         self._latest_safety = msg
         self._last_safety_rx_monotonic = time.monotonic()
 
+    def _on_tool_status(self, msg):
+        self._latest_tool_state = msg
+        self._last_tool_state_rx_monotonic = time.monotonic()
+
     def _safe_to_move(self):
         timeout_s = self.get_parameter('safety_status_timeout_s').value
         return (self._latest_safety is not None
@@ -155,12 +157,22 @@ class SessionOrchestratorNode(Node):
         return CancelResponse.ACCEPT
 
     def _on_goal(self, goal_request):
+        if self._session_running:
+            self.get_logger().warn('RunSession REJECT: 이미 세션 실행 중')
+            return GoalResponse.REJECT
         if not goal_request.session_id:
             self.get_logger().warn('RunSession REJECT: E_INVALID_GOAL (session_id 없음)')
+            return GoalResponse.REJECT
+        allowed_materials = self.get_parameter('allowed_target_materials').value
+        if goal_request.target_material not in allowed_materials:
+            self.get_logger().warn(
+                f'RunSession REJECT: E_INVALID_GOAL (허용되지 않은 target_material: '
+                f'{goal_request.target_material!r})')
             return GoalResponse.REJECT
         if not self._safe_to_move():
             self.get_logger().warn('RunSession REJECT: E_SAFETY_BLOCKED')
             return GoalResponse.REJECT
+        self._session_running = True
         return GoalResponse.ACCEPT
 
     def _val(self, goal_value, param_name):
@@ -284,19 +296,46 @@ class SessionOrchestratorNode(Node):
     def _call_change_tool(self, target_tool, our_goal_handle, timeout_s, ignore_cancel=False):
         goal = ChangeTool.Goal()
         goal.target_tool = target_tool
-        return self._call_action(self._change_tool_client, goal, our_goal_handle, timeout_s,
-                                  ignore_cancel=ignore_cancel)
+        result, err = self._call_action(self._change_tool_client, goal, our_goal_handle, timeout_s,
+                                        ignore_cancel=ignore_cancel)
+        if err is not None:
+            return result, err
+        return result, self._wait_for_tool_status(
+            target_tool, our_goal_handle, ignore_cancel=ignore_cancel)
 
-    def _call_move_to_key(self, target_key, our_goal_handle, timeout_s):
+    def _wait_for_tool_status(self, expected_tool, our_goal_handle, ignore_cancel=False):
+        """ChangeTool 완료 뒤 상태 토픽도 목표 툴을 가리킬 때까지 기다린다.
+
+        공정 노드는 goal 수락 전에 /safety/validate가 구독한 /tool/status를 본다.
+        액션 결과만 받은 직후 다음 공정 goal을 보내면 그 구독자가 이전 툴을
+        보고 거부할 수 있어, 상태 확인을 오케스트레이터의 교체 단계에 포함한다.
+        """
+        deadline = time.monotonic() + self.get_parameter('tool_status_timeout_s').value
+        while time.monotonic() <= deadline:
+            if (self._latest_tool_state is not None
+                    and self._latest_tool_state.current_tool == expected_tool):
+                return None
+            if not ignore_cancel and our_goal_handle.is_cancel_requested:
+                return 'CANCELLED'
+            if not self._safe_to_move():
+                return ErrorCode.E_SAFETY_BLOCKED
+            time.sleep(0.02)
+        self.get_logger().error(
+            f'/tool/status가 ChangeTool 결과({expected_tool})로 갱신되지 않았다')
+        return ErrorCode.E_TIMEOUT
+
+    def _call_move_to_key(self, target_key, our_goal_handle, timeout_s, linear=True,
+                          ignore_cancel=False):
         goal = MoveTo.Goal()
         goal.target_key = target_key
         goal.frame_id = 'base_link'
-        goal.linear = True
+        goal.linear = linear
         ratio = self.get_parameter('tool_transit_speed_ratio').value
         goal.speed_ratio = ratio
         goal.accel_ratio = ratio
         goal.timeout_s = timeout_s
-        return self._call_action(self._move_client, goal, our_goal_handle, timeout_s)
+        return self._call_action(self._move_client, goal, our_goal_handle, timeout_s,
+                                 ignore_cancel=ignore_cancel)
 
     def _go_to_work(self, tool_key, our_goal_handle, move_to_work=True):
         """ChangeTool 직후 공통 이동: 경유점(tool_transit_key) → <tool_key>_work.
@@ -350,18 +389,12 @@ class SessionOrchestratorNode(Node):
                         reasons.append(f'툴 랙 설정 없음: {tool_id}')
         return len(reasons) == 0, reasons
 
-    # --- HOME 복귀 (docstring #1 — home_frame_id 가정) ----------------------------
+    # --- HOME 복귀 (docstring #1 — 티칭된 target_key 사용) --------------------------
     def _return_home(self, our_goal_handle):
-        goal = MoveTo.Goal()
-        goal.target = Pose()
-        goal.target.orientation.w = 1.0
-        goal.frame_id = self.get_parameter('home_frame_id').value
-        goal.linear = False
-        goal.speed_ratio = 0.3
-        goal.accel_ratio = 0.3
-        goal.timeout_s = self.get_parameter('home_timeout_s').value
-        result, err = self._call_action(self._move_client, goal, our_goal_handle,
-                                         goal.timeout_s, ignore_cancel=True)
+        timeout_s = self.get_parameter('home_timeout_s').value
+        _, err = self._call_move_to_key(
+            self.get_parameter('home_target_key').value, our_goal_handle, timeout_s,
+            linear=False, ignore_cancel=True)
         if err is not None:
             self.get_logger().error(f'[SAFETY] HOME 복귀 실패({err}) — 수동 확인 필요')
             return False
@@ -396,10 +429,8 @@ class SessionOrchestratorNode(Node):
 
     # --- 진행 단계 시퀀스 (docstring #4) -----------------------------------------
     @staticmethod
-    def _build_sequence(enable_brush, enable_stone, layer_total):
-        seq = ['PRECHECK', 'SAND']
-        if enable_brush:
-            seq.append('BRUSH')
+    def _build_sequence(enable_stone, layer_total):
+        seq = ['PRECHECK', 'SAND', 'BRUSH']
         for i in range(layer_total):
             seq += [f'COAT{i}', f'CURE{i}']
         if enable_stone:
@@ -409,6 +440,12 @@ class SessionOrchestratorNode(Node):
 
     # =========================================================================
     def _execute(self, goal_handle):
+        try:
+            return self._run_session(goal_handle)
+        finally:
+            self._session_running = False
+
+    def _run_session(self, goal_handle):
         goal = goal_handle.request
         started_at = self.get_clock().now().to_msg()
         started_mono = time.monotonic()
@@ -416,8 +453,6 @@ class SessionOrchestratorNode(Node):
         session_id = goal.session_id
 
         layer_total = int(self._val(goal.layer_total, 'layer_total'))
-        # bool 필드는 "설정 안 함"과 False를 구분할 수 없어 goal 값을 그대로 쓴다.
-        enable_brush = goal.enable_brush
         enable_stone = goal.enable_stone
 
         p = self.get_parameter
@@ -428,7 +463,7 @@ class SessionOrchestratorNode(Node):
         t_stone = p('stage_timeout_stone_s').value
         t_tool = p('tool_change_timeout_s').value
 
-        seq = self._build_sequence(enable_brush, enable_stone, layer_total)
+        seq = self._build_sequence(enable_stone, layer_total)
         n_steps = len(seq)
 
         def progress(step_name, local_pct):
@@ -452,10 +487,8 @@ class SessionOrchestratorNode(Node):
 
         # --- PRECHECK ----------------------------------------------------------
         emit(ProcessState.STAGE_PRECHECK, 0.0)
-        # probe 툴은 목록에서 빠졌다 — SCAN/INSPECT 가 없어져 쓸 일이 없다.
         required_tools = ['sander', 'coater', 'uv']
-        if enable_brush:
-            required_tools.append('brush')
+        required_tools.append('brush')
         if enable_stone:
             required_tools.append('tweezers')
         ok, reasons = self._run_precheck(required_tools)
@@ -491,33 +524,32 @@ class SessionOrchestratorNode(Node):
                                         started_at, started_mono, state)
         emit(ProcessState.STAGE_SAND, 100.0)
 
-        # --- BRUSH (옵션) ------------------------------------------------------------
-        if enable_brush:
-            _, err = self._call_change_tool(ToolState.BRUSH, goal_handle, t_tool)
-            if err is not None:
-                return self._finish_by_err(goal_handle, result, err, 'ChangeTool(brush) 실패',
-                                            started_at, started_mono, state)
-            state['current_tool'] = ToolState.BRUSH
+        # --- BRUSH (고정 공정) ------------------------------------------------------
+        _, err = self._call_change_tool(ToolState.BRUSH, goal_handle, t_tool)
+        if err is not None:
+            return self._finish_by_err(goal_handle, result, err, 'ChangeTool(brush) 실패',
+                                        started_at, started_mono, state)
+        state['current_tool'] = ToolState.BRUSH
 
-            _, err = self._go_to_work('brush', goal_handle, move_to_work=False)
-            if err is not None:
-                return self._finish_by_err(goal_handle, result, err,
-                                            '경유/작업위치 이동 실패(brush)', started_at,
-                                            started_mono, state)
+        _, err = self._go_to_work('brush', goal_handle, move_to_work=False)
+        if err is not None:
+            return self._finish_by_err(goal_handle, result, err,
+                                        '경유/작업위치 이동 실패(brush)', started_at,
+                                        started_mono, state)
 
-            emit(ProcessState.STAGE_BRUSH, 0.0)
-            brush_goal = BrushDust.Goal()
-            brush_goal.session_id = session_id
+        emit(ProcessState.STAGE_BRUSH, 0.0)
+        brush_goal = BrushDust.Goal()
+        brush_goal.session_id = session_id
 
-            def on_brush_fb(fb_msg):
-                emit(ProcessState.STAGE_BRUSH, fb_msg.feedback.percent)
+        def on_brush_fb(fb_msg):
+            emit(ProcessState.STAGE_BRUSH, fb_msg.feedback.percent)
 
-            _, err = self._call_action(self._brush_client, brush_goal, goal_handle,
-                                        t_brush, feedback_cb=on_brush_fb)
-            if err is not None:
-                return self._finish_by_err(goal_handle, result, err, 'BrushDust 실패',
-                                            started_at, started_mono, state)
-            emit(ProcessState.STAGE_BRUSH, 100.0)
+        _, err = self._call_action(self._brush_client, brush_goal, goal_handle,
+                                    t_brush, feedback_cb=on_brush_fb)
+        if err is not None:
+            return self._finish_by_err(goal_handle, result, err, 'BrushDust 실패',
+                                        started_at, started_mono, state)
+        emit(ProcessState.STAGE_BRUSH, 100.0)
 
         # --- 레이어 루프: COAT → CURE ---------------------------------------------
         # v0.3: INSPECT 와 REWORK 가 빠져 루프가 아니라 그냥 순차 진행이다.

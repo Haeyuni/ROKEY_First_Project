@@ -19,7 +19,6 @@ class CreateSessionRequest(BaseModel):
     shape_profile_id: str
     target_material: str
     layer_total: int = Field(default=2, ge=1, le=5)
-    enable_brush: bool = True
     enable_stone: bool = False
 
 
