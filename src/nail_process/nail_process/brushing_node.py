@@ -78,12 +78,13 @@ class BrushingNode(Node):
         d('safety_topic', '/safety/status')
         d('safety_status_timeout_s', 1.0)
         d('node_timeout_s', 120.0)
-        d('passes', 2)
+        d('passes', 1)
         d('path_pitch_mm', 2.0)
         d('feed_speed_mms', 20.0)
         d('coverage_margin_mm', 0.0)
         d('max_duration_s', 30.0)
         d('contact_offset_mm', 0.0)
+        d('stroke_transfer_lift_mm', 5.0)
         d('surface_config_path', '')
         d('surface_name', 'brush')
         d('arc_segment_length_mm', 4.0)
@@ -175,7 +176,8 @@ class BrushingNode(Node):
                 p('arc_min_radius_mm').value,
                 p('arc_max_radius_mm').value,
                 p('arc_max_z_change_mm').value,
-                p('arc_max_orientation_change_deg').value)
+                p('arc_max_orientation_change_deg').value,
+                p('stroke_transfer_lift_mm').value)
         except SurfaceConfigError as exc:
             detail = f'브러시 티칭 경로 생성 실패: {exc}'
             self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
