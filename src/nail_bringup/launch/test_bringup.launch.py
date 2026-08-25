@@ -458,10 +458,10 @@ def generate_launch_description():
                 '핀셋 리본 파츠의 4-Pose 티칭 키/파지 폭 YAML. 공중 MoveL 검증 전에는 '
                 'configured=false를 유지할 것.')),
         DeclareLaunchArgument(
-            'sanding_path_y_offset_mm', default_value='0.0',
+            'sanding_path_y_offset_mm', default_value='0.5',
             description=(
                 '샌딩 기본 3-Pose 전체에 적용할 base_link Y 보정(mm). '
-                '궤적 형태를 보존하며, 실기에서는 +/-0.5부터 확인한다.')),
+                '궤적 형태를 보존한다. +0.5는 더미 접촉 실기로 확인됨.')),
         DeclareLaunchArgument(
             'home_target_key', default_value='rack_transit',
             description=(

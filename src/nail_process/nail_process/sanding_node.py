@@ -148,9 +148,9 @@ class SandingNode(Node):
             370.12, -3.14, 391.11, 76.93, -176.01, 34.45,
         ])
         # 기본 3-Pose를 같은 base_link Y 방향으로 평행 이동한다. 세 점을 같은
-        # 값으로 움직여 티칭된 궤적의 형태와 자세는 유지한다. 더미 쪽 부호는
-        # 실기에서 ±0.5 mm부터 확인하며, 안전상 ±2 mm를 넘는 보정은 거부한다.
-        d('taught_path_y_offset_mm', 0.0)
+        # 값으로 움직여 티칭된 궤적의 형태와 자세는 유지한다. +0.5 mm는 더미
+        # 접촉 실기에서 확인한 기본 보정값이며, 안전상 ±2 mm를 넘는 보정은 거부한다.
+        d('taught_path_y_offset_mm', 0.5)
         # 손톱 경계 ★ — launch 가 static_frames.yaml 의 nail_region 에서 주입한다.
         # 여기 기본값은 launch 없이 `ros2 run` 으로 띄웠을 때만 쓰인다.
         d('nail_size_x_mm', 16.0)

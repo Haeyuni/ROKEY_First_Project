@@ -35,77 +35,43 @@ def build_surface_path(config_path, surface_name, pitch_mm, inset_mm,
                        arc_min_radius_mm=1.0, arc_max_radius_mm=100.0,
                        arc_max_z_change_mm=2.0, arc_max_orientation_change_deg=10.0,
                        lift_between_rungs_mm=0.0):
-    """p1↔p6, p2↔p5, p3↔p4 세 쌍을 그 순서 그대로 왕복하는 경로를 만든다
-    (요청 — 예전의 top(p1-p2-p3)/bottom(p6-p5-p4) 곡선 피팅 + 가로 래스터
-    방식 대신, 각 쌍을 직선 하나로 잇는 3개의 통과선으로 바뀌었다). 각 쌍
-    내부는 pitch_mm 간격으로 점을 채우고 자세는 SLERP 로 보간한다.
+    """브러시 여섯 티칭 Pose를 순서대로 잇는 곡면 경로를 만든다.
 
-    lift_between_rungs_mm > 0 이면 한 쌍이 끝날 때마다 표면 반대 방향으로
-    그만큼 들어올린 뒤, 다음 쌍 시작점 위에서도 같은 높이로 들어올렸다가
-    내려가는 두 경유점을 끼워 넣는다(요청 — coater 전용. 기본값 0이면
-    brush 처럼 기존과 동일하게 쌍 사이를 바로 이동한다)."""
+    P1→P2→P3, P4→P5→P6은 각각 실제 티칭한 경유점을 쓰는 MoveC 원호다.
+    P3→P4와 반복 시 P6→P1은 별도 경유점이 없어 MoveL로 연결한다. 브러시는
+    티칭한 경계까지 쓸어야 하므로 coverage_margin_mm은 0만 허용한다.
+    """
     entry = _load_surface(config_path, surface_name)
     poses = [_pose_from_entry(entry['poses'], f'p{i}') for i in range(1, 7)]
     p1, p2, p3, p4, p5, p6 = poses
 
     pitch_mm = float(pitch_mm)
     inset_mm = float(inset_mm)
-    lift_between_rungs_mm = float(lift_between_rungs_mm)
     if pitch_mm <= 0.0 or inset_mm < 0.0:
         raise SurfaceConfigError('path_pitch_mm은 양수, 경계 여유는 0 이상이어야 함')
+    if inset_mm != 0.0:
+        raise SurfaceConfigError(
+            '브러시 곡면 경로는 티칭 경계까지 실행하므로 coverage_margin_mm은 0이어야 함')
 
     boundary = [Point(x=pose.position.x, y=pose.position.y, z=pose.position.z)
                 for pose in (p1, p2, p3, p4, p5, p6)]
 
-    rungs = ((p1, p6), (p2, p5), (p3, p4))
-    waypoints = []
+    waypoints = poses
     circular_via_indices = []
-    for rung_index, (start_pose, end_pose) in enumerate(rungs):
-        rung_length_mm = _position_distance_mm(start_pose, end_pose)
-        if rung_length_mm <= 2.0 * inset_mm:
-            raise SurfaceConfigError(
-                f'경계 여유 {inset_mm:.2f}mm가 {rung_index + 1}번째 쌍의 길이 '
-                f'({rung_length_mm:.2f}mm)에 비해 너무 큼')
-        t0 = inset_mm / rung_length_mm
-        t1 = 1.0 - t0
-        # pitch_mm 세분화 제거 — 쌍마다 한 번에 이동해도 된다는 요청으로,
-        # 항상 구간 1개(시작→끝)만 만든다. amovel이 매 waypoint마다 완전히
-        # 정지했다 다음으로 가는 구조라(연속 블렌딩 없음), 구간을 잘게
-        # 쪼갤수록 가속-즉시감속만 반복돼 feed_speed_mms를 올려도 체감
-        # 속도가 안 변하는 문제가 있었다(실기 확인). pitch_mm 인자는
-        # BrushDust/CoatGel.action 호환을 위해 시그니처에 남겨두되 더 이상
-        # 쓰지 않는다.
-        segment_count = 1
-        ts = [t0 + (t1 - t0) * i / segment_count for i in range(segment_count + 1)]
-
-        def rung_pose(t, start_pose=start_pose, end_pose=end_pose):
-            return _blend_pose(start_pose, end_pose, t)
-
-        if lift_between_rungs_mm > 0.0 and waypoints:
-            waypoints.append(_lift_pose(waypoints[-1], lift_between_rungs_mm))
-            waypoints.append(_lift_pose(rung_pose(ts[0]), lift_between_rungs_mm))
-
-        waypoints.append(rung_pose(ts[0]))
-        for seg_start_t, seg_end_t in zip(ts, ts[1:]):
-            middle_t = (seg_start_t + seg_end_t) / 2.0
-            seg_start = waypoints[-1]
-            via = rung_pose(middle_t)
-            seg_end = rung_pose(seg_end_t)
-            via_index = len(waypoints)
-            waypoints.extend((via, seg_end))
-            if _arc_is_valid(
-                    seg_start, via, seg_end,
-                    float(arc_min_sagitta_mm), float(arc_min_radius_mm),
-                    float(arc_max_radius_mm), float(arc_max_z_change_mm),
-                    float(arc_max_orientation_change_deg)):
-                circular_via_indices.append(via_index)
+    for start_index, via_index, end_index in ((0, 1, 2), (3, 4, 5)):
+        if _arc_is_valid(
+                waypoints[start_index], waypoints[via_index], waypoints[end_index],
+                float(arc_min_sagitta_mm), float(arc_min_radius_mm),
+                float(arc_max_radius_mm), float(arc_max_z_change_mm),
+                float(arc_max_orientation_change_deg)):
+            circular_via_indices.append(via_index)
 
     return SurfacePath(
         frame_id=str(entry.get('frame_id') or 'base_link'),
         waypoints=waypoints,
         circular_via_indices=circular_via_indices,
         allowed_polygon=boundary,
-        row_count=len(rungs),
+        row_count=2,
     )
 
 
