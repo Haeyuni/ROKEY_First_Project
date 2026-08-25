@@ -33,63 +33,50 @@ def build_surface_path(config_path, surface_name, pitch_mm, inset_mm,
                        arc_segment_length_mm=4.0, arc_min_sagitta_mm=0.05,
                        arc_min_radius_mm=1.0, arc_max_radius_mm=100.0,
                        arc_max_z_change_mm=2.0, arc_max_orientation_change_deg=10.0):
+    """p1↔p6, p2↔p5, p3↔p4 세 쌍을 그 순서 그대로 왕복하는 경로를 만든다
+    (요청 — 예전의 top(p1-p2-p3)/bottom(p6-p5-p4) 곡선 피팅 + 가로 래스터
+    방식 대신, 각 쌍을 직선 하나로 잇는 3개의 통과선으로 바뀌었다). 각 쌍
+    내부는 pitch_mm 간격으로 점을 채우고 자세는 SLERP 로 보간한다."""
     entry = _load_surface(config_path, surface_name)
     poses = [_pose_from_entry(entry['poses'], f'p{i}') for i in range(1, 7)]
     p1, p2, p3, p4, p5, p6 = poses
-
-    top = lambda t: _curve_pose(p1, p2, p3, t)
-    bottom = lambda t: _curve_pose(p6, p5, p4, t)
-    boundary = _boundary_polygon(top, bottom, p3, p4, p6, p1)
-
-    cross_width_mm = sum(
-        _position_distance_mm(top(t), bottom(t)) for t in (0.0, 0.5, 1.0)
-    ) / 3.0
-    top_length_mm = _curve_length_mm(top)
-    bottom_length_mm = _curve_length_mm(bottom)
-    longitudinal_mm = (top_length_mm + bottom_length_mm) / 2.0
 
     pitch_mm = float(pitch_mm)
     inset_mm = float(inset_mm)
     if pitch_mm <= 0.0 or inset_mm < 0.0:
         raise SurfaceConfigError('path_pitch_mm은 양수, 경계 여유는 0 이상이어야 함')
-    if cross_width_mm <= 2.0 * inset_mm or longitudinal_mm <= 2.0 * inset_mm:
-        raise SurfaceConfigError(
-            f'경계 여유 {inset_mm:.2f}mm가 티칭 영역 '
-            f'({longitudinal_mm:.2f} x {cross_width_mm:.2f}mm)에 비해 너무 큼')
 
-    v0 = inset_mm / cross_width_mm
-    v1 = 1.0 - v0
-    t0 = inset_mm / longitudinal_mm
-    t1 = 1.0 - t0
-    work_width_mm = cross_width_mm - 2.0 * inset_mm
-    row_count = max(2, int(math.ceil(work_width_mm / pitch_mm)) + 1)
+    boundary = [Point(x=pose.position.x, y=pose.position.y, z=pose.position.z)
+                for pose in (p1, p2, p3, p4, p5, p6)]
 
+    rungs = ((p1, p6), (p2, p5), (p3, p4))
     waypoints = []
     circular_via_indices = []
-    for row_index in range(row_count):
-        u = row_index / (row_count - 1)
-        v = v0 + (v1 - v0) * u
-
-        def row_pose(t):
-            return _blend_pose(top(t), bottom(t), v)
-
-        row_length_mm = _curve_length_mm(row_pose, t0, t1)
+    for rung_index, (start_pose, end_pose) in enumerate(rungs):
+        rung_length_mm = _position_distance_mm(start_pose, end_pose)
+        if rung_length_mm <= 2.0 * inset_mm:
+            raise SurfaceConfigError(
+                f'경계 여유 {inset_mm:.2f}mm가 {rung_index + 1}번째 쌍의 길이 '
+                f'({rung_length_mm:.2f}mm)에 비해 너무 큼')
+        t0 = inset_mm / rung_length_mm
+        t1 = 1.0 - t0
         segment_count = max(1, int(math.ceil(
-            row_length_mm / max(float(arc_segment_length_mm), 0.1))))
+            (rung_length_mm * (t1 - t0)) / max(float(pitch_mm), 0.1))))
         ts = [t0 + (t1 - t0) * i / segment_count for i in range(segment_count + 1)]
-        if row_index % 2:
-            ts.reverse()
 
-        waypoints.append(row_pose(ts[0]))
-        for start_t, end_t in zip(ts, ts[1:]):
-            middle_t = (start_t + end_t) / 2.0
-            start = waypoints[-1]
-            via = row_pose(middle_t)
-            end = row_pose(end_t)
+        def rung_pose(t, start_pose=start_pose, end_pose=end_pose):
+            return _blend_pose(start_pose, end_pose, t)
+
+        waypoints.append(rung_pose(ts[0]))
+        for seg_start_t, seg_end_t in zip(ts, ts[1:]):
+            middle_t = (seg_start_t + seg_end_t) / 2.0
+            seg_start = waypoints[-1]
+            via = rung_pose(middle_t)
+            seg_end = rung_pose(seg_end_t)
             via_index = len(waypoints)
-            waypoints.extend((via, end))
+            waypoints.extend((via, seg_end))
             if _arc_is_valid(
-                    start, via, end,
+                    seg_start, via, seg_end,
                     float(arc_min_sagitta_mm), float(arc_min_radius_mm),
                     float(arc_max_radius_mm), float(arc_max_z_change_mm),
                     float(arc_max_orientation_change_deg)):
@@ -100,7 +87,7 @@ def build_surface_path(config_path, surface_name, pitch_mm, inset_mm,
         waypoints=waypoints,
         circular_via_indices=circular_via_indices,
         allowed_polygon=boundary,
-        row_count=row_count,
+        row_count=len(rungs),
     )
 
 
@@ -155,23 +142,6 @@ def _zyz_quaternion(rz1_deg, ry_deg, rz2_deg):
     )
 
 
-def _curve_pose(start, middle, end, t):
-    # 세 점을 각각 t=0, 0.5, 1에서 통과하는 2차 Lagrange 곡선이다.
-    weights = (2.0 * (t - 0.5) * (t - 1.0),
-               -4.0 * t * (t - 1.0),
-               2.0 * t * (t - 0.5))
-    pose = Pose()
-    for axis in ('x', 'y', 'z'):
-        value = sum(w * getattr(p.position, axis)
-                    for w, p in zip(weights, (start, middle, end)))
-        setattr(pose.position, axis, value)
-    if t <= 0.5:
-        pose.orientation = _slerp(start.orientation, middle.orientation, t * 2.0)
-    else:
-        pose.orientation = _slerp(middle.orientation, end.orientation, (t - 0.5) * 2.0)
-    return pose
-
-
 def _blend_pose(first, second, t):
     pose = Pose()
     pose.position.x = first.position.x + (second.position.x - first.position.x) * t
@@ -204,24 +174,10 @@ def _slerp(first, second, t):
     return Quaternion(x=values[0], y=values[1], z=values[2], w=values[3])
 
 
-def _curve_length_mm(curve, start=0.0, end=1.0, samples=24):
-    points = [curve(start + (end - start) * i / samples) for i in range(samples + 1)]
-    return sum(_position_distance_mm(a, b) for a, b in zip(points, points[1:]))
-
-
 def _position_distance_mm(first, second):
     return math.dist(
         (first.position.x, first.position.y, first.position.z),
         (second.position.x, second.position.y, second.position.z)) * 1000.0
-
-
-def _boundary_polygon(top, bottom, p3, p4, p6, p1, samples=24):
-    poses = [top(i / samples) for i in range(samples + 1)]
-    poses.extend(_blend_pose(p3, p4, i / samples) for i in range(1, samples + 1))
-    poses.extend(bottom(1.0 - i / samples) for i in range(1, samples + 1))
-    poses.extend(_blend_pose(p6, p1, i / samples) for i in range(1, samples))
-    return [Point(x=pose.position.x, y=pose.position.y, z=pose.position.z)
-            for pose in poses]
 
 
 def _arc_is_valid(start, via, end, min_sagitta_mm, min_radius_mm, max_radius_mm,
