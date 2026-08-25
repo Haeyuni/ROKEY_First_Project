@@ -91,6 +91,15 @@ brush: # 붓 - 완 (get_current_posx 실측)
   via_key: rack_transit
 
 coater: # 젤 네일 - 완
+  # 뚜껑 열고 닫기(tool_rack.yaml 의 unscrew: true)를 쓰는 슬롯이다. 이 자세의
+  # 손목(J6) 각도가 얼마든 robot_skill_node 가 슬롯 100mm 위에서 손목을 먼저
+  # J6 + 쪽으로 감아 두므로(_prewind_wrist), 티칭할 때 J6 를 신경 쓸 필요는
+  # 없다. 다만 슬롯 위 그 높이에서 그리퍼가 두 바퀴 가까이 회전하므로
+  # **옆 슬롯·구조물과의 간섭이 없는지**는 반드시 눈으로 확인할 것.
+  #
+  # 뚜껑을 푼 뒤에는 이 좌표의 z+unscrew_wipe_lift_mm(기본 30mm) 높이에서
+  # 이 좌표의 XY 를 기준으로 X 로 ±unscrew_wipe_x_mm 왕복하며 붓의 젤을
+  # 병 입구에 훑는다 — 그 높이/폭이 병 입구와 맞는지도 함께 확인할 것.
   x_mm: 600.46
   y_mm: 49.03
   z_mm: 316.75

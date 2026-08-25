@@ -96,6 +96,7 @@ class RobotSkillNode(Node):
                            callback_group=self._cb_monitor)
 
         self._targets_cache = None
+        self._unscrew_j6_warned = False
 
         self._move_to_server = ActionServer(
             self, MoveTo, '/skill/move_to',
@@ -176,6 +177,56 @@ class RobotSkillNode(Node):
         # 간격보다 넓게 벌어져 옆 슬롯/구조물과 부딪힌다 — 실측으로 조정.
         d('gripper_open_width_mm', 60.0)
         d('targets_yaml_path', '')
+        # --- 나사 뚜껑 풀기 (PickPlace goal.unscrew) ---------------------------
+        # 한 번에 다 돌리지 않고 unscrew_segment_deg 씩 끊어 도는 이유는
+        # _turn_tool_z() 주석 참고 (매 구간 J6 잔여 가동범위 재계산 + 취소 확인).
+        #
+        # ⚠️ unscrew_total_deg 의 부호가 곧 회전 방향이다. tool +Z 는 그리퍼가
+        #    뚜껑을 내려다보는 방향(아래)이므로, 오른나사를 푸는 방향(위에서
+        #    봤을 때 반시계)은 tool +Z 기준으로는 **음수** 회전이다. 실기에서
+        #    처음 돌릴 때는 unscrew_total_deg 를 -90 정도로 줄여 방향부터
+        #    눈으로 확인하고, 반대로 돌면 부호를 뒤집을 것.
+        # 1.5 바퀴. 손목을 반대쪽 끝까지 미리 감아도(_prewind_wrist) 한 번에
+        # 돌 수 있는 이론 최대는 (J6 한계 360 - 여유 15) × 2 = 690° 다 —
+        # 그 이상을 넣으면 항상 690° 에서 잘리고 "가동범위 소진" 경고가 뜬다.
+        # 뚜껑이 1.5 바퀴로 안 풀리면 690 미만에서 올려 가며 맞출 것.
+        d('unscrew_total_deg', -540.0)
+        # 닫을 때(PLACE) 돌릴 각도. 0 이면 -unscrew_total_deg 를 그대로 쓴다 —
+        # 푼 만큼만 되감으면 원래 상태로 돌아가고 과조임이 안 생긴다.
+        d('unscrew_close_deg', 0.0)
+        d('unscrew_segment_deg', 180.0)
+        # 첫 구간만 짧게 돌려 "명령 1도당 J6 가 어느 쪽으로 몇 도 움직이는가"를
+        # 실측한다 — 그리퍼 장착 방향에 따라 부호가 달라서 미리 가정할 수 없다.
+        d('unscrew_probe_deg', 5.0)
+        # 나사 피치. 한 바퀴 돌 때 뚜껑이 떠오르는 높이(mm). 이만큼 tool -Z 로
+        # 같이 이동해 주지 않으면 뚜껑을 축방향으로 잡아당기거나 눌러버린다.
+        d('unscrew_lift_per_turn_mm', 1.5)
+        d('unscrew_speed_degs', 45.0)
+        d('unscrew_accel_degs2', 90.0)
+        # J6 가동범위(±deg)와 그 앞에서 멈출 여유. "방해되지 않는 선에서 최대한"
+        # 돌린다는 건 결국 손목이 한계에 닿기 직전까지만 돈다는 뜻이다.
+        d('unscrew_j6_limit_deg', 360.0)
+        d('unscrew_j6_margin_deg', 15.0)
+        # 손목을 감고/푸는 회전은 전부 슬롯 이 높이 위에서만 한다(mm, 슬롯 z
+        # 기준). 뚜껑을 잡기 전에 그리퍼를 벌린 채 최대 두 바퀴를 휘두르므로
+        # 랙 슬롯 바로 위(approach_height_mm, 20mm)에서 하면 옆 슬롯을 친다.
+        # pick_place_transit_clearance_mm 와 같은 높이로 두는 게 기본이다 —
+        # 이미 그 높이로 수평 이동해 오는 길이라 새로 검증할 게 없다.
+        d('unscrew_prewind_height_mm', 100.0)
+        # 손목을 미리 감는 방향(J6 부호). 이 장비는 + 쪽으로 감는다(실기 확인).
+        # 즉 뚜껑을 푸는 회전은 J6 를 - 쪽으로 민다. 실측이 이 값과 어긋나면
+        # unscrew_total_deg 의 부호가 반대일 가능성이 높아 경고를 남긴다.
+        d('unscrew_prewind_j6_sign', 1.0)
+        # --- 뚜껑을 푼 뒤 붓에 묻은 젤 훑어내기 -------------------------------
+        # 뚜껑(=붓)을 뽑으면 젤이 잔뜩 묻어 나온다. 그대로 손톱으로 가면
+        # 흘러넘치므로, 병 입구 높이에서 X 로 몇 번 왕복시켜 여분을 병 턱에
+        # 훑어 떨어뜨린다. unscrew_wipe_lift_mm 는 슬롯 파지 z 기준 높이다 —
+        # 붓이 병 입구에 살짝 닿는 높이로 실측해서 맞출 것.
+        # 0 을 주면 이 단계를 통째로 건너뛴다.
+        d('unscrew_wipe_lift_mm', 30.0)
+        d('unscrew_wipe_x_mm', 5.0)
+        d('unscrew_wipe_cycles', 3)
+        d('unscrew_wipe_speed_mms', 20.0)
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg: SafetyState):
@@ -436,6 +487,270 @@ class RobotSkillNode(Node):
         base_pose = self._transform_pose_to_base(identity, target_key)
         return pose_to_task_pose(base_pose)
 
+    # --- 나사 뚜껑 풀기 ----------------------------------------------------------
+    def _joint6_deg(self):
+        """손목(J6) 현재 각도. 드라이버가 관절값을 안 주면 None (경고 1회)."""
+        try:
+            joints = self._adapter.get_joints()
+        except DsrAdapterError:
+            joints = None
+        if joints is None:
+            if not self._unscrew_j6_warned:
+                self._unscrew_j6_warned = True
+                self.get_logger().warn(
+                    '관절 각도를 읽을 수 없어(get_current_posj 없음) 뚜껑 풀기 중 '
+                    'J6 잔여 가동범위를 확인하지 못합니다 — unscrew_total_deg 를 '
+                    '그대로 돌립니다. 손목 한계에 걸리면 그 구간이 '
+                    'E_MOTION_FAILED 로 끝납니다.')
+            return None
+        return joints[5]
+
+    def _turn_tool_z(self, goal_handle, timeout_s, on_tick, direction, budget_deg,
+                      lift_per_turn_mm, j6_rate=None):
+        """tool Z 축 둘레로 direction(+1/-1) 쪽으로 최대 budget_deg 만큼 돌린다.
+
+        한 번의 이동 명령으로 다 돌리지 않고 unscrew_segment_deg 씩 쪼개는 이유:
+          · 매 구간 J6 를 실측해 남은 가동범위를 다시 계산한다. 예산을 다 못
+            쓰더라도 손목 한계 직전까지는 돌린다.
+          · 구간 사이에 취소/안전 확인이 들어간다. 720° 를 한 명령으로 보내면
+            도는 동안 아무것도 끼어들 수 없다.
+
+        j6_rate(명령 1도당 J6 변화량, 부호 포함)를 모르면 첫 구간을
+        unscrew_probe_deg 만큼만 짧게 돌려 실측한다 — 그리퍼 장착 방향에 따라
+        부호가 달라서 미리 가정할 수 없고, 이 값이 있어야 잔여 가동범위를
+        계산할 수 있다.
+
+        lift_per_turn_mm 는 한 바퀴당 tool Z 로 함께 이동할 거리(부호 포함).
+        음수 = tool -Z = 뚜껑이 떠오르는 쪽(푸는 방향), 양수 = 잠기며 내려가는 쪽.
+
+        반환: (reason, 실제 회전량[deg, 부호 포함], j6_rate)
+        """
+        p = self.get_parameter
+        segment_deg = abs(p('unscrew_segment_deg').value) or 90.0
+        probe_deg = abs(p('unscrew_probe_deg').value) or 5.0
+        vel_degs = p('unscrew_speed_degs').value
+        acc_degs2 = p('unscrew_accel_degs2').value
+        j6_limit = abs(p('unscrew_j6_limit_deg').value)
+        j6_margin = abs(p('unscrew_j6_margin_deg').value)
+
+        remaining = abs(budget_deg)
+        turned = 0.0
+        seg_cap = segment_deg if j6_rate is not None else probe_deg
+
+        while remaining > 1.0:
+            seg = min(seg_cap, remaining)
+            j6_before = self._joint6_deg()
+
+            if j6_rate is not None and j6_before is not None and abs(j6_rate) > 1e-6:
+                # 이번 회전으로 J6 가 향하는 쪽(+/-)의 남은 가동범위
+                side = 1.0 if j6_rate * direction > 0.0 else -1.0
+                headroom = j6_limit - j6_margin - side * j6_before
+                seg = min(seg, max(0.0, headroom / abs(j6_rate)))
+            if seg < 1.0:
+                self.get_logger().warn(
+                    f'뚜껑 회전: J6 가동범위 소진(J6={j6_before:.1f}°, '
+                    f'한계 ±{j6_limit:.0f}°) — 예산 {abs(budget_deg):.0f}° 중 '
+                    f'{turned:.0f}° 만 돌리고 중단합니다.')
+                break
+
+            lift_mm = lift_per_turn_mm * seg / 360.0
+            try:
+                self._adapter.start_rotate_tool_z(
+                    direction * seg, lift_mm,
+                    vel_mms=max(1.0, abs(lift_mm) * 4.0), acc_mms2=20.0,
+                    vel_degs=vel_degs, acc_degs2=acc_degs2)
+            except DsrAdapterError as exc:
+                self.get_logger().error(f'뚜껑 회전: 명령 거부 — {exc}')
+                return 'unreachable', turned * direction, j6_rate
+
+            reason = self._monitor(goal_handle, timeout_s, 10.0, on_tick)
+            if reason != 'ok':
+                return reason, turned * direction, j6_rate
+
+            turned += seg
+            remaining -= seg
+            seg_cap = segment_deg   # 탐색 구간은 첫 회뿐
+
+            j6_after = self._joint6_deg()
+            if j6_before is not None and j6_after is not None:
+                delta = j6_after - j6_before
+                if abs(delta) < 0.5 * seg:
+                    # 명령은 받아들여졌는데 손목이 안 움직였다 = 한계에 붙었거나
+                    # 회전이 tool Z 가 아닌 다른 축으로 흡수됐다. 더 밀어붙이면
+                    # 뚜껑을 비틀게 되므로 여기서 멈춘다.
+                    self.get_logger().warn(
+                        f'뚜껑 회전: {seg:.0f}° 명령에 J6 가 {delta:.1f}° 만 '
+                        f'움직였습니다 — 중단({turned:.0f}° 완료).')
+                    break
+                j6_rate = delta / (direction * seg)
+
+        return 'ok', turned * direction, j6_rate
+
+    def _prewind_wrist(self, goal_handle, timeout_s, on_tick, direction, need_deg):
+        """돌리기 전에 손목을 반대쪽 끝으로 미리 감아 need_deg 만큼 여유를 만든다.
+
+        이게 없으면 실제로 돌릴 수 있는 각도가 슬롯 자세를 티칭할 때 우연히
+        정해진 J6 시작각에 좌우된다 — 같은 코드가 어떤 날은 두 바퀴를 돌고
+        어떤 날은 몇 도만 돌고 만다. 여기서 먼저 반대쪽으로 감아 두면 항상
+        need_deg 만큼은 확보된 상태로 시작한다.
+
+        ⚠️ 그리퍼를 벌린 채 최대 두 바퀴를 휘두르는 동작이다. 반드시 슬롯에서
+        unscrew_prewind_height_mm 만큼 떨어진 높이에서만 호출할 것.
+
+        반환: (reason, j6_rate, 감은 각도[deg, 부호 포함])
+              감은 각도는 나중에 그대로 되감기 위해 호출부가 누적해 둔다.
+        """
+        probe_deg = abs(self.get_parameter('unscrew_probe_deg').value) or 5.0
+        j6_limit = abs(self.get_parameter('unscrew_j6_limit_deg').value)
+        j6_margin = abs(self.get_parameter('unscrew_j6_margin_deg').value)
+
+        # 어느 쪽으로 감아야 하는지 알려면 먼저 j6_rate 를 실측해야 한다.
+        reason, wound, j6_rate = self._turn_tool_z(
+            goal_handle, timeout_s, on_tick, direction, probe_deg, 0.0)
+        if reason != 'ok':
+            return reason, j6_rate, wound
+
+        j6 = self._joint6_deg()
+        if j6 is None or j6_rate is None or abs(j6_rate) < 1e-6:
+            # J6 를 못 읽으면 어디까지 감겨 있는지 알 수 없어 감을 근거가 없다.
+            # 그대로 진행하고, 부족하면 _turn_tool_z 가 도중에 멈춘다.
+            return 'ok', j6_rate, wound
+
+        # 감는 쪽(-direction)이 실제로 J6 를 설정한 부호 쪽으로 미는지 확인한다.
+        # 어긋나면 뚜껑 회전이 J6 를 감는 방향과 같은 쪽으로 밀고 있다는 뜻이라
+        # unscrew_total_deg 의 부호가 반대일 가능성이 높다.
+        prewind_sign = self.get_parameter('unscrew_prewind_j6_sign').value
+        if j6_rate * -direction * prewind_sign < 0.0:
+            self.get_logger().warn(
+                f'손목 감기 방향이 설정(unscrew_prewind_j6_sign={prewind_sign:+.0f})과 '
+                f'반대입니다 — 실측 j6_rate={j6_rate:+.2f}, 회전 방향={direction:+.0f}. '
+                'unscrew_total_deg 의 부호가 반대(= 뚜껑을 조이는 방향)일 수 '
+                '있으니 저속으로 방향부터 확인하세요.')
+
+        side = 1.0 if j6_rate * direction > 0.0 else -1.0
+        headroom = (j6_limit - j6_margin - side * j6) / abs(j6_rate)
+        shortfall = need_deg - headroom
+        if shortfall <= 1.0:
+            self.get_logger().info(
+                f'손목 감기 불필요 — J6={j6:.1f}° 에서 이미 {headroom:.0f}° 여유 '
+                f'(필요 {need_deg:.0f}°)')
+            return 'ok', j6_rate, wound
+
+        # 필요한 만큼만 감는다 — 끝까지 감으면 쓸데없이 크게 휘두른다.
+        reason, extra, j6_rate = self._turn_tool_z(
+            goal_handle, timeout_s, on_tick, -direction, shortfall, 0.0, j6_rate)
+        self.get_logger().info(
+            f'손목 감기 {extra:.0f}° — J6 {j6:.1f}° → {self._joint6_deg():.1f}° '
+            f'(여유 {headroom:.0f}° → {need_deg:.0f}° 목표)')
+        return reason, j6_rate, wound + extra
+
+    @staticmethod
+    def _with_current_orientation(pose, current):
+        """pose 의 위치는 그대로 두고 자세만 현재 자세로 바꾼다.
+
+        손목을 감아 둔 상태에서 티칭 자세로 절대 이동하면 그 각도가 통째로
+        되감긴다 — 뚜껑을 쥔 채라면 도로 조이는 회전이 된다. 감아 둔 구간
+        안에서는 위치만 명령하고 자세는 건드리지 않기 위한 것.
+        """
+        return TaskPose(pose.x_mm, pose.y_mm, pose.z_mm,
+                         current.rz1_deg, current.ry_deg, current.rz2_deg)
+
+    def _wipe_on_bottle(self, goal_handle, timeout_s, on_tick, slot_target):
+        """붓에 묻은 젤 여분을 병 입구에 훑어 떨어뜨린다 (도포량 조절).
+
+        뚜껑(=붓)을 뽑으면 젤이 잔뜩 묻어 나온다. 그대로 손톱으로 가면
+        흘러넘치므로 병 입구 높이에서 X 로 왕복시켜 여분을 병 턱에 닦는다.
+        슬롯 XY 를 기준으로 앞(+X) → 뒤(-X) 를 unscrew_wipe_cycles 번 반복하고
+        가운데로 돌아온다.
+
+        손목은 아직 감긴 채다 — 여기서는 위치만 명령하고 자세는 건드리지
+        않는다. 티칭 자세로 절대 이동하면 감아 둔 각도가 되감기면서 아직
+        병 안에 있는 붓을 비튼다.
+
+        회전이 끝난 직후 이 높이에 있어야 의미가 있으므로 반드시 뚜껑 풀기와
+        손목 되감기(_unwind_at_clearance) **사이**에서 부른다.
+        """
+        p = self.get_parameter
+        lift_mm = p('unscrew_wipe_lift_mm').value
+        x_mm = abs(p('unscrew_wipe_x_mm').value)
+        cycles = int(p('unscrew_wipe_cycles').value)
+        speed = max(1.0, p('unscrew_wipe_speed_mms').value)
+        if lift_mm <= 0.0 or x_mm <= 0.0 or cycles <= 0:
+            return 'ok'
+
+        try:
+            wound = self._adapter.get_pose()
+        except DsrAdapterError as exc:
+            self.get_logger().warn(f'젤 훑기 생략 — 현재 자세 조회 실패: {exc}')
+            return 'ok'
+
+        def go(dx_mm):
+            pose = TaskPose(slot_target.x_mm + dx_mm, slot_target.y_mm,
+                             slot_target.z_mm + lift_mm,
+                             wound.rz1_deg, wound.ry_deg, wound.rz2_deg)
+            self._adapter.start_move_line(pose, speed, speed * 2)
+            reason = self._monitor(goal_handle, timeout_s, 10.0, on_tick)
+            reason, _ = self._verify_position_reached(reason, pose)
+            return reason
+
+        self.get_logger().info(
+            f'젤 훑기: 슬롯 z+{lift_mm:.0f}mm 에서 X ±{x_mm:.1f}mm 를 {cycles}회 왕복')
+        reason = go(0.0)
+        if reason != 'ok':
+            return reason
+        for _ in range(cycles):
+            for dx in (x_mm, -x_mm):
+                reason = go(dx)
+                if reason != 'ok':
+                    return reason
+        return go(0.0)
+
+    def _unwind_at_clearance(self, goal_handle, timeout_s, on_tick, slot_target,
+                              lift_mm, move_and_wait, step, net_wound_deg, j6_rate):
+        """감긴 손목으로 슬롯을 빠져나온 뒤, 안전 높이에서 손목을 되감는다.
+
+        두 단계로 나누는 이유: 뚜껑을 뽑는(또는 놓고 빠지는) 동안에는 자세를
+        건드리면 안 되고, 되감기는 뚜껑에서 자유로워진 뒤 슬롯에서 충분히
+        떨어진 높이에서만 해야 한다.
+
+        되감기를 "티칭 자세로 절대 이동"이 아니라 상대 회전으로 하는 이유:
+        movel 의 목표 자세는 회전행렬이라 +700° 와 -20° 를 구분하지 못한다.
+        절대 이동을 시키면 컨트롤러가 최단 경로(≤180°)만 돌아서 J6 는 감긴
+        채로 남는다. 그 상태를 방치하면 다음 movejx(sol 고정)에서 손목이
+        갑자기 한 바퀴 풀린다 — 여기서 상대 회전으로 정확히 되돌려 놓는다.
+        """
+        clearance_mm = max(lift_mm,
+                            self.get_parameter('unscrew_prewind_height_mm').value)
+        above = TaskPose(slot_target.x_mm, slot_target.y_mm,
+                          slot_target.z_mm + clearance_mm,
+                          slot_target.rz1_deg, slot_target.ry_deg, slot_target.rz2_deg)
+        try:
+            cur = self._adapter.get_pose()
+        except DsrAdapterError as exc:
+            self.get_logger().warn(
+                f'현재 자세를 못 읽음({exc}) — 슬롯 자세 그대로 상승합니다.')
+            return move_and_wait(above, step, 95.0)
+
+        # 1) 자세는 그대로 둔 채 수직으로만 빠져나온다
+        reason = move_and_wait(self._with_current_orientation(above, cur), step, 93.0)
+        if reason != 'ok':
+            return reason
+
+        # 2) 감은 만큼 정확히 되감는다 (순수 회전, 축방향 이동 없음)
+        if abs(net_wound_deg) > 1.0:
+            reason, undone, _ = self._turn_tool_z(
+                goal_handle, timeout_s, on_tick,
+                -1.0 if net_wound_deg > 0.0 else 1.0,
+                abs(net_wound_deg), 0.0, j6_rate)
+            self.get_logger().info(
+                f'손목 되감기 {undone:.0f}° (감은 총량 {net_wound_deg:.0f}°) '
+                f'— J6={self._joint6_deg()}')
+            if reason != 'ok':
+                return reason
+
+        # 3) 남은 잔여 각도(회전 오차)를 티칭 자세로 맞춰 마무리한다
+        return move_and_wait(above, step, 97.0)
+
     def _execute_pick_place(self, goal_handle):
         goal = goal_handle.request
         started_at = time.monotonic()
@@ -461,13 +776,35 @@ class RobotSkillNode(Node):
                 f'찾을 수 없음: {e}', started_at)
             return result
 
+        # 나사 뚜껑(코터 젤 병)은 슬롯에서 잡거나 놓는 그 자리에서 돌린다.
+        #   PICK  : 잡고 → 풀고 → 들어 올린다
+        #   PLACE : 내려놓으면서 → 닫고 → 놓는다
+        # 슬롯 좌표(티칭값)는 "뚜껑이 잠긴 상태"의 자세다. 그래서 닫을 때는
+        # 나사가 물리기 시작하는 높이(= 잠기며 내려올 거리만큼 위)로 내려간
+        # 다음, 회전으로 슬롯 z 까지 잠가 내려간다.
+        slot_target = target
+        do_unscrew = goal.mode == PickPlace.Goal.MODE_PICK and goal.unscrew
+        do_close = goal.mode == PickPlace.Goal.MODE_PLACE and goal.unscrew
+        winding = do_unscrew or do_close
+
+        open_deg = self.get_parameter('unscrew_total_deg').value
+        close_deg = self.get_parameter('unscrew_close_deg').value or -open_deg
+        turn_deg = open_deg if do_unscrew else close_deg
+        pitch_mm = abs(self.get_parameter('unscrew_lift_per_turn_mm').value)
+        # 회전 중 tool Z 로 함께 갈 거리. 푸는 쪽은 떠오르므로 tool -Z(음수),
+        # 잠그는 쪽은 내려가므로 tool +Z(양수)다.
+        lift_per_turn = -pitch_mm if do_unscrew else pitch_mm
+        close_rise_mm = pitch_mm * abs(close_deg) / 360.0
+
         if goal.mode == PickPlace.Goal.MODE_PLACE:
             clearance = self.get_parameter('place_clearance_mm').value
+            if do_close:
+                clearance += close_rise_mm
             if clearance > 0.0:
                 target = TaskPose(target.x_mm, target.y_mm, target.z_mm + clearance,
                                    target.rz1_deg, target.ry_deg, target.rz2_deg)
                 self.get_logger().info(
-                    f'PickPlace place: place_clearance_mm={clearance} 적용 '
+                    f'PickPlace place: place_clearance_mm+나사 여유={clearance:.2f} 적용 '
                     f'→ z {target.z_mm - clearance:.2f} → {target.z_mm:.2f}mm')
 
         if goal.approach_key:
@@ -533,6 +870,45 @@ class RobotSkillNode(Node):
                                                          context='PickPlace(경유-상공)')
                 return result
 
+        # 뚜껑을 돌리기 전에 손목을 반대쪽 끝으로 미리 감아 둔다. 이걸 안 하면
+        # 실제로 돌 수 있는 각도가 슬롯 자세를 티칭할 때 우연히 정해진 J6
+        # 시작각에 좌우된다(같은 코드가 두 바퀴를 돌기도, 몇 도만 돌기도 한다).
+        # 뚜껑에서 충분히 떨어진 높이에서만 한다 — 여기서 최대 두 바퀴를 휘두른다.
+        j6_rate = None
+        net_wound_deg = 0.0   # 감은 총량 — 뚜껑에서 자유로워진 뒤 그대로 되감는다
+        if winding:
+            wind_h = self.get_parameter('unscrew_prewind_height_mm').value
+            wind_pose = TaskPose(slot_target.x_mm, slot_target.y_mm,
+                                  slot_target.z_mm + wind_h, slot_target.rz1_deg,
+                                  slot_target.ry_deg, slot_target.rz2_deg)
+            reason = move_and_wait(wind_pose, 3, 8.0)
+            if reason != 'ok':
+                result.base = self._finish_from_reason(
+                    reason, goal_handle, started_at, context='PickPlace(손목 감기 위치)')
+                return result
+
+            reason, j6_rate, net_wound_deg = self._prewind_wrist(
+                goal_handle, timeout_s, lambda: feedback(3, 9.0),
+                1.0 if turn_deg >= 0.0 else -1.0, abs(turn_deg))
+            if reason != 'ok':
+                result.base = self._finish_from_reason(
+                    reason, goal_handle, started_at, context='PickPlace(손목 감기)')
+                return result
+
+            # 여기서부터 뚜껑을 놓을 때까지는 자세를 명령하지 않는다 — 티칭
+            # 자세로 절대 이동하면 방금 감아 둔 각도가 통째로 되감긴다.
+            try:
+                wound = self._adapter.get_pose()
+            except DsrAdapterError as exc:
+                goal_handle.abort()
+                self._log_abort(ErrorCode.E_MOTION_FAILED, f'손목 감기 후 자세 조회 실패: {exc}')
+                result.base = self._result_base(
+                    False, ErrorCode.E_MOTION_FAILED,
+                    f'손목 감기 후 자세를 못 읽어 중단: {exc}', started_at)
+                return result
+            approach = self._with_current_orientation(approach, wound)
+            target = self._with_current_orientation(target, wound)
+
         reason = move_and_wait(approach, 0, 10.0)
         if reason != 'ok':
             result.base = self._finish_from_reason(reason, goal_handle, started_at,
@@ -563,9 +939,29 @@ class RobotSkillNode(Node):
                                                      context='PickPlace')
             return result
 
+        # PLACE 는 놓기 **전에** 쥔 채로 돌려서 뚜껑을 잠근다. 여기서 슬롯
+        # 티칭 z 까지 잠기며 내려간다(위에서 close_rise_mm 만큼 띄워 뒀다).
+        if do_close:
+            reason, result.unscrew_done_deg, j6_rate = self._turn_tool_z(
+                goal_handle, timeout_s, lambda: feedback(3, 55.0),
+                1.0 if turn_deg >= 0.0 else -1.0, abs(turn_deg),
+                lift_per_turn, j6_rate)
+            net_wound_deg += result.unscrew_done_deg
+            if reason != 'ok':
+                result.base = self._finish_from_reason(
+                    reason, goal_handle, started_at, context='PickPlace(뚜껑 닫기)')
+                return result
+            self.get_logger().info(
+                f'PickPlace place: 뚜껑 {result.unscrew_done_deg:.0f}° 잠금 '
+                f'(목표 {turn_deg:.0f}°)')
+
         feedback(2, 60.0)
         if goal.mode == PickPlace.Goal.MODE_PICK:
-            grip_ok = self._adapter.gripper_set_width(width)
+            # 돌릴 때 미끄러지면 안 되므로 뚜껑을 풀 때는 지정된 최소 폭까지
+            # 끝까지 오므린다. RG2 는 뚜껑에 막혀 그 폭에 못 미친 채 멈추고,
+            # 남은 힘을 전부 파지력으로 쓴다 — 0 을 주면 최대 파지력이 된다.
+            grip_ok = self._adapter.gripper_set_width(
+                max(0.0, goal.unscrew_grip_width_mm) if do_unscrew else width)
         elif goal.already_holding:
             # 완전개방(open_width) 대신 지정된 폭까지만 벌린다 — 예: 스톤만
             # 놓고 핀셋 손잡이는 계속 쥔 채 유지.
@@ -583,7 +979,44 @@ class RobotSkillNode(Node):
                                               '그리퍼 명령 실패', started_at)
             return result
 
+        # PICK 은 잡은 자리에서 먼저 풀고 나서 들어 올린다 — 풀지 않은 채
+        # 상승하면 병째로 딸려 올라오거나 뚜껑이 뜯긴다.
+        if do_unscrew:
+            reason, result.unscrew_done_deg, j6_rate = self._turn_tool_z(
+                goal_handle, timeout_s, lambda: feedback(3, 75.0),
+                1.0 if turn_deg >= 0.0 else -1.0, abs(turn_deg),
+                lift_per_turn, j6_rate)
+            net_wound_deg += result.unscrew_done_deg
+            if reason != 'ok':
+                result.base = self._finish_from_reason(
+                    reason, goal_handle, started_at, context='PickPlace(뚜껑 풀기)')
+                return result
+            self.get_logger().info(
+                f'PickPlace pick: 뚜껑 {result.unscrew_done_deg:.0f}° 풀림 '
+                f'(목표 {turn_deg:.0f}°)')
+
+            # 병에서 완전히 빠져나가기 전에 붓의 젤 여분을 병 입구에 훑는다.
+            reason = self._wipe_on_bottle(
+                goal_handle, timeout_s, lambda: feedback(3, 85.0), slot_target)
+            if reason != 'ok':
+                result.base = self._finish_from_reason(
+                    reason, goal_handle, started_at, context='PickPlace(젤 훑기)')
+                return result
+
         feedback(4, 90.0)
+        # 감긴 손목으로 슬롯을 빠져나온 뒤 안전 높이에서 되감는다. 되감아
+        # 두지 않으면 이후의 모든 절대 이동이 700° 짜리 손목 회전을 덤으로
+        # 끌고 다닌다.
+        if winding:
+            reason = self._unwind_at_clearance(
+                goal_handle, timeout_s, lambda: feedback(4, 95.0), slot_target,
+                max(self.get_parameter('pick_lift_mm').value, goal.approach_height_mm)
+                if goal.mode == PickPlace.Goal.MODE_PICK else goal.approach_height_mm,
+                move_and_wait, 4, net_wound_deg, j6_rate)
+            result.base = self._finish_from_reason(reason, goal_handle, started_at,
+                                                    context='PickPlace(손목 되감기)')
+            return result
+
         if goal.retreat_key:
             try:
                 retreat = self._target_task_pose(goal.retreat_key, goal.frame_id)
