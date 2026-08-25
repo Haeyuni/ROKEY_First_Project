@@ -12,7 +12,7 @@ place_key: stone_place
 # 파츠 중앙 홈을 확실히 잡는 닫힘 폭과, 파츠만 놓고 핀셋은 계속 잡는 열림 폭을
 # 실기에서 확인한 뒤 바꿔야 한다.
 pinch_width_mm: 3.0
-release_width_mm: 19.0
+release_width_mm: 17.0
 
 # MoveL 속도 비율. F/T·순응제어 없이 티칭 위치로만 내려가므로 낮게 유지한다.
 pick_speed_ratio: 0.1

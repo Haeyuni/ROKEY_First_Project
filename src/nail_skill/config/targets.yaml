@@ -161,7 +161,7 @@ stone_pick_approach: # stone_pick 대비 z+30mm (2026-08-25)
 stone_pick: # get_current_posx 실측 (2026-08-25)
   x_mm: 409.13
   y_mm: 125.04
-  z_mm: 291.37
+  z_mm: 293.37
   frame_id: base_link
   rz1_deg: 23.22
   ry_deg: -178.48
