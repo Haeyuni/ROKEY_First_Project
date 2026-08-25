@@ -25,7 +25,7 @@ def generate_launch_description():
             'home_target_key', default_value='rack_transit',
             description='실패·취소 시 복귀할 targets.yaml의 티칭 target_key'),
         DeclareLaunchArgument(
-            'sanding_path_y_offset_mm', default_value='0.0',
+            'sanding_path_y_offset_mm', default_value='0.5',
             description='샌딩 기본 3-Pose 전체에 적용할 base_link Y 보정(mm)'),
         DeclareLaunchArgument(
             'log_level', default_value='info',
