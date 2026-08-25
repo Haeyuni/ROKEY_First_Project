@@ -80,7 +80,6 @@ export const SessionStart = memo(function SessionStart({
         shape_profile_id: shapeProfileId,
         target_material: targetMaterial,
         layer_total: layerTotal,
-        max_rework: 2,
         enable_brush: true,
         enable_stone: enableStone,
       });

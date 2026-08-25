@@ -1,8 +1,8 @@
 """sanding_node — 수평 접근 연마 (NIS §6.2 M01, SDS §5.3 ★★).
 
-`LateralContact` 를 쓰는 유일한 공정 노드다. 압입을 하지 않는 수평 접근에서는
-강성 감시(`E_LOW_STIFFNESS`)가 작동하지 않으므로, 피부 접촉을 막는 방어선은
-`travel_limit_mm` 하나뿐이다 — 이 값을 손톱 경계에서 기하학적으로 계산하는
+`LateralContact` 를 쓰는 유일한 공정 노드다. 센서 측정 없이 티칭 경계와
+좌표만 사용하므로, 피부 접촉을 막는 방어선은 `travel_limit_mm`이다. 이를
+손톱 경계에서 기하학적으로 계산하는
 `_compute_travel_limit` 이 이 노드에서 가장 중요한 함수다 (상수로 하드코딩
 금지, SDS §12 체크리스트).
 
@@ -42,8 +42,6 @@ from nail_skill.conversions import task_pose_to_ros_pose
 SEVERITY_BY_CODE = {
     ErrorCode.OK: ErrorCode.SEV_NONE,
     ErrorCode.E_CANCELLED: ErrorCode.SEV_NONE,
-    ErrorCode.E_LATERAL_JAM: ErrorCode.SEV_RETRY,
-    ErrorCode.E_OVERFORCE: ErrorCode.SEV_ABORT,
     ErrorCode.E_MOTION_FAILED: ErrorCode.SEV_ABORT,
     ErrorCode.E_TIMEOUT: ErrorCode.SEV_ABORT,
     ErrorCode.E_INVALID_GOAL: ErrorCode.SEV_ABORT,
@@ -121,15 +119,10 @@ class SandingNode(Node):
         d('safety_topic', '/safety/status')
         d('safety_status_timeout_s', 1.0)
         d('node_timeout_s', 120.0)
-        d('log_force_data', False)
         # 접근
         d('approach_side', SandSurface.Goal.SIDE_FREE_EDGE)
         d('work_plane_offset_mm', 0.0)
         d('approach_pitch_deg', 0.0)
-        # 힘
-        d('target_force_n', 2.0)
-        d('max_force_n', 4.0)
-        d('jam_force_n', 4.0)
         # 경로
         d('passes', 3)
         d('step_over_mm', 1.5)
@@ -161,8 +154,7 @@ class SandingNode(Node):
         d('nail_boundary_points', 24)
         # 안전 ★
         d('travel_limit_margin_mm', 2.0)
-        # 힘 센서 미작동 대응 — compliance 로 곡률을 못 따라가므로 경계
-        # 곡선 자체를 waypoint 로 삼아 이만큼(mm) 안쪽으로 눌러 넣는다.
+        # 경계 곡선 자체를 waypoint 로 삼아 이만큼(mm) 안쪽으로 이동한다.
         # travel_limit_mm(경계까지 거리 - margin) 을 넘으면 REJECT.
         d('engagement_depth_mm', 2.0)
 
@@ -297,9 +289,6 @@ class SandingNode(Node):
         approach_side = goal.approach_side or self.get_parameter('approach_side').value
         pitch_deg = self._val(goal.approach_pitch_deg, 'approach_pitch_deg')
         work_plane = self._val(goal.work_plane_offset_mm, 'work_plane_offset_mm')
-        target_force = self._val(goal.target_force_n, 'target_force_n')
-        max_force = self._val(goal.max_force_n, 'max_force_n')
-        jam_force = self._val(goal.jam_force_n, 'jam_force_n')
         passes = int(self._val(goal.passes, 'passes'))
         step_over = self._val(goal.step_over_mm, 'step_over_mm')
         feed_speed = self._val(goal.feed_speed_mms, 'feed_speed_mms')
@@ -323,72 +312,32 @@ class SandingNode(Node):
         use_custom_waypoints = len(custom_poses) >= 2
         travel_limit_mm = None
 
-        if use_custom_waypoints:
-            self.get_logger().warn(
-                f'SandSurface: waypoints {len(custom_poses)}개 수동 지정({source}, TaskPose, '
-                '자세 포함) — 경계/진입점/travel_limit_mm/engagement_depth_mm 검증을 전부 '
-                '건너뛴다. 좌표·자세가 안전한지는 호출자 책임(NFR-09 방어선 없음).')
-            sweep_poses = [task_pose_to_ros_pose(tp)
-                           for tp in oscillating_sweep(custom_poses, oscillations)]
-        else:
-            # --- 손톱 경계 (파라미터 재확인 — 실기에서 param set 으로 바뀔 수 있다) ---
-            boundary_xy = self._nail_boundary()
-            if len(boundary_xy) < 3:
-                detail = ('손톱 경계 생성 실패 — nail_size_x_mm='
-                          f"{self.get_parameter('nail_size_x_mm').value}, nail_size_y_mm="
-                          f"{self.get_parameter('nail_size_y_mm').value}, nail_boundary_points="
-                          f"{self.get_parameter('nail_boundary_points').value}")
-                self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
-                goal_handle.abort()
-                result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
-                return result
 
-            start_xy = self._entry_point(base_xy, boundary_xy)
-            if start_xy is None:
-                detail = f'approach_side="{approach_side}" 방향이 boundary_polygon 과 교차하지 않음'
-                self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
-                goal_handle.abort()
-                result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
-                return result
+        engagement_mm = self.get_parameter('engagement_depth_mm').value
+        if engagement_mm > travel_limit_mm:
+            detail = (f'engagement_depth_mm({engagement_mm}) > travel_limit_mm'
+                      f'({travel_limit_mm:.2f}) — 피부 접촉 방어선(NFR-09) 초과 위험')
+            self._log_abort(ErrorCode.E_LATERAL_LIMIT, detail)
+            goal_handle.abort()
+            result.abort_reason = 'ABORT_LATERAL_LIMIT'
+            result.base = self._result_base(
+                False, ErrorCode.E_LATERAL_LIMIT, detail, started_at)
+            return result
 
-            # --- travel_limit_mm ★ ------------------------------------------------
-            travel_limit_mm = self._compute_travel_limit(
-                start_xy, base_xy, boundary_xy, margin_mm)
-            if travel_limit_mm is None or travel_limit_mm <= 0.0:
-                detail = (f'travel_limit_mm={travel_limit_mm} <= 0 — 접근 방향("{approach_side}") '
-                          f'또는 travel_limit_margin_mm({margin_mm}) 재검토 필요. '
-                          'NFR-09: 이 값이 유일한 피부 접촉 방어선.')
-                self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
-                goal_handle.abort()
-                result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
-                return result
-            result.computed_travel_limit_mm = travel_limit_mm
-
-            engagement_mm = self.get_parameter('engagement_depth_mm').value
-            if engagement_mm > travel_limit_mm:
-                detail = (f'engagement_depth_mm({engagement_mm}) > travel_limit_mm'
-                          f'({travel_limit_mm:.2f}) — 피부 접촉 방어선(NFR-09) 초과 위험')
-                self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
-                goal_handle.abort()
-                result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
-                return result
-
-            # --- 이송 경로: 진입측 호(arc)를 압입 깊이만큼 눌러 넣은 곡선 -------------
-            # 힘 센서가 없어 compliance 로 곡률을 못 따라가므로(§ 논의 참고),
-            # boundary_xy(타원 근사 다각형) 중 진입점 쪽 절반을 feed_axis 순으로
-            # 뽑아 그 곡선 자체를 waypoint 로 쓴다. base_xy(approach_vec) 방향으로
-            # engagement_depth_mm 만큼 offset 해서 실제 연마 깊이를 만든다.
-            feed_axis = _rotate90(base_xy)
-            centroid_xy = centroid(boundary_xy)
-            arc_points = sorted(
-                (p for p in boundary_xy if _dot(_sub(p, centroid_xy), base_xy) <= 0.0),
-                key=lambda p: _dot(_sub(p, start_xy), feed_axis))
-            if len(arc_points) < 2:
-                arc_points = [start_xy, start_xy]
-            engaged_arc = [_add_scaled(p, base_xy, engagement_mm) for p in arc_points]
-
-            # 왕복(오실레이션) 스트로크 N회
-            sweep_xy_mm = oscillating_sweep(engaged_arc, oscillations)
+        # --- 이송 경로: 진입측 호(arc)를 압입 깊이만큼 눌러 넣은 곡선 -----------------
+        # 센서 없이 티칭 좌표만 사용하므로,
+        # boundary_xy(타원 근사 다각형) 중 진입점 쪽 절반을 feed_axis 순으로
+        # 뽑아 그 곡선 자체를 waypoint 로 쓴다. base_xy(approach_vec) 방향으로
+        # engagement_depth_mm 만큼 offset 해서 실제 연마 깊이를 만든다.
+        feed_axis = _rotate90(base_xy)
+        centroid_xy = centroid(boundary_xy)
+        arc_points = sorted(
+            (p for p in boundary_xy if _dot(_sub(p, centroid_xy), base_xy) <= 0.0),
+            key=lambda p: _dot(_sub(p, start_xy), feed_axis))
+        if len(arc_points) < 2:
+            arc_points = [start_xy, start_xy]
+        engaged_arc = [_add_scaled(p, base_xy, engagement_mm) for p in arc_points]
+        sweep_xy_mm = engaged_arc + list(reversed(engaged_arc[:-1]))
 
         def mm_to_pose(xy_mm, z_mm):
             """경계 모드 전용 — face-down 고정 자세로 Pose 를 만든다. 수동
@@ -401,19 +350,17 @@ class SandingNode(Node):
                 _FACE_DOWN_QUAT
             return pose
 
-        def feedback(pct, current_pass, travel_mm, wrench=None):
+        def feedback(pct, current_pass, travel_mm):
             fb = SandSurface.Feedback()
             fb.percent = pct
             fb.current_pass = current_pass
             fb.travel_mm = travel_mm
-            if wrench is not None:
-                fb.current_wrench = wrench
             goal_handle.publish_feedback(fb)
 
         # --- passes 만큼 반복. step_over_mm 는 패스마다 작업 높이(Z)를 옮겨
         #     손톱 가장자리의 다른 높이대를 훑는다 (NIS §6.2 파라미터 설명:
         #     "step_over_mm: 패스 간 이송 간격") -------------------------------------
-        mean_forces, max_forces, max_travels, max_jams = [], [], [], []
+        max_travels = []
         abort_code, abort_reason, abort_detail = None, '', ''
         passes_done = 0
         deadline = time.monotonic() + max_duration
@@ -447,25 +394,17 @@ class SandingNode(Node):
                 lc_goal.work_plane_offset_mm = z_mm
                 lc_goal.frame_id = 'nail_local_frame'
             lc_goal.session_id = goal.session_id
-            lc_goal.target_force_n = target_force
-            lc_goal.max_force_n = max_force
-            lc_goal.jam_force_n = jam_force
+
+            lc_goal.work_plane_offset_mm = z_mm
             lc_goal.feed_speed_mms = feed_speed
-            # waypoints 자체가 이미 engagement_depth_mm 만큼 눌러 넣은 좌표라,
-            # LateralContact 진입 시 waypoints[0]로 이동하면 목표 깊이에
-            # 도달한다 — 여기 travel_limit_mm 은 그 이후 추가 탐색/전진 폭이라
-            # 0에 가까운 값(goal 검증상 0 초과만 요구)만 준다. 큰 값을 그대로
-            # 넘기면 waypoints[0] 도달 후 추가로 그만큼 더 파고들어 이중으로
-            # 눌러 넣는다.
-            lc_goal.travel_limit_mm = 0.1
             lc_goal.retreat_mm = margin_mm
             lc_goal.passes = 1
             lc_goal.max_duration_s = max(1.0, deadline - time.monotonic())
 
             def on_lc_feedback(fb_msg):
                 fb = fb_msg.feedback
-                feedback(100.0 * (pass_idx + fb.percent / 100.0) / passes, pass_idx,
-                          fb.travel_mm, fb.current_wrench)
+                feedback(100.0 * (pass_idx + fb.percent / 100.0) / passes,
+                          pass_idx, engagement_mm)
 
             lc_result, err_code, err_detail = self._call_lateral_contact(
                 lc_goal, goal_handle, lc_goal.max_duration_s + 5.0, on_lc_feedback)
@@ -479,22 +418,13 @@ class SandingNode(Node):
                 abort_reason = f'ABORT_{abort_code}' if not lc_result.abort_reason \
                     else lc_result.abort_reason
                 if lc_result is not None:
-                    mean_forces.append(lc_result.mean_force_n)
-                    max_forces.append(lc_result.max_force_measured_n)
-                    max_travels.append(lc_result.max_travel_mm)
-                    max_jams.append(lc_result.max_jam_force_n)
+                    max_travels.append(engagement_mm)
                 break
 
             passes_done += 1
-            mean_forces.append(lc_result.mean_force_n)
-            max_forces.append(lc_result.max_force_measured_n)
-            max_travels.append(lc_result.max_travel_mm)
-            max_jams.append(lc_result.max_jam_force_n)
+            max_travels.append(engagement_mm)
 
-        result.mean_force_n = sum(mean_forces) / len(mean_forces) if mean_forces else 0.0
-        result.max_force_measured_n = max(max_forces) if max_forces else 0.0
         result.max_travel_mm = max(max_travels) if max_travels else 0.0
-        result.max_jam_force_n = max(max_jams) if max_jams else 0.0
         result.passes_done = passes_done
         result.abort_reason = abort_reason
 

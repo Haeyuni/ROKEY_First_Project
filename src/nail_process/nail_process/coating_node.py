@@ -5,22 +5,13 @@
 추정치일 뿐 실제 도포량이 아니며 판정 기준이 아니다 — result 에 두께
 필드를 두지 않는다.
 
-손톱 경계를 `boundary_offset_mm` 만큼 안쪽으로 축소한 영역에만 도포한다
-(큐티클 번짐 방지, FR-16). 실제 이동은 robot_skill_node 의
-`/skill/contact_path` 를 호출한다 (SDS §4.1).
-
-★ v0.3 변경: 그 경계를 예전에는 scan_node 의 강성 맵(`GetStiffnessMap`)에서
-받아왔지만, 스캔이 폐지되면서 이제는 티칭된 손톱 크기 파라미터
-(`nail_size_x_mm` / `nail_size_y_mm`)로 타원을 직접 만든다. 측정으로
-검증되지 않는 값이므로 `boundary_offset_mm` 이 큐티클 번짐을 막는 유일한
-여유분이다.
+코터 전용 여섯 티칭 Pose로 만든 경계에서 `boundary_offset_mm`만큼 안쪽만
+도포한다. 실제 이동은 robot_skill_node의 `/skill/contact_path`가 담당한다.
 """
-import math
 import threading
 import time
 
 import rclpy
-from geometry_msgs.msg import Point, Pose
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -31,12 +22,12 @@ from nail_msgs.action import CoatGel, ContactPath
 from nail_msgs.msg import ErrorCode, ResultBase, SafetyState, ToolState
 from nail_msgs.srv import ValidatePrecondition
 
-from nail_perception.geometry2d import nail_boundary_polygon, polygon_area, raster_fill
+from .taught_surface import (SurfaceConfigError, build_surface_path,
+                             surface_is_configured)
 
 SEVERITY_BY_CODE = {
     ErrorCode.OK: ErrorCode.SEV_NONE,
     ErrorCode.E_CANCELLED: ErrorCode.SEV_NONE,
-    ErrorCode.E_OVERFORCE: ErrorCode.SEV_ABORT,
     ErrorCode.E_MOTION_FAILED: ErrorCode.SEV_ABORT,
     ErrorCode.E_TIMEOUT: ErrorCode.SEV_ABORT,
     ErrorCode.E_PRECOND_FAILED: ErrorCode.SEV_ABORT,
@@ -47,15 +38,6 @@ SEVERITY_BY_CODE = {
 
 def _severity_for(code):
     return SEVERITY_BY_CODE.get(code, ErrorCode.SEV_ABORT)
-
-
-# 도포기가 nail_local_frame 의 -Z(표면) 를 향하도록 고정하는 자세 — 로컬 X축
-# 기준 180도 회전 (curing_node._FACE_DOWN_QUAT 와 동일). nail_local_frame
-# 은 roll/pitch/yaw 가 전부 0(수평, identity)이라 orientation.w=1.0 을
-# 그대로 쓰면 base_link 기준 A=0,B=0,C=0 이 되어 이 워크스페이스의 모든
-# 실측 좌표(B≈±180°)와 반대 방향이 된다 — 실기에서 큰 B축 재정렬 도중
-# 특이점/도달불가로 ABORT 되는 것으로 확인됨.
-_FACE_DOWN_QUAT = (1.0, 0.0, 0.0, 0.0)  # (x, y, z, w)
 
 
 class CoatingNode(Node):
@@ -97,20 +79,20 @@ class CoatingNode(Node):
         d('safety_topic', '/safety/status')
         d('safety_status_timeout_s', 1.0)
         d('node_timeout_s', 120.0)
-        d('log_force_data', False)
         d('boundary_offset_mm', 1.0)
-        d('target_force_n', 0.8)
-        d('max_force_n', 2.0)
         d('path_pitch_mm', 1.5)
         d('feed_speed_mms', 10.0)
         d('passes', 1)
-        d('use_compliance', True)
         d('max_duration_s', 45.0)
-        # 손톱 경계 ★ — launch 가 static_frames.yaml 의 nail_region 에서 주입한다.
-        # 여기 기본값은 launch 없이 `ros2 run` 으로 띄웠을 때만 쓰인다.
-        d('nail_size_x_mm', 16.0)
-        d('nail_size_y_mm', 13.0)
-        d('nail_boundary_points', 24)
+        d('contact_offset_mm', 0.0)
+        d('surface_config_path', '')
+        d('surface_name', 'coater')
+        d('arc_segment_length_mm', 4.0)
+        d('arc_min_sagitta_mm', 0.05)
+        d('arc_min_radius_mm', 1.0)
+        d('arc_max_radius_mm', 100.0)
+        d('arc_max_z_change_mm', 2.0)
+        d('arc_max_orientation_change_deg', 10.0)
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg):
@@ -128,14 +110,6 @@ class CoatingNode(Node):
         if self._contact_goal_handle is not None:
             self._contact_goal_handle.cancel_goal_async()
         return CancelResponse.ACCEPT
-
-    # --- 손톱 경계 (v0.3: 스캔 대신 티칭값) ----------------------------------------
-    def _nail_boundary(self):
-        """nail_local_frame 기준 손톱 경계 다각형. 빈 리스트면 파라미터가 잘못된 것."""
-        return nail_boundary_polygon(
-            self.get_parameter('nail_size_x_mm').value,
-            self.get_parameter('nail_size_y_mm').value,
-            int(self.get_parameter('nail_boundary_points').value))
 
     # --- 서비스 폴링 헬퍼 --------------------------------------------------------
     def _call_validate_precondition(self, session_id, timeout_s=5.0):
@@ -164,10 +138,11 @@ class CoatingNode(Node):
         if not self._safe_to_move():
             self.get_logger().warn('CoatGel REJECT: E_SAFETY_BLOCKED')
             return GoalResponse.REJECT
-        if len(self._nail_boundary()) < 3:
+        if not surface_is_configured(
+                self.get_parameter('surface_config_path').value,
+                self.get_parameter('surface_name').value):
             self.get_logger().warn(
-                'CoatGel REJECT: E_INVALID_GOAL — nail_size_x_mm/nail_size_y_mm/'
-                'nail_boundary_points 파라미터가 유효하지 않아 손톱 경계를 만들 수 없음')
+                'CoatGel REJECT: E_INVALID_GOAL (코터 6-Pose 티칭 미설정)')
             return GoalResponse.REJECT
         ok, reasons = self._call_validate_precondition(goal_request.session_id)
         if not ok:
@@ -186,61 +161,38 @@ class CoatingNode(Node):
         result = CoatGel.Result()
 
         boundary_offset = self._val(goal.boundary_offset_mm, 'boundary_offset_mm')
-        target_force = self._val(goal.target_force_n, 'target_force_n')
-        max_force = self._val(goal.max_force_n, 'max_force_n')
         path_pitch = self._val(goal.path_pitch_mm, 'path_pitch_mm')
         feed_speed = self._val(goal.feed_speed_mms, 'feed_speed_mms')
         passes = int(self._val(goal.passes, 'passes'))
-        # bool 필드는 "설정 안 함"과 False 를 구분할 수 없어(ROS 메시지 자체의
-        # 한계) _val 패턴을 못 쓴다 — goal 값을 그대로 신뢰한다 (ContactPath.
-        # use_compliance, PickPlace.verify_grip 과 동일한 처리).
-        use_compliance = goal.use_compliance
         max_duration = self._val(goal.max_duration_s, 'max_duration_s')
 
-        # --- 손톱 경계 (파라미터 재확인 — 실기에서 param set 으로 바뀔 수 있다) -------
-        boundary_xy = self._nail_boundary()
-        if len(boundary_xy) < 3:
-            detail = ('손톱 경계 생성 실패 — nail_size_x_mm='
-                      f"{self.get_parameter('nail_size_x_mm').value}, nail_size_y_mm="
-                      f"{self.get_parameter('nail_size_y_mm').value}, nail_boundary_points="
-                      f"{self.get_parameter('nail_boundary_points').value}")
+        p = self.get_parameter
+        try:
+            path = build_surface_path(
+                p('surface_config_path').value, p('surface_name').value,
+                path_pitch, boundary_offset,
+                p('arc_segment_length_mm').value,
+                p('arc_min_sagitta_mm').value,
+                p('arc_min_radius_mm').value,
+                p('arc_max_radius_mm').value,
+                p('arc_max_z_change_mm').value,
+                p('arc_max_orientation_change_deg').value)
+        except SurfaceConfigError as exc:
+            detail = f'코터 티칭 경로 생성 실패: {exc}'
             self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
             goal_handle.abort()
             result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
             return result
-
-        # boundary_offset_mm 만큼 안쪽으로 침식 (큐티클 번짐 방지, FR-16)
-        path_xy = raster_fill(boundary_xy, path_pitch, -boundary_offset)
-        if not path_xy:
-            detail = (f'boundary_offset_mm({boundary_offset}) 이 너무 커서 '
-                      '도포 영역이 남지 않음')
-            self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
-            return result
-
-        def mm_to_pose(xy_mm):
-            pose = Pose()
-            pose.position.x = xy_mm[0] / 1000.0
-            pose.position.y = xy_mm[1] / 1000.0
-            pose.position.z = 0.0
-            pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = \
-                _FACE_DOWN_QUAT
-            return pose
 
         cp_goal = ContactPath.Goal()
-        cp_goal.waypoints = [mm_to_pose(xy) for xy in path_xy]
-        cp_goal.frame_id = 'nail_local_frame'
+        cp_goal.waypoints = path.waypoints
+        cp_goal.circular_via_indices = path.circular_via_indices
+        cp_goal.frame_id = path.frame_id
+        cp_goal.reference_key = ''
         cp_goal.session_id = goal.session_id
-        cp_goal.target_force_n = target_force
-        cp_goal.max_force_n = max_force
         cp_goal.feed_speed_mms = feed_speed
-        cp_goal.use_compliance = use_compliance
-        # 강성 감시는 스캔이 있던 시절의 검증 신호였다 — 지금은 경계 자체가
-        # 티칭값이라 켤 근거가 없다(§ 모듈 docstring).
-        cp_goal.abort_on_low_stiffness = False
-        cp_goal.allowed_polygon = [Point(x=x / 1000.0, y=y / 1000.0, z=0.0)
-                                    for x, y in boundary_xy]
+        cp_goal.contact_offset_mm = self.get_parameter('contact_offset_mm').value
+        cp_goal.allowed_polygon = path.allowed_polygon
         cp_goal.passes = passes
         cp_goal.max_duration_s = max_duration
 
@@ -258,10 +210,9 @@ class CoatingNode(Node):
         cp_result, err_code, err_detail = self._call_contact_path(
             cp_goal, goal_handle, timeout_s, on_cp_feedback)
 
-        # coverage_ratio — 기록용 추정치. 실제 경로가 덮은 점 수 * pitch^2 를
-        # 목표(침식된) 영역 면적으로 나눈다. 판정 기준 아님 (NIS §6.4 명시).
-        coverage_ratio = self._estimate_coverage_ratio(path_xy, path_pitch, boundary_xy,
-                                                         boundary_offset)
+        # 센서가 없으므로 실제 젤 면적이 아니라 계획한 pass 완료 비율만 기록한다.
+        completed_passes = cp_result.passes_done if cp_result is not None else 0
+        coverage_ratio = min(1.0, completed_passes / max(passes, 1))
 
         if err_code == 'CANCELLED':
             goal_handle.canceled()
@@ -276,31 +227,15 @@ class CoatingNode(Node):
             if cp_result is not None:
                 result.abort_reason = cp_result.abort_reason
                 result.passes_done = cp_result.passes_done
-                result.mean_force_n = cp_result.mean_force_n
             result.coverage_ratio = coverage_ratio
             result.base = self._result_base(False, code, detail, started_at)
             return result
 
         goal_handle.succeed()
-        result.mean_force_n = cp_result.mean_force_n
         result.coverage_ratio = coverage_ratio
         result.passes_done = cp_result.passes_done
         result.base = self._result_base(True, ErrorCode.OK, '', started_at)
         return result
-
-    def _estimate_coverage_ratio(self, path_xy, path_pitch, boundary_xy, boundary_offset):
-        target_polygon_area = polygon_area(boundary_xy)
-        # 침식된 목표 면적을 다시 다각형으로 재구성하는 대신, 원본 면적에서
-        # 테두리 손실을 근사(둘레 x offset)해 뺀다 — 정확한 Minkowski 침식
-        # 다각형을 새로 만드는 것보다 훨씬 저렴하고, 기록용 추정치라는 용도에는
-        # 충분하다.
-        perimeter = sum(
-            math.hypot(boundary_xy[(i + 1) % len(boundary_xy)][0] - boundary_xy[i][0],
-                       boundary_xy[(i + 1) % len(boundary_xy)][1] - boundary_xy[i][1])
-            for i in range(len(boundary_xy)))
-        target_area = max(1e-6, target_polygon_area - perimeter * boundary_offset)
-        covered_area = len(path_xy) * (path_pitch ** 2)
-        return min(1.0, covered_area / target_area)
 
     # --- ContactPath 클라이언트 헬퍼 (§3.3 취소 전파) ------------------------------
     def _call_contact_path(self, goal, our_goal_handle, timeout_s, feedback_cb=None):

@@ -9,13 +9,10 @@ import { SEV_SAFETY } from "./types";
 
 const ACTIVE_STAGES = new Set([
   "PRECHECK",
-  "SCAN",
   "SAND",
   "BRUSH",
   "COAT",
   "CURE",
-  "INSPECT",
-  "REWORK",
   "STONE",
 ]);
 

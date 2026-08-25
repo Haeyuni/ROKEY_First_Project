@@ -20,7 +20,7 @@ NIS §10 `mock_robot_driver`(로봇 동역학까지 흉내내는 정식 mock, �
 
 실행하면:
   - SafetyState: safe_to_move=true 고정 (인터록 주입 테스트는 별도 스크립트로 확장)
-  - ProcessState: SCAN → SAND → COAT → CURE → INSPECT → FINISH 를 순환
+  - ProcessState: PRECHECK → SAND → BRUSH → COAT → CURE → STONE → FINISH 순환
 """
 
 import rclpy
@@ -35,7 +35,7 @@ TRANSIENT_LOCAL_QOS = QoSProfile(
     durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
 )
 
-STAGES = ["PRECHECK", "SCAN", "SAND", "BRUSH", "COAT", "CURE", "INSPECT", "FINISH"]
+STAGES = ["PRECHECK", "SAND", "BRUSH", "COAT", "CURE", "STONE", "FINISH"]
 
 
 class FakeRosPublisher(Node):
@@ -56,10 +56,6 @@ class FakeRosPublisher(Node):
         msg.safe_to_move = True
         msg.estop_released = True
         msg.comm_ok = True
-        msg.handrest_seated = True
-        msg.dust_extraction_on = True
-        msg.tool_grip_ok = True
-        msg.scan_valid = True
         msg.active_faults = []
         msg.reason = ""
         self._safety_pub.publish(msg)
@@ -70,7 +66,6 @@ class FakeRosPublisher(Node):
         msg.stage = STAGES[self._stage_index]
         msg.layer_index = 0
         msg.layer_total = 2
-        msg.rework_count = 0
         msg.stage_percent = 50.0
         msg.session_percent = (self._stage_index / (len(STAGES) - 1)) * 100.0
         msg.current_tool = "none"

@@ -53,7 +53,6 @@ SEVERITY_BY_CODE = {
     ErrorCode.E_CANCELLED: ErrorCode.SEV_NONE,
     ErrorCode.E_PRECOND_FAILED: ErrorCode.SEV_ABORT,
     ErrorCode.E_GRIP_FAILED: ErrorCode.SEV_ABORT,
-    ErrorCode.E_OVERFORCE: ErrorCode.SEV_ABORT,
     ErrorCode.E_SAFETY_BLOCKED: ErrorCode.SEV_SAFETY,
     ErrorCode.E_TIMEOUT: ErrorCode.SEV_ABORT,
 }
@@ -122,7 +121,6 @@ class StoneNode(Node):
         d('safety_topic', '/safety/status')
         d('safety_status_timeout_s', 1.0)
         d('node_timeout_s', 120.0)
-        d('log_force_data', False)
         d('press_duration_s', 2.0)
         d('stone_pickup_frame', 'stone_tray')
         d('approach_height_mm', 15.0)
@@ -195,7 +193,7 @@ class StoneNode(Node):
             self.get_parameter(param_name).value
 
     # --- PickPlace 클라이언트 헬퍼 ------------------------------------------------
-    def _call_pick_place(self, mode, target_key, expected_width_mm, verify_grip,
+    def _call_pick_place(self, mode, target_key, grip_width_mm,
                           approach_height_mm, timeout_s, our_goal_handle, feedback_cb=None,
                           already_holding=False):
         """반환: (PickPlace.Result|None, error_code|None|'CANCELLED')."""
@@ -207,9 +205,7 @@ class StoneNode(Node):
         goal.target_key = target_key
         goal.frame_id = 'nail_local_frame'
         goal.approach_height_mm = approach_height_mm
-        goal.expected_width_mm = expected_width_mm
-        goal.grip_width_mm = expected_width_mm
-        goal.verify_grip = verify_grip
+        goal.grip_width_mm = grip_width_mm
         goal.already_holding = already_holding
 
         send_done = threading.Event()
@@ -384,7 +380,7 @@ class StoneNode(Node):
             # --- 0단계: PICK — 트레이에서 스톤 집기 ---------------------------------
             feedback(0, 0.0)
             pick_result, err = self._call_pick_place(
-                PickPlace.Goal.MODE_PICK, pickup_key, grip_width, True, approach_height,
+                PickPlace.Goal.MODE_PICK, pickup_key, grip_width, approach_height,
                 timeout_s, goal_handle, already_holding=True)
             if err == 'CANCELLED':
                 abort_code, abort_detail = 'CANCELLED', '사용자 취소'
@@ -439,7 +435,7 @@ class StoneNode(Node):
             self._broadcast_hold_frame(tx_mm, ty_mm, hold_z_mm, quat)
             release_width = self.get_parameter('tweezers_grip_width_mm').value
             place_result, err = self._call_pick_place(
-                PickPlace.Goal.MODE_PLACE, _HOLD_FRAME, release_width, False, approach_height,
+                PickPlace.Goal.MODE_PLACE, _HOLD_FRAME, release_width, approach_height,
                 timeout_s, goal_handle, already_holding=True)
             if err == 'CANCELLED':
                 abort_code, abort_detail = 'CANCELLED', '사용자 취소'

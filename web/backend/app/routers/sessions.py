@@ -69,7 +69,6 @@ async def create_session(
         shape_profile_id=body.shape_profile_id,
         target_material=body.target_material,
         layer_total=body.layer_total,
-        max_rework=body.max_rework,
         enable_brush=body.enable_brush,
         enable_stone=body.enable_stone,
     )

@@ -21,7 +21,7 @@
 #                    tool_rack.yaml 의 slot_frame 과 **글자 그대로 같아야** 한다.
 #                    한쪽을 고치면 반드시 다른 쪽도 같이 고칠 것.
 #   stone_node   : stone_pickup_frame 파라미터(기본 'stone_tray')
-#   session_orchestrator : ChangeTool 직후 '<툴>_work' 와 rack_transit
+#   session_orchestrator : ChangeTool 직후 필요한 작업점과 rack_transit
 #
 # ----------------------------------------------------------------------------
 # 필드
@@ -129,10 +129,10 @@ tweezers: # 핀셋 - 완
 # 는 문자열 매칭이라 이름 자체엔 규칙이 없지만, rack 쪽 키(예: sander)와
 # 겹치면 안 되므로 접미사로 구분한다.
 #
-# 이후 실제 연마/도포/조사(SandSurface/BrushDust/CoatGel/CureUV)는
-# nail_local_frame 기준으로 경로를 계산하므로 이 좌표를 안 쓴다 — 여기 값은
-# "픽업 직후 ~ 작업 노드가 이어받기 전" 사이 접근용이다
-# (session_orchestrator `_go_to_work`).
+# sander_work/uv_work는 공정 전 이동점이다. brush_work/coater_work는 이전
+# 단일 기준점 방식의 실측 기록으로만 남겨 두며 현재 공정에서는 사용하지 않는다.
+# 브러시·코터 작업 경로는 nail_process/config/taught_surfaces.yaml의 툴별
+# P1~P6를 사용한다.
 #
 # ⚠️ via_key: rack_transit 은 랙 쪽 경유점이라 작업대 방향에는 안 맞을 수
 #    있다 — 작업대 앞에도 안전한 경유점이 필요하면 rack_transit 과 같은
@@ -165,7 +165,7 @@ sand_work_l: # SandSurface approach_side='left' 작업 시작 자세 (2026-08-24
   ry_deg: -176.01
   rz2_deg: 34.45
 
-brush_work: # 붓 작업 시작 자세 - 완 (get_current_posx 실측)
+brush_work: # 이전 단일 붓 접촉점 기록 (현재 공정 미사용)
   x_mm: 380.71
   y_mm: -24.76
   z_mm: 500.20
@@ -174,7 +174,7 @@ brush_work: # 붓 작업 시작 자세 - 완 (get_current_posx 실측)
   ry_deg: -178.89
   rz2_deg: 24.58
 
-coater_work: # 젤 도포 작업 시작 자세 - 완 (get_current_posx 실측)
+coater_work: # 이전 단일 코터 접촉점 기록 (현재 공정 미사용)
   x_mm: 380.86
   y_mm: -20.46
   z_mm: 440.93
@@ -190,10 +190,10 @@ uv_work: # UV 조사 작업 시작 자세 - 재실측 (2026-08-24, get_current_p
   y_mm: 115.89
   z_mm: 385.62
   frame_id: base_link
-  rz1_deg: 92.09
-  ry_deg: -146.21
-  rz2_deg: 89.61
-
+  rz1_deg: 88.60
+  ry_deg: -159.24
+  rz2_deg: 88.43
+  
 uv_work_l: # UV 왕복운동(sanding과 동일 방식) approach_side='left' 작업 시작 자세 (2026-08-24, get_current_posx)
   x_mm: 210.66
   y_mm: 20.91

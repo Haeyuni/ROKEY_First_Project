@@ -4,12 +4,11 @@
 robot_skill_node 의 액션 구현은 이 클래스만 호출하고, 두산 서비스 이름/시그니처를
 직접 알 필요가 없다. 드라이버 버전이 바뀌어도 여기만 고치면 된다.
 
-힘 추종 내부 루프는 두산 컨트롤러(~1kHz)가 담당한다 — 이 모듈은 목표값/종료
-조건만 던진다 (SDS §1.2 위반 금지 규칙 1).
+현재 장비에는 사용할 수 있는 F/T 센서가 없으므로 이동, 로봇 상태, TCP,
+그리퍼 API만 제공한다.
 """
 import threading
 import time
-from dataclasses import dataclass
 
 import rclpy
 
@@ -18,16 +17,6 @@ from .conversions import TaskPose
 
 class DsrAdapterError(RuntimeError):
     pass
-
-
-@dataclass
-class Wrench:
-    fx_n: float
-    fy_n: float
-    fz_n: float
-    tx_nm: float
-    ty_nm: float
-    tz_nm: float
 
 
 class DsrAdapter:
@@ -67,8 +56,6 @@ class DsrAdapter:
         self._DR_TOOL = dsr.DR_TOOL
         self._DR_MV_MOD_ABS = dsr.DR_MV_MOD_ABS
         self._DR_MV_MOD_REL = dsr.DR_MV_MOD_REL
-        self._DR_FC_MOD_ABS = dsr.DR_FC_MOD_ABS
-        self._DR_FC_MOD_REL = dsr.DR_FC_MOD_REL
         self._DR_QSTOP = dsr.DR_QSTOP
         self._BUSY_STATES = {dsr.DR_STATE_BUSY, dsr.DR_STATE_BLEND,
                               dsr.DR_STATE_ACC, dsr.DR_STATE_CRZ, dsr.DR_STATE_DEC}
@@ -80,12 +67,8 @@ class DsrAdapter:
         # 폴링하는 방식을 쓴다.
         self._amovel = dsr.amovel
         self._amovejx = dsr.amovejx
+        self._amovec = dsr.amovec
         self._check_motion = dsr.check_motion
-        self._task_compliance_ctrl = dsr.task_compliance_ctrl
-        self._release_compliance_ctrl = dsr.release_compliance_ctrl
-        self._set_desired_force = dsr.set_desired_force
-        self._release_force = dsr.release_force
-        self._get_tool_force = dsr.get_tool_force
         self._get_current_posx = dsr.get_current_posx
         self._set_tcp = dsr.set_tcp
         self._get_tcp = dsr.get_tcp
@@ -96,20 +79,13 @@ class DsrAdapter:
         self._ROBOT_MODE_MANUAL = dsr.ROBOT_MODE_MANUAL
         self._ROBOT_MODE_AUTONOMOUS = dsr.ROBOT_MODE_AUTONOMOUS
         self._posx = posx
-        # DSR_ROBOT2 는 DRL(구 로봇 언어) 함수명을 그대로 옮긴 것이므로
-        # get_digital_input(index)/get_robot_state() 이름을 신뢰한다(공식
-        # 파이썬 API 목록의 GPIO/System 분류에 실제로 존재 — safety_monitor
-        # §7.0 처리 참고). dsr_msgs2 의 RobotState 토픽 정확한 이름은 이
-        # 저장소에서 확인할 방법이 없어, 이미 검증된 동기 폴링 함수로
-        # 하트비트를 대신한다 — 응답이 오면 통신 생존으로 본다.
-        self._get_digital_input = dsr.get_digital_input
+        # E-Stop과 통신 상태는 외부 센서가 아니라 컨트롤러 robot_state로 확인한다.
         self._get_robot_state = dsr.get_robot_state
 
         # DSR_ROBOT2 의 각 wrapper 호출은 내부적으로 self._dr_node 를 임시
         # executor 에 물려 spin_until_future_complete 한다. 이 dr_node 를 두
-        # 스레드가 동시에 spin 하면(예: 100Hz 힘 퍼블리시 타이머와 액션 실행
-        # 스레드가 동시에 두산 API 를 부르는 경우) rclpy executor 상태가
-        # 깨진다. 모든 두산 API 호출을 이 락 하나로 직렬화한다.
+        # 스레드가 동시에 spin 하면 rclpy executor 상태가 깨질 수 있으므로
+        # 모든 두산 API 호출을 이 락 하나로 직렬화한다.
         self._lock = threading.Lock()
 
         self._move_stop_client = None
@@ -195,19 +171,46 @@ class DsrAdapter:
         p = self._posx(pose.x_mm, pose.y_mm, pose.z_mm,
                         pose.rz1_deg, pose.ry_deg, pose.rz2_deg)
         mod = self._DR_MV_MOD_REL if relative else self._DR_MV_MOD_ABS
-        _ref = self._DR_TOOL if relative else (self._DR_BASE if ref is None else ref)
+        _ref = (self._DR_TOOL if ref is None else ref) if relative \
+            else (self._DR_BASE if ref is None else ref)
         with self._lock:
             self._amovel(p, vel=float(vel_mms), acc=float(acc_mms2), ref=_ref, mod=mod)
 
     def start_move_joint_to_pose(self, pose: TaskPose, vel_mms: float, acc_mms2: float,
-                                  ref=None, sol: int = 0):
-        """movejx: 목표는 task pose 지만 관절 보간으로 이동 (MoveTo linear=false)."""
+                                  ref=None, sol: int = 2):
+        """movejx: 목표는 task pose 지만 관절 보간으로 이동 (MoveTo linear=false).
+
+        sol(관절 해 분기) 기본값을 0에서 2로 변경 — 이 로봇/셀은
+        get_current_posx 로 실측할 때마다 항상 분기 2가 나왔다(실기 확인,
+        2026-08-24/25). sol=0 으로 두면 로봇이 목표 바로 옆에 있어도
+        그 분기에서 IK 가 안 풀려 amovejx 가 즉시(수십 ms) 조용히 실패한다
+        (반환값을 확인 안 해 예외도 안 남) — ContactPath 접근(movejx) 이
+        NOT REACHABLE 로 즉시 ABORT 되는 문제의 원인이었다.
+        """
         p = self._posx(pose.x_mm, pose.y_mm, pose.z_mm,
                         pose.rz1_deg, pose.ry_deg, pose.rz2_deg)
         _ref = self._DR_BASE if ref is None else ref
         with self._lock:
             self._amovejx(p, vel=float(vel_mms), acc=float(acc_mms2),
                            ref=_ref, mod=self._DR_MV_MOD_ABS, sol=sol)
+
+    def start_move_circle(self, via: TaskPose, end: TaskPose,
+                          vel_mms: float, acc_mms2: float, ref=None):
+        """현재 위치에서 via를 지나 end로 가는 비동기 MoveC를 시작한다."""
+        via_pos = self._posx(via.x_mm, via.y_mm, via.z_mm,
+                              via.rz1_deg, via.ry_deg, via.rz2_deg)
+        end_pos = self._posx(end.x_mm, end.y_mm, end.z_mm,
+                             end.rz1_deg, end.ry_deg, end.rz2_deg)
+        _ref = self._DR_BASE if ref is None else ref
+        try:
+            with self._lock:
+                ret = self._amovec(via_pos, end_pos, vel=float(vel_mms),
+                                    acc=float(acc_mms2), ref=_ref,
+                                    mod=self._DR_MV_MOD_ABS)
+        except Exception as exc:
+            raise DsrAdapterError(f'amovec 호출 실패: {exc}') from exc
+        if ret != 0:
+            raise DsrAdapterError(f'amovec 명령 거부(ret={ret})')
 
     def start_move_rel_tool_z(self, delta_z_mm: float, vel_mms: float, acc_mms2: float):
         self.start_move_line(TaskPose(0.0, 0.0, float(delta_z_mm), 0.0, 0.0, 0.0),
@@ -216,7 +219,13 @@ class DsrAdapter:
     def start_move_rel_tool_xyz(self, dx_mm: float, dy_mm: float, dz_mm: float,
                                  vel_mms: float, acc_mms2: float):
         self.start_move_line(TaskPose(float(dx_mm), float(dy_mm), float(dz_mm), 0.0, 0.0, 0.0),
-                              vel_mms, acc_mms2, relative=True)
+                               vel_mms, acc_mms2, relative=True)
+
+    def start_move_rel_base_xyz(self, dx_mm: float, dy_mm: float, dz_mm: float,
+                                 vel_mms: float, acc_mms2: float):
+        self.start_move_line(
+            TaskPose(float(dx_mm), float(dy_mm), float(dz_mm), 0.0, 0.0, 0.0),
+            vel_mms, acc_mms2, ref=self._DR_BASE, relative=True)
 
     def is_moving(self) -> bool:
         with self._lock:
@@ -258,33 +267,6 @@ class DsrAdapter:
         self._move_stop_client.call_async(req)
         return True
 
-    # --- compliance / force -------------------------------------------------
-    def compliance_on(self, stiffness_6d):
-        with self._lock:
-            self._task_compliance_ctrl(stx=list(stiffness_6d), time=0)
-
-    def compliance_off(self):
-        with self._lock:
-            self._release_compliance_ctrl()
-
-    def set_desired_force(self, force_6d, axis_mask_6d, relative: bool = False):
-        mod = self._DR_FC_MOD_REL if relative else self._DR_FC_MOD_ABS
-        with self._lock:
-            self._set_desired_force(fd=list(force_6d), dir=list(axis_mask_6d), time=0, mod=mod)
-
-    def release_force(self):
-        with self._lock:
-            self._release_force(time=0)
-
-    # --- sensing -------------------------------------------------------------
-    def read_wrench(self, tool_frame: bool = True) -> Wrench:
-        ref = self._DR_TOOL if tool_frame else self._DR_BASE
-        with self._lock:
-            w = self._get_tool_force(ref=ref)
-        if not isinstance(w, (list, tuple)) or len(w) < 6:
-            raise DsrAdapterError('get_tool_force 응답 없음')
-        return Wrench(w[0], w[1], w[2], w[3], w[4], w[5])
-
     def get_pose(self) -> TaskPose:
         with self._lock:
             pos, _sol = self._get_current_posx(ref=self._DR_BASE)
@@ -292,14 +274,7 @@ class DsrAdapter:
             raise DsrAdapterError('get_current_posx 응답 없음')
         return TaskPose(pos[0], pos[1], pos[2], pos[3], pos[4], pos[5])
 
-    # --- 안전 감시용 읽기 전용 폴링 (safety_monitor, NIS §7) --------------------
-    def read_digital_input(self, channel: int) -> bool:
-        with self._lock:
-            val = self._get_digital_input(channel)
-        if val is None:
-            raise DsrAdapterError(f'get_digital_input({channel}) 응답 없음')
-        return bool(val)
-
+    # --- 안전 감시용 읽기 전용 폴링 -------------------------------------------
     def read_robot_state(self):
         """컨트롤러가 응답하는지만 본다 — 반환값 자체는 쓰지 않는다.
         예외 없이 리턴하면 통신 생존, 예외/타임아웃이면 comm_ok=False."""

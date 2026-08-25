@@ -25,7 +25,6 @@ export const SessionResultBanner = memo(function SessionResultBanner({ result }:
       className={`session-result ${ok ? "session-result--ok" : warn ? "session-result--warn" : "session-result--fail"}`}
     >
       세션 종료: {RESULT_LABEL_KO[result.result_code] ?? result.result_code}
-      {result.total_rework > 0 && ` · 재작업 ${result.total_rework}회`}
       {result.final_error?.code && ` · ${result.final_error.code}: ${result.final_error.detail}`}
     </div>
   );

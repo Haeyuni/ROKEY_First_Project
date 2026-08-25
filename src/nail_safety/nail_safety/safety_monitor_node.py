@@ -19,7 +19,7 @@ STOP), 풀면 3으로 복귀. `_ROBOT_STATE_EMERGENCY_STOP = {6, 7}`(RobotState.
 주석상 6/7 둘 다 EMERGENCY_STOP) 에 포함되면 눌림으로 판정한다. 이 호출이
 실패/타임아웃이면 여전히 `FAULT_COMM_LOST`.
 
-**래치 결함**: `FAULT_ESTOP`/`FAULT_COMM_LOST`/`FAULT_TOOL_DROP` 은 물리
+**래치 결함**: `FAULT_ESTOP`/`FAULT_COMM_LOST` 는 물리
 원인이 사라져도 `ResetSafety` 를 불러야 풀린다(§7 결함 코드 표의 "해제
 조건"에 전부 "+ ResetSafety" 가 붙어 있다). 안착 센서(`FAULT_NO_HANDREST`)와
 더스트 컬렉터(`FAULT_NO_DUST`)는 현재 하드웨어에 실제로 달려있지 않아
@@ -90,10 +90,6 @@ class SafetyMonitorNode(Node):
         self.create_timer(1.0 / p('publish_rate_hz').value, self._on_publish_timer,
                            callback_group=self._cb_poll)
 
-        if p('uv_software_control').value:
-            self.get_logger().warn(
-                'uv_software_control=true — v0.1 permit 구조는 이 구현에 없다. '
-                'v0.2 는 UV 상시 ON 이 전제이므로(§7.0) 이 값은 무시된다.')
         if p('auto_reset').value:
             self.get_logger().warn(
                 '[SAFETY] auto_reset=true — 래치 결함이 물리 조건 해소만으로 자동 '
@@ -109,31 +105,18 @@ class SafetyMonitorNode(Node):
     def _declare_parameters(self):
         d = self.declare_parameter
         d('node_timeout_s', 120.0)
-        d('log_force_data', False)
         d('use_mock_hardware', False)  # robot_skill_node 와 동일 — dsr_bringup2 virtual 모드로 대체
         d('dsr_prefix', 'dsr01')
         d('robot_model', 'm0609')
 
         d('publish_rate_hz', 3)
         d('heartbeat_timeout_ms', 3000)
-        d('uv_software_control', False)
         d('auto_reset', False)
 
     # --- /tool/status 구독 ------------------------------------------------------
     def _on_tool_status(self, msg):
         with self._state_lock:
             self._current_tool = msg.current_tool
-            # 툴을 물고 있는데 파지 검증이 깨졌다 — 낙하로 간주(래치).
-            # ToolState 에 별도의 "방금 떨어짐" 플래그가 없어 grip_verified
-            # 를 그대로 신호로 쓴다 — robot_skill_node/tool_manager 가
-            # 이동 중 폭 이상을 감지하면 이 필드를 false 로 채워 발행한다는
-            # 전제다(§5.1 tool_drop_width_delta_mm).
-            if msg.current_tool != ToolState.NONE and not msg.grip_verified:
-                if SafetyState.FAULT_TOOL_DROP not in self._latched_faults:
-                    self.get_logger().error(
-                        '[FAULT_TOOL_DROP] /tool/status: grip_verified=false — '
-                        '자동 복구 금지, 사람이 확인 후 ResetSafety 필요')
-                self._latched_faults.add(SafetyState.FAULT_TOOL_DROP)
 
     # --- ① 상태 수집 루프 (NIS §7 동작 ①②) ---------------------------------------
     def _on_publish_timer(self):
@@ -176,7 +159,6 @@ class SafetyMonitorNode(Node):
             msg.safe_to_move = safe_to_move
             msg.estop_released = not estop_pressed
             msg.comm_ok = comm_ok
-            msg.tool_grip_ok = SafetyState.FAULT_TOOL_DROP not in active_faults
             msg.active_faults = active_faults
             msg.reason = active_faults[0] if active_faults else ''
 
@@ -264,11 +246,6 @@ class SafetyMonitorNode(Node):
                 self._latched_faults.discard(SafetyState.FAULT_ESTOP)
             if self._comm_ok:
                 self._latched_faults.discard(SafetyState.FAULT_COMM_LOST)
-            # TOOL_DROP 은 재확인할 센서가 없다 — "사람이 치운 뒤" 라는 조건을
-            # 검증할 방법이 confirm=true(+operator_note) 자체뿐이라, 여기서는
-            # 운영자 확인을 그대로 신뢰한다(§7 결함 코드 표).
-            self._latched_faults.discard(SafetyState.FAULT_TOOL_DROP)
-
             remaining = sorted(self._latched_faults)
             ok = len(remaining) == 0
         if ok:

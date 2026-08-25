@@ -50,7 +50,6 @@ SEVERITY_BY_CODE = {
     ErrorCode.OK: ErrorCode.SEV_NONE,
     ErrorCode.E_CANCELLED: ErrorCode.SEV_NONE,
     ErrorCode.E_GRIP_FAILED: ErrorCode.SEV_RETRY,
-    ErrorCode.E_TOOL_DROP: ErrorCode.SEV_SAFETY,
     ErrorCode.E_SAFETY_BLOCKED: ErrorCode.SEV_SAFETY,
     ErrorCode.E_TIMEOUT: ErrorCode.SEV_ABORT,
     ErrorCode.E_MOTION_FAILED: ErrorCode.SEV_ABORT,
@@ -75,7 +74,6 @@ class ToolManagerNode(Node):
         self._current_tool = ToolState.NONE
         self._current_tcp = ''
         self._grip_width_mm = 0.0
-        self._grip_verified = False
         self._pick_place_goal_handle = None
 
         self._latest_safety = None
@@ -134,13 +132,11 @@ class ToolManagerNode(Node):
         d('safety_topic', '/safety/status')
         d('safety_status_timeout_s', 1.0)
         d('node_timeout_s', 120.0)
-        d('log_force_data', False)
         d('use_mock_hardware', False)
         d('tool_list', ['sander', 'brush', 'coater', 'uv', 'tweezers'])
         d('rack_config_file', 'config/tool_rack.yaml')
         d('sync_tcp_on_startup', True)
         d('approach_height_mm', 50.0)
-        d('grip_width_tolerance_mm', 1.0)
         d('change_timeout_s', 60.0)
         d('uv_park_facing', 'into_rack')
         # 랙 이동 직전 TCP 를 NEUTRAL_TCP(오프셋 0)로 되돌릴지. 기본 true.
@@ -243,9 +239,6 @@ class ToolManagerNode(Node):
         msg.current_tool = self._current_tool
         msg.active_tcp = self._current_tcp
         msg.grip_width_mm = self._grip_width_mm
-        cfg = self._rack.get(self._current_tool)
-        msg.expected_width_mm = cfg.get('expected_grip_width_mm', 0.0) if cfg else 0.0
-        msg.grip_verified = self._grip_verified
         return msg
 
     def _publish_status(self):
@@ -260,7 +253,6 @@ class ToolManagerNode(Node):
         self._current_tool = ToolState.NONE
         self._current_tcp = ''
         self._grip_width_mm = 0.0
-        self._grip_verified = False
         self._publish_status()
 
     # --- /tool/get_info ---------------------------------------------------------
@@ -367,7 +359,6 @@ class ToolManagerNode(Node):
         started_at = time.monotonic()
         timeout_s = self.get_parameter('change_timeout_s').value
         approach_height = self.get_parameter('approach_height_mm').value
-        tol_default = self.get_parameter('grip_width_tolerance_mm').value
         result = ChangeTool.Result()
 
         def feedback(step, percent):
@@ -436,7 +427,6 @@ class ToolManagerNode(Node):
             self._current_tool = ToolState.NONE
             self._current_tcp = ''   # 툴 없음 (컨트롤러는 NEUTRAL_TCP 상태)
             self._grip_width_mm = 0.0
-            self._grip_verified = False
             self._publish_status()
 
         if goal.target_tool == ToolState.NONE:
@@ -446,11 +436,8 @@ class ToolManagerNode(Node):
             return result
 
         # --- 2) 신규 툴 파지 -----------------------------------------------------
-        # 파지 폭 검증(grip_verified)은 하드웨어에 접촉/폭 되읽기 센서가 없어
-        # 구현 불가 — robot_skill_node 도 명령값을 그대로 되돌려줄 뿐이라
-        # 신뢰할 수 없다(§1.5). 여기서는 PickPlace 자체의 성공/실패(모션·
-        # 그리퍼 명령 실패)만 판단 근거로 쓴다. 실제 파지 여부는 육안으로
-        # 확인할 것.
+        # 실제 폭 되읽기 센서가 없으므로 PickPlace의 모션·그리퍼 명령 성공만
+        # 판단한다. 실제 파지 여부는 운영자가 육안으로 확인해야 한다.
         feedback(1, 30.0)
         cfg = self._rack[goal.target_tool]  # goal_callback 에서 존재를 이미 확인함
 
@@ -458,10 +445,7 @@ class ToolManagerNode(Node):
         pick_goal.mode = PickPlace.Goal.MODE_PICK
         pick_goal.target_key = cfg['slot_frame']
         pick_goal.approach_height_mm = approach_height
-        pick_goal.expected_width_mm = goal.expected_width_mm if goal.expected_width_mm > 0.0 \
-            else cfg.get('expected_grip_width_mm', 0.0)
-        pick_goal.width_tolerance_mm = goal.width_tolerance_mm if goal.width_tolerance_mm > 0.0 \
-            else tol_default
+        pick_goal.grip_width_mm = cfg.get('expected_grip_width_mm', 0.0)
 
         feedback(2, 55.0)
         pp_result, err_code, err_detail = self._call_pick_place(pick_goal, goal_handle, timeout_s)
@@ -496,25 +480,16 @@ class ToolManagerNode(Node):
         feedback(4, 95.0)
         self._current_tool = goal.target_tool
         self._current_tcp = f'tcp_{goal.target_tool}'
-        self._grip_width_mm = pp_result.measured_width_mm
-        # 검증 불가(센서 없음) — PickPlace 가 성공했으니(위 grip_bad 체크
-        # 통과) 파지된 것으로 간주한다. False 로 두면 safety_monitor 가 이를
-        # 툴 낙하로 오판해 FAULT_TOOL_DROP 을 래치한다(§1.5).
-        self._grip_verified = True
+        self._grip_width_mm = pick_goal.grip_width_mm
         self._publish_status()
 
         goal_handle.succeed()
         result.base = self._result_base(True, ErrorCode.OK, '', started_at)
         result.state = self._current_state_msg()
-        result.measured_width_mm = pp_result.measured_width_mm
         return result
 
     def _log_grip_failure(self, code, target_tool, detail):
         self.get_logger().error(f'[{code}] ChangeTool: "{target_tool}" 파지 실패 — {detail}')
-        if code == ErrorCode.E_TOOL_DROP:
-            self.get_logger().error(
-                '툴 낙하 의심 — 자동 복구하지 않습니다. 어디 떨어졌는지 확인하고 '
-                '사람이 치운 뒤에만 새 ChangeTool goal 을 보내세요.')
 
 
 def main(args=None):

@@ -10,7 +10,6 @@ find_package(builtin_interfaces REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ErrorCode.msg"
   "msg/ResultBase.msg"
-  "msg/ForceSample.msg"
   "msg/SafetyState.msg"
   "msg/ToolState.msg"
   "msg/ProcessState.msg"

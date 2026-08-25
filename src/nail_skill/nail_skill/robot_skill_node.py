@@ -6,7 +6,7 @@
 
 제공: /skill/move_to, /skill/pick_place, /skill/contact_path,
       /skill/lateral_contact (Action)
-      /force/data(100Hz), /force/data_ui(20Hz), /robot/pose(50Hz) (Topic)
+      /robot/pose(50Hz) (Topic)
 
 `/skill/probe_point`(ProbePoint) 는 폐지됐다 — 이 스킬을 쓰던 scan_node /
 inspection_node 가 함께 제거됐고, 남은 stone_node 는 티칭된
@@ -21,7 +21,6 @@ docs/개발명세서_SDS.md §3~5, docs/인터페이스정의서_IDS.md (실제 
 그건 stage 를 아는 B계층 공정 노드의 몫이다 (§3.1 ④는 공정 노드가 수행).
 """
 import math
-import threading
 import time
 
 import rclpy
@@ -36,26 +35,20 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from tf2_ros import Buffer, TransformListener
 
 from nail_msgs.action import ContactPath, LateralContact, MoveTo, PickPlace
-from nail_msgs.msg import ErrorCode, ForceSample, ResultBase, SafetyState
-from nail_perception.geometry2d import point_in_polygon
+from nail_msgs.msg import ErrorCode, ResultBase, SafetyState
+from nail_perception.geometry2d import point_in_polygon, point_to_polygon_distance
 
 from .conversions import TaskPose, pose_to_task_pose, task_pose_to_ros_pose
 from .dsr_adapter import DsrAdapter, DsrAdapterError
-from .regression import compute_stiffness
 
 SEVERITY_BY_CODE = {
     ErrorCode.OK: ErrorCode.SEV_NONE,
     ErrorCode.E_CANCELLED: ErrorCode.SEV_NONE,
-    ErrorCode.E_NO_CONTACT: ErrorCode.SEV_RETRY,
-    ErrorCode.E_LATERAL_JAM: ErrorCode.SEV_RETRY,
     ErrorCode.E_GRIP_FAILED: ErrorCode.SEV_RETRY,
-    ErrorCode.E_OVERFORCE: ErrorCode.SEV_ABORT,
     ErrorCode.E_MOTION_FAILED: ErrorCode.SEV_ABORT,
     ErrorCode.E_TIMEOUT: ErrorCode.SEV_ABORT,
     ErrorCode.E_COMM_LOST: ErrorCode.SEV_ABORT,
-    ErrorCode.E_LOW_STIFFNESS: ErrorCode.SEV_SAFETY,
     ErrorCode.E_LATERAL_LIMIT: ErrorCode.SEV_SAFETY,
-    ErrorCode.E_TOOL_DROP: ErrorCode.SEV_SAFETY,
     ErrorCode.E_SAFETY_BLOCKED: ErrorCode.SEV_SAFETY,
 }
 
@@ -97,16 +90,8 @@ class RobotSkillNode(Node):
             self.get_logger().error(str(e))
             raise
 
-        self._force_pub = self.create_publisher(ForceSample, '/force/data', best_effort_qos)
-        self._force_ui_pub = self.create_publisher(ForceSample, '/force/data_ui', best_effort_qos)
         self._pose_pub = self.create_publisher(PoseStamped, '/robot/pose', best_effort_qos)
 
-        self._wrench_lock = threading.Lock()
-        self._filtered_wrench = None
-        self.create_timer(1.0 / p('force_pub_rate_hz').value, self._on_force_timer,
-                           callback_group=self._cb_monitor)
-        self.create_timer(1.0 / p('force_ui_rate_hz').value, self._on_force_ui_timer,
-                           callback_group=self._cb_monitor)
         self.create_timer(1.0 / p('pose_pub_rate_hz').value, self._on_pose_timer,
                            callback_group=self._cb_monitor)
 
@@ -152,21 +137,17 @@ class RobotSkillNode(Node):
         d('node_timeout_s', 120.0)
         d('safety_topic', '/safety/status')
         d('safety_status_timeout_s', 1.0)
-        d('log_force_data', False)
         # use_mock_hardware: NIS §3.6 공통 파라미터로 선언만 한다. 이 노드는
         # mock 분기를 두지 않는다 — 로봇 없이 검증할 때는 두산 공식 가상
         # 모드(SDS §2.3)를 dsr_bringup2 에 `mode:=virtual` 로 띄운다.
         d('use_mock_hardware', False)
         d('retreat_mm', 10.0)
         # 발행 주기
-        d('force_pub_rate_hz', 100)
-        d('force_ui_rate_hz', 20)
         d('pose_pub_rate_hz', 50)
-        d('ft_filter_cutoff_hz', 10.0)
         # 이동 기본값 — PickPlace 가 goal.approach_height_mm 을 안 채웠을 때
         # 쓰는 fallback. 0 이면 접근 지점이 목표 z와 같아져 위로 뜨지 않고
         # 바로 그 자리에서 시작한다.
-        d('approach_height_mm', 0.0)
+        d('approach_height_mm', 20.0)
         # PLACE 시 목표 z 를 이만큼 올려서 놓는다(mm). 0 이면 PICK 과 정확히
         # 같은 높이. 이동 중 툴이 그리퍼 안에서 미끄러지면 그만큼 슬롯 바닥을
         # 눌러버리므로, 실기에서는 1~3mm 를 줘서 살짝 떨어뜨리는 편이 안전하다.
@@ -182,49 +163,14 @@ class RobotSkillNode(Node):
         # 높이 범위가 다름) — 대신 목표 z 로부터의 여유분으로 조절한다.
         # via_key 높이보다 낮은 쪽을 쓴다(그보다 더 올라갈 필요는 없음).
         d('pick_place_transit_clearance_mm', 100.0)
-        d('default_max_force_n', 5.0)
         d('motion_timeout_s', 30.0)
         d('move_max_speed_mms', 300.0)
         d('move_max_accel_mms2', 600.0)
         d('move_pose_tolerance_mm', 1.0)
-        # ContactPath — 법선(+Z) 접촉 탐색·추종.
-        # contact_threshold_n / contact_search_step_mm 은 예전 ProbePoint 와
-        # 공유하던 값이었다(당시 이름은 probe_*). ProbePoint 가 폐지되면서
-        # 쓰는 곳이 ContactPath 하나만 남아 이름을 여기 맞춰 정리했다 —
-        # 예전 이름으로 param set 하던 스크립트가 있으면 같이 고칠 것.
-        d('contact_threshold_n', 0.3)
-        d('contact_search_step_mm', 0.2)
-        d('contact_search_speed_mms', 5.0)
-        d('contact_search_max_depth_mm', 15.0)
-        d('compliance_stiffness', [500.0, 500.0, 200.0, 50.0, 50.0, 50.0])
-        d('contact_force_ramp_mms', 1.0)
-        d('contact_stiffness_window', 20)
-        # F/T 센서 미장착·미작동 하드웨어 대응 — lateral_force_sensing_enabled
-        # 와 동일한 이유(§5.1 경고). false 면 접촉 탐색(힘 임계값 도달까지
-        # 하강)과 힘 추종(compliance/target_force)을 전부 건너뛰고, waypoints
-        # 를 좌표만으로 그대로 따라간다 — max_force_n 초과 감시도 못 한다.
-        # 실기에서 F/T 센서가 힘을 아예 인식하지 못하는 것으로 확인돼(2026-08-24)
-        # 기본값을 false 로 둔다. **waypoints 의 z 가 실제로 표면과 맞는지는
-        # 사람이 보장해야 한다.**
-        d('contact_force_sensing_enabled', False)
-        # LateralContact
+        # 좌표 전용 ContactPath/LateralContact
         d('lateral_search_speed_mms', 3.0)
-        d('lateral_contact_threshold_n', 0.3)
-        d('lateral_max_travel_mm', 8.0)
-        d('lateral_jam_force_n', 4.0)
         d('lateral_retreat_mm', 10.0)
-        d('lateral_search_step_mm', 0.5)
-        # F/T 센서 미장착·미작동 하드웨어 대응(운영자 확인, NIS §5.1 경고).
-        # false 면 접촉 탐색(힘 임계값 도달까지 전진)과 힘 추종(compliance/
-        # target_force)을 전부 건너뛰고, waypoints 를 좌표만으로 그대로
-        # 따라간다 — max_force_n/jam_force_n 초과 감시도 못 한다. 실기에서
-        # F/T 센서가 힘을 아예 인식하지 못해(2026-08-24 확인) true 로 두면
-        # 접촉 탐색이 항상 E_LATERAL_LIMIT 으로 실패하므로 기본값을 false 로
-        # 둔다. **좌표가 실제로 안전한지는 사람이 보장해야 한다.**
-        d('lateral_force_sensing_enabled', False)
         # 그리퍼
-        d('grip_width_tolerance_mm', 1.0)
-        d('tool_drop_width_delta_mm', 2.0)
         d('gripper_settle_s', 1.0)
         # PICK 하강 전 / PLACE 놓기 개방폭(mm). 그리퍼 완전개방('o')은 랙 슬롯
         # 간격보다 넓게 벌어져 옆 슬롯/구조물과 부딪힌다 — 실측으로 조정.
@@ -246,53 +192,7 @@ class RobotSkillNode(Node):
     def _on_cancel(self, goal_handle):
         return CancelResponse.ACCEPT
 
-    # --- 힘/자세 퍼블리시 (SDS §6.1: 별도 타이머 100/20/50 Hz) ------------------
-    def _sample_filtered_wrench(self):
-        try:
-            w = self._adapter.read_wrench()
-        except DsrAdapterError:
-            return None
-        alpha = 1.0  # 컷오프 필터는 아래에서 dt 기반으로 적용
-        with self._wrench_lock:
-            if self._filtered_wrench is None:
-                self._filtered_wrench = w
-            else:
-                cutoff = self.get_parameter('ft_filter_cutoff_hz').value
-                dt = 1.0 / self.get_parameter('force_pub_rate_hz').value
-                rc = 1.0 / (2.0 * math.pi * max(cutoff, 0.01))
-                alpha = dt / (rc + dt)
-                f = self._filtered_wrench
-                w = type(w)(
-                    f.fx_n + alpha * (w.fx_n - f.fx_n),
-                    f.fy_n + alpha * (w.fy_n - f.fy_n),
-                    f.fz_n + alpha * (w.fz_n - f.fz_n),
-                    f.tx_nm + alpha * (w.tx_nm - f.tx_nm),
-                    f.ty_nm + alpha * (w.ty_nm - f.ty_nm),
-                    f.tz_nm + alpha * (w.tz_nm - f.tz_nm),
-                )
-            self._filtered_wrench = w
-        return w
-
-    def _wrench_to_msg(self, w):
-        fs = ForceSample()
-        fs.stamp = self.get_clock().now().to_msg()
-        fs.fx_n, fs.fy_n, fs.fz_n = w.fx_n, w.fy_n, w.fz_n
-        fs.tx_nm, fs.ty_nm, fs.tz_nm = w.tx_nm, w.ty_nm, w.tz_nm
-        return fs
-
-    def _on_force_timer(self):
-        w = self._sample_filtered_wrench()
-        if w is None:
-            return
-        self._force_pub.publish(self._wrench_to_msg(w))
-
-    def _on_force_ui_timer(self):
-        with self._wrench_lock:
-            w = self._filtered_wrench
-        if w is None:
-            return
-        self._force_ui_pub.publish(self._wrench_to_msg(w))
-
+    # --- 자세 퍼블리시 ---------------------------------------------------------
     def _on_pose_timer(self):
         try:
             pose = self._adapter.get_pose()
@@ -322,7 +222,7 @@ class RobotSkillNode(Node):
         pose.orientation.w = 1.0
         return self._transform_pose_to_base(pose, frame_id).position
 
-    def _result_base(self, success, code, detail, started_at, final_wrench=None):
+    def _result_base(self, success, code, detail, started_at):
         base = ResultBase()
         base.success = success
         base.error.code = code
@@ -333,8 +233,6 @@ class RobotSkillNode(Node):
             base.final_pose = task_pose_to_ros_pose(pose)
         except DsrAdapterError:
             pass
-        if final_wrench is not None:
-            base.final_fz_n = final_wrench.fz_n
         base.duration_s = max(0.0, time.monotonic() - started_at)
         base.completed_at = self.get_clock().now().to_msg()
         return base
@@ -507,6 +405,9 @@ class RobotSkillNode(Node):
         if not goal_request.target_key:
             self.get_logger().warn('PickPlace REJECT: E_INVALID_GOAL (target_key 없음)')
             return GoalResponse.REJECT
+        if goal_request.mode == PickPlace.Goal.MODE_PICK and goal_request.grip_width_mm <= 0.0:
+            self.get_logger().warn('PickPlace REJECT: E_INVALID_GOAL (grip_width_mm <= 0)')
+            return GoalResponse.REJECT
         if not self._safe_to_move():
             self.get_logger().warn('PickPlace REJECT: E_SAFETY_BLOCKED')
             return GoalResponse.REJECT
@@ -633,7 +534,7 @@ class RobotSkillNode(Node):
         # already_holding 이면(예: 핀셋을 쥔 채 스톤만 집기) 이 개방 자체를
         #건너뛴다 — 완전개방하면 쥐고 있던 툴을 놓쳐버린다.
         open_width = self.get_parameter('gripper_open_width_mm').value
-        width = goal.grip_width_mm if goal.grip_width_mm > 0.0 else goal.expected_width_mm
+        width = goal.grip_width_mm
 
         if goal.mode == PickPlace.Goal.MODE_PICK and not goal.already_holding:
             if not self._adapter.gripper_set_width(open_width):
@@ -671,17 +572,6 @@ class RobotSkillNode(Node):
                                               '그리퍼 명령 실패', started_at)
             return result
 
-        measured = goal.expected_width_mm if goal.mode == PickPlace.Goal.MODE_PICK else 0.0
-        grip_verified = True
-        if goal.mode == PickPlace.Goal.MODE_PICK and goal.verify_grip:
-            feedback(3, 80.0)
-            # 이 그리퍼 드라이버는 폭 되읽기를 노출하지 않는다 — 명령값을
-            # 그대로 measured_width_mm 에 반영한다 (실측 아님. 이전
-            # tool_manager 구현과 동일한 하드웨어 제약).
-            tol = goal.width_tolerance_mm if goal.width_tolerance_mm > 0.0 else \
-                self.get_parameter('grip_width_tolerance_mm').value
-            grip_verified = abs(measured - goal.expected_width_mm) <= tol
-
         feedback(4, 90.0)
         # PICK 은 툴을 슬롯에서 완전히 빼내야 하므로 approach 보다 높이 든다.
         # PLACE 는 툴을 놓고 빠지는 것뿐이라 approach 로 그대로 복귀한다.
@@ -696,8 +586,6 @@ class RobotSkillNode(Node):
         else:
             retreat = approach
         reason = move_and_wait(retreat, 4, 100.0)
-        result.measured_width_mm = measured
-        result.grip_verified = grip_verified
         result.base = self._finish_from_reason(reason, goal_handle, started_at,
                                                 context='PickPlace')
         return result
@@ -709,224 +597,200 @@ class RobotSkillNode(Node):
         if len(goal_request.waypoints) == 0:
             self.get_logger().warn('ContactPath REJECT: E_INVALID_GOAL (waypoints 비어있음)')
             return GoalResponse.REJECT
+        if goal_request.feed_speed_mms <= 0.0:
+            self.get_logger().warn('ContactPath REJECT: E_INVALID_GOAL (feed_speed_mms <= 0)')
+            return GoalResponse.REJECT
+        arc_indices = set(goal_request.circular_via_indices)
+        if (len(arc_indices) != len(goal_request.circular_via_indices)
+                or any(index <= 0 or index + 1 >= len(goal_request.waypoints)
+                       for index in arc_indices)
+                or any(index + 1 in arc_indices for index in arc_indices)):
+            self.get_logger().warn(
+                'ContactPath REJECT: E_INVALID_GOAL (circular_via_indices 형식 오류)')
+            return GoalResponse.REJECT
         if not self._safe_to_move():
             self.get_logger().warn('ContactPath REJECT: E_SAFETY_BLOCKED')
             return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
     def _cleanup_normal(self, goal_handle, retreat_mm=None):
-        """법선 접근 이탈: -Z 후퇴 후 컴플라이언스/힘 해제 (SDS §3.2).
+        """법선 경로 종료 후 검증된 툴 -Z 방향으로 이탈한다."""
+        self._adapter.start_move_rel_tool_z(
+            -(retreat_mm or self._retreat_mm), 10.0, 50.0)
+        self._adapter.wait_motion_done(
+            10.0, 10.0, should_abort=lambda: not self._safe_to_move())
 
-        실기 확인: 이 툴 자세(ry≈-179°)에서는 tool +Z 가 표면 쪽이라
-        후퇴(표면에서 멀어짐)는 -Z 다."""
-        try:
-            self._adapter.start_move_rel_tool_z(
-                -(retreat_mm or self._retreat_mm), 10.0, 50.0)
-            self._monitor(goal_handle, 10.0, 10.0, lambda: None)
-        finally:
-            self._adapter.compliance_off()
-            self._adapter.release_force()
+    @staticmethod
+    def _tool_z_axis(task_pose):
+        """두산 ZYZ 자세에서 tool +Z 단위벡터를 base 좌표로 계산한다."""
+        rz1 = math.radians(task_pose.rz1_deg)
+        ry = math.radians(task_pose.ry_deg)
+        return (
+            math.cos(rz1) * math.sin(ry),
+            math.sin(rz1) * math.sin(ry),
+            math.cos(ry),
+        )
 
     def _execute_contact_path(self, goal_handle):
         goal = goal_handle.request
         started_at = time.monotonic()
         result = ContactPath.Result()
-        force_log = []
-        max_force_measured = 0.0
-        max_force_seen = 0.0
-        stiffness_samples = []
-        min_stiffness_measured = None
         missed = []
         timeout_s = goal.max_duration_s if goal.max_duration_s > 0.0 else \
             self.get_parameter('motion_timeout_s').value
-        search_speed = self.get_parameter('contact_search_speed_mms').value
-        search_max_depth = self.get_parameter('contact_search_max_depth_mm').value
-        contact_threshold = self.get_parameter('contact_threshold_n').value
-        max_force_n = goal.max_force_n if goal.max_force_n > 0.0 else \
-            self.get_parameter('default_max_force_n').value
 
-        def feedback(pct, current_pass, w=None):
+        def feedback(pct, current_pass):
             fb = ContactPath.Feedback()
             fb.percent = pct
             fb.current_pass = current_pass
-            if w is not None:
-                fb.current_wrench.fx_n, fb.current_wrench.fy_n, fb.current_wrench.fz_n = \
-                    w.fx_n, w.fy_n, w.fz_n
-                fb.current_wrench.tx_nm, fb.current_wrench.ty_nm, fb.current_wrench.tz_nm = \
-                    w.tx_nm, w.ty_nm, w.tz_nm
             goal_handle.publish_feedback(fb)
 
+        contact_offset = goal.contact_offset_mm
+
         try:
-            start_base = self._transform_pose_to_base(goal.waypoints[0], goal.frame_id)
+            if goal.reference_key:
+                reference = self._target_task_pose(goal.reference_key, self._base_frame_id)
+                reference_tool_z = self._tool_z_axis(reference)
+                offset_origin = self._transform_point_to_base(
+                    Point(x=0.0, y=0.0, z=0.0), goal.frame_id)
+
+                def target_from_waypoint(wp):
+                    point_base = self._transform_point_to_base(wp.position, goal.frame_id)
+                    dx = (point_base.x - offset_origin.x) * 1000.0
+                    dy = (point_base.y - offset_origin.y) * 1000.0
+                    dz = (point_base.z - offset_origin.z) * 1000.0
+                    return TaskPose(
+                        reference.x_mm + dx + reference_tool_z[0] * contact_offset,
+                        reference.y_mm + dy + reference_tool_z[1] * contact_offset,
+                        reference.z_mm + dz + reference_tool_z[2] * contact_offset,
+                        reference.rz1_deg, reference.ry_deg, reference.rz2_deg)
+            else:
+                def target_from_waypoint(wp):
+                    task_pose = pose_to_task_pose(
+                        self._transform_pose_to_base(wp, goal.frame_id))
+                    axis = self._tool_z_axis(task_pose)
+                    return TaskPose(
+                        task_pose.x_mm + axis[0] * contact_offset,
+                        task_pose.y_mm + axis[1] * contact_offset,
+                        task_pose.z_mm + axis[2] * contact_offset,
+                        task_pose.rz1_deg, task_pose.ry_deg, task_pose.rz2_deg)
         except Exception as e:
             goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED,
-                                              f'TF 변환 실패: {e}', started_at)
+            result.base = self._result_base(
+                False, ErrorCode.E_INVALID_GOAL,
+                f'접촉 기준점 또는 경로 좌표계 조회 실패: {e}', started_at)
             return result
-        start_pose = pose_to_task_pose(start_base)
-        approach = TaskPose(start_pose.x_mm, start_pose.y_mm,
-                             start_pose.z_mm + self.get_parameter('approach_height_mm').value,
-                             start_pose.rz1_deg, start_pose.ry_deg, start_pose.rz2_deg)
 
-        self._adapter.start_move_line(approach, search_speed * 4, search_speed * 8)
+        try:
+            start_pose = target_from_waypoint(goal.waypoints[0])
+        except Exception as e:
+            goal_handle.abort()
+            result.base = self._result_base(
+                False, ErrorCode.E_MOTION_FAILED,
+                f'첫 경로점 TF 변환 실패: {e}', started_at)
+            return result
+
+        tool_z = self._tool_z_axis(start_pose)
+        approach_height = self.get_parameter('approach_height_mm').value
+        approach = TaskPose(
+            start_pose.x_mm - tool_z[0] * approach_height,
+            start_pose.y_mm - tool_z[1] * approach_height,
+            start_pose.z_mm - tool_z[2] * approach_height,
+            start_pose.rz1_deg, start_pose.ry_deg, start_pose.rz2_deg)
+
+        approach_speed = max(1.0, goal.feed_speed_mms)
+        try:
+            self._adapter.start_move_joint_to_pose(
+                approach, approach_speed, approach_speed * 2)
+        except Exception as exc:
+            goal_handle.abort()
+            result.base = self._result_base(
+                False, ErrorCode.E_MOTION_FAILED,
+                f'ContactPath 접근 MoveJX 명령 실패: {exc}', started_at)
+            return result
         reason = self._monitor(goal_handle, timeout_s, 20.0, lambda: feedback(5.0, 0))
+        reason, _ = self._verify_position_reached(reason, approach)
         if reason != 'ok':
             result.base = self._finish_from_reason(reason, goal_handle, started_at,
                                                      context='ContactPath')
             return result
 
-        force_sensing = self.get_parameter('contact_force_sensing_enabled').value
-
-        # 표면 탐색: 접촉 감지까지 조금씩 하강
-        step_mm = self.get_parameter('contact_search_step_mm').value
-        travelled = 0.0
-        contacted = False
-        if not force_sensing:
-            # 힘 센서 미작동 — waypoints[0] 의 z 를 표면으로 신뢰하고 그
-            # 좌표까지 직접 이동한다(LateralContact 의
-            # lateral_force_sensing_enabled=False 와 동일한 방식). 접촉
-            # 감지/과압 방어가 없으므로 waypoints 의 z 가 실제로 표면과
-            # 맞는지는 사람이 보장해야 한다.
-            if goal_handle.is_cancel_requested or not self._safe_to_move():
-                self._cleanup_normal(goal_handle)
-                reason = 'cancel' if goal_handle.is_cancel_requested else 'safety'
-                result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                         context='ContactPath 탐색(좌표전용)')
-                return result
-            self._adapter.start_move_line(start_pose, search_speed, search_speed * 2)
-            reason = self._monitor(goal_handle, timeout_s, 20.0, lambda: feedback(10.0, 0))
-            if reason != 'ok':
-                self._cleanup_normal(goal_handle)
-                result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                         context='ContactPath 탐색(좌표전용)')
-                return result
-            contacted = True
-        else:
-            while travelled < search_max_depth:
-                if goal_handle.is_cancel_requested or not self._safe_to_move():
-                    self._cleanup_normal(goal_handle)
-                    reason = 'cancel' if goal_handle.is_cancel_requested else 'safety'
-                    result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                             context='ContactPath 탐색')
-                    return result
-                # 실기 확인: 이 툴 자세(ry≈-179°)에서는 tool +Z 가 표면 쪽이다.
-                self._adapter.start_move_rel_tool_z(step_mm, search_speed, search_speed * 2)
-                self._monitor(goal_handle, 5.0, 20.0, lambda: None)
-                travelled += step_mm
-                w = self._adapter.read_wrench()
-                force_log.append(self._wrench_to_msg(w))
-                if abs(w.fz_n) >= contact_threshold:
-                    contacted = True
-                    break
-
-        if not contacted:
-            self._cleanup_normal(goal_handle)
-            self._log_abort(ErrorCode.E_NO_CONTACT,
-                             f'ContactPath: {search_max_depth}mm 탐색 후 접촉 미검출')
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_NO_CONTACT,
-                                              '탐색 깊이 내 표면 미검출', started_at)
-            result.force_log = force_log
-            return result
-
-        if force_sensing:
-            if goal.use_compliance:
-                self._adapter.compliance_on(self.get_parameter('compliance_stiffness').value)
-            self._adapter.set_desired_force(
-                [0.0, 0.0, -abs(goal.target_force_n), 0.0, 0.0, 0.0], [0, 0, 1, 0, 0, 0])
-
         passes = max(1, goal.passes)
         n_wp = len(goal.waypoints)
         allowed_xy = [(pt.x, pt.y) for pt in goal.allowed_polygon]
+        arc_indices = set(goal.circular_via_indices)
         aborted = None
+        max_path_error_mm = 0.0
         for pass_idx in range(passes):
-            for wp_idx, wp in enumerate(goal.waypoints):
-                if aborted:
-                    missed.append(pass_idx * n_wp + wp_idx)
-                    continue
-                # TCP 이탈 감시: allowed_polygon 이 주어졌으면 그 밖의 waypoint 는
-                # 아예 이동하지 않고 건너뛴다 (호출자의 궤적 생성 버그에 대한
-                # 방어선 — IDS ContactPath.allowed_polygon 주석 그대로).
-                if len(allowed_xy) >= 3 and \
-                        not point_in_polygon(wp.position.x, wp.position.y, allowed_xy):
-                    self.get_logger().warn(
-                        f'ContactPath: waypoint {wp_idx} ({wp.position.x:.4f},'
-                        f'{wp.position.y:.4f}) 가 allowed_polygon 밖 — 건너뜀')
-                    missed.append(pass_idx * n_wp + wp_idx)
-                    continue
+            wp_idx = 0
+            while wp_idx < n_wp:
+                is_circle = wp_idx in arc_indices
+                command_indices = (wp_idx, wp_idx + 1) if is_circle else (wp_idx,)
+                outside = next((index for index in command_indices
+                                if len(allowed_xy) >= 3
+                                and not point_in_polygon(
+                                    goal.waypoints[index].position.x,
+                                    goal.waypoints[index].position.y, allowed_xy)
+                                and point_to_polygon_distance(
+                                    (goal.waypoints[index].position.x,
+                                     goal.waypoints[index].position.y), allowed_xy) > 1e-6), None)
+                if outside is not None:
+                    self.get_logger().error(
+                        f'ContactPath: waypoint {outside}가 allowed_polygon 밖 — 경로 중단')
+                    missed.append(pass_idx * n_wp + outside)
+                    aborted = 'unreachable'
+                    break
                 try:
-                    base_wp = self._transform_pose_to_base(wp, goal.frame_id)
-                except Exception:
+                    targets = [target_from_waypoint(goal.waypoints[index])
+                               for index in command_indices]
+                except Exception as exc:
+                    self.get_logger().error(
+                        f'ContactPath: waypoint {wp_idx} 변환 실패: {exc}')
                     missed.append(pass_idx * n_wp + wp_idx)
-                    continue
-                target = pose_to_task_pose(base_wp)
-                self._adapter.start_move_line(target, goal.feed_speed_mms,
-                                               goal.feed_speed_mms * 2)
+                    aborted = 'unreachable'
+                    break
+
+                try:
+                    if is_circle:
+                        self._adapter.start_move_circle(
+                            targets[0], targets[1], goal.feed_speed_mms,
+                            goal.feed_speed_mms * 2)
+                        target = targets[1]
+                        final_index = wp_idx + 1
+                    else:
+                        target = targets[0]
+                        final_index = wp_idx
+                        self._adapter.start_move_line(
+                            target, goal.feed_speed_mms, goal.feed_speed_mms * 2)
+                except DsrAdapterError as exc:
+                    self.get_logger().error(f'ContactPath 이동 명령 거부: {exc}')
+                    missed.extend(pass_idx * n_wp + index for index in command_indices)
+                    aborted = 'unreachable'
+                    break
 
                 def on_tick():
-                    nonlocal max_force_measured, max_force_seen
-                    if not force_sensing:
-                        feedback(min(99.0, 100.0 * (pass_idx * n_wp + wp_idx + 1)
-                                     / (passes * n_wp)), pass_idx)
-                        return
-                    w = self._adapter.read_wrench()
-                    force_log.append(self._wrench_to_msg(w))
-                    mag = math.sqrt(w.fx_n ** 2 + w.fy_n ** 2 + w.fz_n ** 2)
-                    max_force_seen = max(max_force_seen, mag)
-                    max_force_measured = max(max_force_measured, abs(w.fz_n))
-                    stiffness_samples.append((travelled, w.fz_n))
-                    pct = 100.0 * (pass_idx * n_wp + wp_idx + 1) / (passes * n_wp)
-                    feedback(min(99.0, pct), pass_idx, w)
+                    pct = 100.0 * (pass_idx * n_wp + final_index + 1) / (passes * n_wp)
+                    feedback(min(99.0, pct), pass_idx)
 
                 reason = self._monitor(goal_handle, timeout_s, 20.0, on_tick)
+                reason, err_mm = self._verify_position_reached(reason, target)
+                if err_mm >= 0.0:
+                    max_path_error_mm = max(max_path_error_mm, err_mm)
                 if reason != 'ok':
                     aborted = reason
-                    missed.append(pass_idx * n_wp + wp_idx)
-                    continue
-                if force_sensing and max_force_seen > max_force_n:
-                    aborted = 'overforce'
-                    missed.append(pass_idx * n_wp + wp_idx)
-                    continue
-                if force_sensing and goal.abort_on_low_stiffness and len(stiffness_samples) >= \
-                        self.get_parameter('contact_stiffness_window').value:
-                    window = stiffness_samples[-self.get_parameter('contact_stiffness_window').value:]
-                    k, r2, n = compute_stiffness(window, contact_threshold, 3)
-                    if k is not None and r2 >= 0.5:
-                        min_stiffness_measured = k if min_stiffness_measured is None \
-                            else min(min_stiffness_measured, k)
-                        if k < goal.min_stiffness_n_per_mm:
-                            aborted = 'low_stiffness'
-                            missed.append(pass_idx * n_wp + wp_idx)
-            result.passes_done = pass_idx + 1
+                    missed.append(pass_idx * n_wp + final_index)
+                    break
+                wp_idx = final_index + 1
+            if not aborted:
+                result.passes_done = pass_idx + 1
             if aborted:
                 break
 
         self._cleanup_normal(goal_handle)
-
-        mean_force = (sum(math.sqrt(f.fx_n ** 2 + f.fy_n ** 2 + f.fz_n ** 2) for f in force_log)
-                      / len(force_log)) if force_log else 0.0
-        result.mean_force_n = mean_force
-        result.max_force_measured_n = max_force_seen
-        result.min_stiffness_measured_n_per_mm = min_stiffness_measured or 0.0
+        result.path_error_mm = max_path_error_mm
         result.missed_segment_indices = missed
-        result.force_log = force_log
-
-        if aborted == 'overforce':
-            self._log_abort(ErrorCode.E_OVERFORCE, f'ContactPath: max_force_n({max_force_n}) 초과')
-            goal_handle.abort()
-            result.abort_reason = 'ABORT_OVERFORCE'
-            result.base = self._result_base(False, ErrorCode.E_OVERFORCE, '힘 상한 초과',
-                                              started_at)
-            return result
-        if aborted == 'low_stiffness':
-            self._log_abort(ErrorCode.E_LOW_STIFFNESS,
-                             f'ContactPath: min_stiffness({goal.min_stiffness_n_per_mm}) 미만')
-            goal_handle.abort()
-            result.abort_reason = 'ABORT_LOW_STIFFNESS'
-            result.base = self._result_base(False, ErrorCode.E_LOW_STIFFNESS,
-                                              '강성 하한 미만 — 피부 접촉 의심', started_at)
-            return result
-        if aborted in ('cancel', 'safety', 'timeout'):
+        if aborted is not None:
+            result.abort_reason = f'ABORT_{aborted.upper()}'
             result.base = self._finish_from_reason(aborted, goal_handle, started_at,
                                                      context='ContactPath')
             return result
@@ -939,10 +803,11 @@ class RobotSkillNode(Node):
     # LateralContact — 수평 접근 (v0.2 신설, ★ 연마 전용)
     # =========================================================================
     def _on_goal_lateral_contact(self, goal_request):
-        if goal_request.travel_limit_mm <= 0.0:
-            self.get_logger().warn(
-                'LateralContact REJECT: E_INVALID_GOAL (travel_limit_mm <= 0 — '
-                '접근 방향 확인 필요, SDS §5.3)')
+        if len(goal_request.waypoints) == 0:
+            self.get_logger().warn('LateralContact REJECT: E_INVALID_GOAL (waypoints 비어있음)')
+            return GoalResponse.REJECT
+        if goal_request.feed_speed_mms <= 0.0:
+            self.get_logger().warn('LateralContact REJECT: E_INVALID_GOAL (feed_speed_mms <= 0)')
             return GoalResponse.REJECT
         v = goal_request.approach_vector
         if math.sqrt(v.x ** 2 + v.y ** 2 + v.z ** 2) < 1e-6:
@@ -953,39 +818,18 @@ class RobotSkillNode(Node):
             return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
-    @staticmethod
-    def _approach_axis_index(v: Vector3):
-        """SDS §5.3: 접근 벡터의 지배적 성분을 축(0=X 1=Y 2=Z)으로 근사한다.
-
-        LateralContact 는 수평 접근 전용이라 실사용에서는 X/Y 다.
-        """
-        comps = [abs(v.x), abs(v.y), abs(v.z)]
-        return comps.index(max(comps))
-
     def _cleanup_lateral(self, goal_handle, approach_vec_base, retreat_mm):
-        try:
-            dx = -approach_vec_base.x * retreat_mm
-            dy = -approach_vec_base.y * retreat_mm
-            dz = -approach_vec_base.z * retreat_mm
-            self._adapter.start_move_rel_tool_xyz(dx, dy, dz, 10.0, 50.0)
-            self._monitor(goal_handle, 10.0, 10.0, lambda: None)
-        finally:
-            self._adapter.compliance_off()
-            self._adapter.release_force()
+        dx = -approach_vec_base.x * retreat_mm
+        dy = -approach_vec_base.y * retreat_mm
+        dz = -approach_vec_base.z * retreat_mm
+        self._adapter.start_move_rel_base_xyz(dx, dy, dz, 10.0, 50.0)
+        self._adapter.wait_motion_done(
+            10.0, 10.0, should_abort=lambda: not self._safe_to_move())
 
     def _execute_lateral_contact(self, goal_handle):
         goal = goal_handle.request
         started_at = time.monotonic()
         result = LateralContact.Result()
-        force_log = []
-        max_force_measured = 0.0
-        max_jam_force = 0.0
-        max_travel = 0.0
-
-        node_limit = self.get_parameter('lateral_max_travel_mm').value
-        applied_limit = min(goal.travel_limit_mm, node_limit) if node_limit > 0.0 \
-            else goal.travel_limit_mm
-        result.applied_travel_limit_mm = applied_limit
 
         # approach_vector 는 goal.frame_id 기준 — base 로 회전만 변환 (병진 없음)
         try:
@@ -1001,127 +845,19 @@ class RobotSkillNode(Node):
         approach_vec = Vector3(x=tip.x - origin.x, y=tip.y - origin.y, z=tip.z - origin.z)
         n = math.sqrt(approach_vec.x ** 2 + approach_vec.y ** 2 + approach_vec.z ** 2) or 1.0
         approach_vec = Vector3(x=approach_vec.x / n, y=approach_vec.y / n, z=approach_vec.z / n)
-        axis = self._approach_axis_index(approach_vec)
-        axis_sign = [approach_vec.x, approach_vec.y, approach_vec.z][axis]
-        axis_sign = 1.0 if axis_sign >= 0.0 else -1.0
 
         timeout_s = goal.max_duration_s if goal.max_duration_s > 0.0 else \
             self.get_parameter('motion_timeout_s').value
-        search_speed = self.get_parameter('lateral_search_speed_mms').value
-        step_mm = self.get_parameter('lateral_search_step_mm').value
-        contact_threshold = self.get_parameter('lateral_contact_threshold_n').value
+        approach_speed = self.get_parameter('lateral_search_speed_mms').value
         retreat_mm = goal.retreat_mm if goal.retreat_mm > 0.0 else \
             self.get_parameter('lateral_retreat_mm').value
 
-        def feedback(pct, current_pass, travel_mm, w=None):
+        def feedback(pct, current_pass):
             fb = LateralContact.Feedback()
             fb.percent = pct
             fb.current_pass = current_pass
-            fb.travel_mm = travel_mm
-            if w is not None:
-                fb.current_wrench.fx_n, fb.current_wrench.fy_n, fb.current_wrench.fz_n = \
-                    w.fx_n, w.fy_n, w.fz_n
             goal_handle.publish_feedback(fb)
 
-        def axis_component(w):
-            return [w.fx_n, w.fy_n, w.fz_n][axis] * axis_sign
-
-        # 1) 작업 평면 높이로 첫 waypoint 이동 (waypoints[0] 에 이미 work_plane
-        #    높이가 반영되어 있다고 가정 — nail_local_frame 은 static_frames.yaml
-        #    에 티칭된 고정 TF 이고, 이 노드는 그 좌표계 규약을 강제하지 않는다)
-        if len(goal.waypoints) > 0:
-            try:
-                start_base = self._transform_pose_to_base(goal.waypoints[0], goal.frame_id)
-            except Exception as e:
-                goal_handle.abort()
-                result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED,
-                                                  f'TF 변환 실패: {e}', started_at)
-                return result
-            start_pose = pose_to_task_pose(start_base)
-            self._adapter.start_move_line(start_pose, search_speed * 4, search_speed * 8)
-            reason = self._monitor(goal_handle, timeout_s, 20.0, lambda: feedback(5.0, 0, 0.0))
-            if reason != 'ok':
-                result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                         context='LateralContact')
-                return result
-
-        force_sensing = self.get_parameter('lateral_force_sensing_enabled').value
-
-        # 2) 수평 탐색: 접촉 감지 or travel_limit_mm 초과
-        travelled = 0.0
-        contacted = False
-        if not force_sensing:
-            # 힘 센서 미작동 — travel_limit_mm 을 "여기까지 가면 접촉"으로
-            # 신뢰하고 한 번에 전진한다. 접촉 감지/과압 방어가 없으므로
-            # travel_limit_mm 자체가 안전 거리인지 사람이 보장해야 한다.
-            if goal_handle.is_cancel_requested or not self._safe_to_move():
-                self._cleanup_lateral(goal_handle, approach_vec, retreat_mm)
-                reason = 'cancel' if goal_handle.is_cancel_requested else 'safety'
-                result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                         context='LateralContact 탐색(좌표전용)')
-                return result
-            dx = approach_vec.x * applied_limit
-            dy = approach_vec.y * applied_limit
-            dz = approach_vec.z * applied_limit
-            self._adapter.start_move_rel_tool_xyz(dx, dy, dz, search_speed, search_speed * 2)
-            reason = self._monitor(goal_handle, timeout_s, 20.0,
-                                    lambda: feedback(10.0, 0, applied_limit))
-            if reason != 'ok':
-                self._cleanup_lateral(goal_handle, approach_vec, retreat_mm)
-                result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                         context='LateralContact 탐색(좌표전용)')
-                return result
-            travelled = applied_limit
-            max_travel = applied_limit
-            contacted = True
-        else:
-            while travelled < applied_limit:
-                if goal_handle.is_cancel_requested or not self._safe_to_move():
-                    self._cleanup_lateral(goal_handle, approach_vec, retreat_mm)
-                    reason = 'cancel' if goal_handle.is_cancel_requested else 'safety'
-                    result.base = self._finish_from_reason(reason, goal_handle, started_at,
-                                                             context='LateralContact 탐색')
-                    return result
-                dx, dy, dz = (approach_vec.x * step_mm, approach_vec.y * step_mm,
-                              approach_vec.z * step_mm)
-                self._adapter.start_move_rel_tool_xyz(dx, dy, dz, search_speed, search_speed * 2)
-                self._monitor(goal_handle, 5.0, 20.0, lambda: None)
-                travelled += step_mm
-                max_travel = max(max_travel, travelled)
-                w = self._adapter.read_wrench()
-                force_log.append(self._wrench_to_msg(w))
-                feedback(10.0, 0, travelled, w)
-                if axis_component(w) >= contact_threshold:
-                    contacted = True
-                    break
-
-        if not contacted:
-            self._cleanup_lateral(goal_handle, approach_vec, retreat_mm)
-            self._log_abort(ErrorCode.E_LATERAL_LIMIT,
-                             f'LateralContact: travel={travelled:.2f}mm '
-                             f'limit={applied_limit:.2f}mm 까지 접촉 미검출')
-            goal_handle.abort()
-            result.abort_reason = 'ABORT_LATERAL_LIMIT'
-            result.max_travel_mm = max_travel
-            result.base = self._result_base(False, ErrorCode.E_LATERAL_LIMIT,
-                                              '접근축 진행 한계 초과 — 접촉 미검출', started_at)
-            result.force_log = force_log
-            return result
-
-        # 3~4) target_force 까지 접근 + 컴플라이언스 (접근축만 힘 제어)
-        # 힘 센서가 없으면 컴플라이언스/목표힘 자체가 의미 없어 건너뛴다 —
-        # 아래 waypoints 순회도 순수 좌표 이동이 된다.
-        if force_sensing:
-            stiffness = [3000.0] * 6
-            stiffness[axis] = 200.0
-            self._adapter.compliance_on(stiffness)
-            force_6d = [0.0] * 6
-            force_6d[axis] = -abs(goal.target_force_n) * axis_sign
-            axis_mask = [0] * 6
-            axis_mask[axis] = 1
-            self._adapter.set_desired_force(force_6d, axis_mask)
-
-        # 5) waypoints 순회
         passes = max(1, goal.passes)
         n_wp = len(goal.waypoints)
         aborted = None
@@ -1132,79 +868,29 @@ class RobotSkillNode(Node):
                 try:
                     base_wp = self._transform_pose_to_base(wp, goal.frame_id)
                 except Exception:
-                    continue
+                    aborted = 'unreachable'
+                    break
                 target = pose_to_task_pose(base_wp)
-                self._adapter.start_move_line(target, goal.feed_speed_mms,
-                                               goal.feed_speed_mms * 2)
+                speed = approach_speed if wp_idx == 0 else goal.feed_speed_mms
+                self._adapter.start_move_line(target, speed, speed * 2)
 
                 def on_tick():
-                    nonlocal max_force_measured, max_jam_force, travelled, max_travel
-                    w = None
-                    if force_sensing:
-                        w = self._adapter.read_wrench()
-                        force_log.append(self._wrench_to_msg(w))
-                        a_force = abs(axis_component(w))
-                        max_force_measured = max(max_force_measured, a_force)
-                        other = [abs(w.fx_n), abs(w.fy_n), abs(w.fz_n)]
-                        other.pop(axis)
-                        jam = max(other)
-                        max_jam_force = max(max_jam_force, jam)
                     pct = 100.0 * (pass_idx * n_wp + wp_idx + 1) / (passes * n_wp)
-                    feedback(min(99.0, pct), pass_idx, travelled, w)
+                    feedback(min(99.0, pct), pass_idx)
 
                 reason = self._monitor(goal_handle, timeout_s, 20.0, on_tick)
+                reason, _ = self._verify_position_reached(reason, target)
                 if reason != 'ok':
                     aborted = reason
-                    continue
-                if max_force_measured > goal.max_force_n:
-                    aborted = 'overforce'
-                    continue
-                if travelled > applied_limit:
-                    aborted = 'lateral_limit'
-                    continue
-                if max_jam_force > goal.jam_force_n:
-                    aborted = 'jam'
-                    continue
-            result.passes_done = pass_idx + 1
+                    break
+            if not aborted:
+                result.passes_done = pass_idx + 1
             if aborted:
                 break
 
         self._cleanup_lateral(goal_handle, approach_vec, retreat_mm)
-
-        mean_force = (sum(abs(axis_component(self._msg_to_wrench(f))) for f in force_log)
-                      / len(force_log)) if force_log else 0.0
-        result.mean_force_n = mean_force
-        result.max_force_measured_n = max_force_measured
-        result.max_travel_mm = max_travel
-        result.max_jam_force_n = max_jam_force
-        result.force_log = force_log
-
-        if aborted == 'overforce':
-            self._log_abort(ErrorCode.E_OVERFORCE,
-                             f'LateralContact: max_force_n({goal.max_force_n}) 초과')
-            goal_handle.abort()
-            result.abort_reason = 'ABORT_OVERFORCE'
-            result.base = self._result_base(False, ErrorCode.E_OVERFORCE, '접근축 힘 상한 초과',
-                                              started_at)
-            return result
-        if aborted == 'lateral_limit':
-            self._log_abort(ErrorCode.E_LATERAL_LIMIT,
-                             f'LateralContact: travel={travelled:.2f}mm '
-                             f'limit={applied_limit:.2f}mm 초과 진행')
-            goal_handle.abort()
-            result.abort_reason = 'ABORT_LATERAL_LIMIT'
-            result.base = self._result_base(False, ErrorCode.E_LATERAL_LIMIT,
-                                              '접근축 진행 한계 초과 ★', started_at)
-            return result
-        if aborted == 'jam':
-            self._log_abort(ErrorCode.E_LATERAL_JAM,
-                             f'LateralContact: jam_force_n({goal.jam_force_n}) 초과')
-            goal_handle.abort()
-            result.abort_reason = 'ABORT_LATERAL_JAM'
-            result.base = self._result_base(False, ErrorCode.E_LATERAL_JAM,
-                                              '진행축 저항 급증 — 모서리 걸림 의심', started_at)
-            return result
-        if aborted in ('cancel', 'safety', 'timeout'):
+        if aborted is not None:
+            result.abort_reason = f'ABORT_{aborted.upper()}'
             result.base = self._finish_from_reason(aborted, goal_handle, started_at,
                                                      context='LateralContact')
             return result
@@ -1212,11 +898,6 @@ class RobotSkillNode(Node):
         goal_handle.succeed()
         result.base = self._result_base(True, ErrorCode.OK, '', started_at)
         return result
-
-    @staticmethod
-    def _msg_to_wrench(fs: ForceSample):
-        from .dsr_adapter import Wrench
-        return Wrench(fs.fx_n, fs.fy_n, fs.fz_n, fs.tx_nm, fs.ty_nm, fs.tz_nm)
 
 
 def main(args=None):

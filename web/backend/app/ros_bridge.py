@@ -30,9 +30,7 @@ import roslibpy
 logger = logging.getLogger("nail_web.ros_bridge")
 
 # 토픽 경로 → (ROS 메시지 타입, WebSocket 프로토콜의 `type` 필드).
-# probe(강성 맵)·검증(판정/접촉력) 단계 시각화 제거로 safety/state 두 토픽만
-# 남는다. `/force/data`(100Hz)는 절대 포함하지 않는다 (IR-02, NIS §9
-# "allow_force_raw 금지").
+# 웹은 안전 상태와 공정 상태 두 토픽만 구독한다.
 RELAY_TOPICS: dict[str, tuple[str, str]] = {
     "/safety/status": ("nail_msgs/SafetyState", "safety"),
     "/process/status": ("nail_msgs/ProcessState", "state"),
@@ -183,7 +181,6 @@ def make_run_session_goal(
     shape_profile_id: str,
     target_material: str,
     layer_total: int,
-    max_rework: int,
     enable_brush: bool,
     enable_stone: bool,
 ) -> dict:
@@ -194,7 +191,6 @@ def make_run_session_goal(
         "shape_profile_id": shape_profile_id,
         "target_material": target_material,
         "layer_total": layer_total,
-        "max_rework": max_rework,
         "enable_brush": enable_brush,
         "enable_stone": enable_stone,
     }

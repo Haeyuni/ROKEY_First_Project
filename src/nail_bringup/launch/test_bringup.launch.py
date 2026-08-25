@@ -44,8 +44,8 @@ ros2 launch nail_bringup test_bringup.launch.py nodes:=safety,skill,tool,sanding
 `coating` `curing` `stone` `orchestrator` (또는 `all`). 콤마로 여러 개.
 
 **`scan` / `inspection` 토큰은 없어졌다** — scan_node 와 inspection_node 는
-폐지됐다(탐침 기반 공정 제거). 손톱 경계는 이제 스캔 결과가 아니라
-`config/static_frames.yaml` 의 `nail_region` 에서 온다 (아래 `frames` 항목).
+폐지됐다. 연마·경화·스톤 경계는 `static_frames.yaml`, 브러싱·코팅 경계는
+`nail_process/config/taught_surfaces.yaml`의 툴별 6-Pose에서 온다.
 
 각 토큰이 실제로 무엇을 필요로 하는지는 NIS-NAIL-v0.3 §11.1 인터페이스
 매트릭스와 docs/노드별_단위테스트_가이드_v0.3.md 를 참조 — 이 launch 파일은
@@ -61,15 +61,14 @@ ros2 launch nail_bringup test_bringup.launch.py nodes:=safety,skill,tool,sanding
    띄운다 — 그중 **`nail_local_frame` 이 필수**다. sanding/brushing/coating/
    curing/stone 이 하위 스킬을 부를 때 쓰는 frame_id 가 전부 이 이름이라,
    `frames` 를 빼면 그 공정들이 전부 TF lookup 실패로 ABORT 된다.
-2. `nail_region:` 의 크기를 공정 노드 5개(sanding/brushing/coating/curing/
-   stone)에 `nail_size_x_mm` / `nail_size_y_mm` / `nail_boundary_points`
-   파라미터로 **주입**한다. 스캔이 폐지된 뒤 손톱 경계의 유일한 출처다.
+2. `nail_region:` 의 크기를 sanding/curing/stone에 `nail_size_x_mm` /
+   `nail_size_y_mm` / `nail_boundary_points` 파라미터로 **주입**한다.
    이 주입은 `frames` 토큰과 무관하게 공정 노드가 하나라도 있으면 일어나고,
    `nail_region` 이 없거나 값이 이상하면 launch 자체가 실패한다
    (`_nail_region_params`) — 틀린 경계로 로봇이 도는 것보다 안 뜨는 게 낫다.
 
-⚠️ 그래도 **공정 노드를 띄울 땐 `frames` 를 항상 같이 넣을 것.** 크기는
-파라미터로 들어가지만 위치(`nail_local_frame` TF)는 `frames` 가 띄운다.
+브러싱·코팅은 `surface_config_path`로 별도 여섯 Pose 설정을 받으며,
+`configured=false`인 동안 goal을 거부한다.
 """
 import math
 
@@ -100,9 +99,8 @@ _NODE_SPECS = {
 _ALL_ORDER = ['frames', 'safety', 'skill', 'tool', 'sanding', 'brushing',
               'coating', 'curing', 'stone', 'orchestrator']
 
-# `nail_region` 크기를 파라미터로 받아야 하는 노드들 — 손톱 경계를 직접
-# 만드는 공정 노드 전부다 (orchestrator 는 경로를 안 만들어서 빠진다).
-_NAIL_REGION_TOKENS = ('sanding', 'brushing', 'coating', 'curing', 'stone')
+# 브러싱/코팅은 각자 여섯 티칭 Pose를 사용하므로 기존 타원 영역을 받지 않는다.
+_NAIL_REGION_TOKENS = ('sanding', 'curing', 'stone')
 
 
 # --- frame 값 <-> 3x3 회전행렬 계산 (absolute: true 프레임의 부모 기준 상대값
@@ -332,6 +330,7 @@ def _launch_setup(context, *args, **kwargs):
     robot_model = LaunchConfiguration('robot_model').perform(context)
     rack_config_file = LaunchConfiguration('rack_config_file').perform(context)
     targets_yaml_path = LaunchConfiguration('targets_yaml_path').perform(context)
+    surface_config_path = LaunchConfiguration('surface_config_path').perform(context)
     base_frame_id = LaunchConfiguration('base_frame_id').perform(context)
     static_frames_file = LaunchConfiguration('static_frames_file').perform(context)
     log_level = LaunchConfiguration('log_level').perform(context)
@@ -365,6 +364,8 @@ def _launch_setup(context, *args, **kwargs):
         if token == 'skill':
             params['targets_yaml_path'] = targets_yaml_path
             params['base_frame_id'] = base_frame_id
+        if token in ('brushing', 'coating'):
+            params['surface_config_path'] = surface_config_path
         if token == 'safety':
             params['heartbeat_timeout_ms'] = int(heartbeat_timeout_ms)
             params['publish_rate_hz'] = int(safety_publish_rate_hz)
@@ -387,6 +388,7 @@ def _launch_setup(context, *args, **kwargs):
 def generate_launch_description():
     default_rack_config = get_package_share_directory('nail_skill') + '/config/tool_rack.yaml'
     default_targets = get_package_share_directory('nail_skill') + '/config/targets.yaml'
+    default_surfaces = get_package_share_directory('nail_process') + '/config/taught_surfaces.yaml'
     default_static_frames = get_package_share_directory('nail_bringup') + '/config/static_frames.yaml'
 
     return LaunchDescription([
@@ -435,7 +437,12 @@ def generate_launch_description():
         DeclareLaunchArgument('targets_yaml_path', default_value=default_targets,
                                description=(
                                    'robot_skill_node PickPlace target_key 조회 테이블. '
-                                   'slot_* 는 여기 없다 — TF 프레임 폴백으로 조회됨(NIS §11.4)')),
+                                    'slot_* 는 여기 없다 — TF 프레임 폴백으로 조회됨(NIS §11.4)')),
+        DeclareLaunchArgument(
+            'surface_config_path', default_value=default_surfaces,
+            description=(
+                '브러시/코터별 6-Pose 티칭 경로 YAML. 실제 좌표 입력과 실기 검증 전에는 '
+                'configured=false를 유지할 것.')),
         DeclareLaunchArgument(
             'base_frame_id', default_value='base_link',
             description=(
