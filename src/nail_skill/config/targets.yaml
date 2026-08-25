@@ -244,21 +244,21 @@ uv_work: # UV 조사 작업 시작 자세 - 재실측 (2026-08-25, get_current_p
 uv_work_l: # UV 왕복운동(sanding과 동일 방식) approach_side='left' 작업 시작 자세 (2026-08-25, get_current_posx)
   # 이전 값: x_mm: 210.66, y_mm: 20.91, z_mm: 359.81,
   #         rz1_deg: 162.35, ry_deg: -141.34, rz2_deg: 153.80
-  x_mm: 221.88
-  y_mm: 22.05
-  z_mm: 383.40
+  x_mm: 242.62
+  y_mm: 98.89
+  z_mm: 375.62
   frame_id: base_link
-  rz1_deg: 164.97
-  ry_deg: -145.98
-  rz2_deg: 151.07
+  rz1_deg: 137.99
+  ry_deg: -143.11
+  rz2_deg: 117.95
 
 uv_work_r: # UV 왕복운동(sanding과 동일 방식) approach_side='right' 작업 시작 자세 (2026-08-25, get_current_posx)
   # 이전 값: x_mm: 520.38, y_mm: 75.54, z_mm: 353.14,
   #         rz1_deg: 38.79, ry_deg: -138.43, rz2_deg: 19.12
-  x_mm: 499.75
-  y_mm: 10.81
-  z_mm: 397.37
+  x_mm: 503.89
+  y_mm: 120.55
+  z_mm: 367.70
   frame_id: base_link
-  rz1_deg: 26.29
-  ry_deg: -150.92
-  rz2_deg: 29.43
+  rz1_deg: 53.02
+  ry_deg: -139.86
+  rz2_deg: 56.63

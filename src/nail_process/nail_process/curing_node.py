@@ -120,9 +120,9 @@ class CuringNode(Node):
         # 이어붙인 float64[]. 비우면(길이<12) 기존처럼 nail_size_x_mm/y_mm
         # 기반 dwell 지점 계산으로 대체한다.
         d('default_waypoints', [
-            221.88, 22.05, 383.40, 164.97, -145.98, 151.07,
+            242.62, 98.89, 375.62, 137.99, -143.11, 117.95,
             373.27, 106.30, 401.46, 91.21, -150.64, 90.18,
-            499.75, 10.81, 397.37, 26.29, -150.92, 29.43,
+            503.89, 120.55, 367.70, 53.02, -139.86, 56.63,
         ])
         d('oscillations', 1)
         d('max_duration_s', 120.0)
@@ -299,7 +299,7 @@ class CuringNode(Node):
 
         use_custom_waypoints = len(custom_poses) >= 2
         if use_custom_waypoints:
-            self.get_logger().warn(
+            self.get_logger().info(
                 f'CureUV: waypoints {len(custom_poses)}개 수동 지정({source}, TaskPose, 자세 '
                 '포함) — dwell_points/nail_size_x_mm/y_mm 기반 계산을 건너뛰고 그 점들을 '
                 'base_link 절대좌표로 그대로 오실레이션 왕복하며 각 지점에서 머문다 '
@@ -391,10 +391,21 @@ class CuringNode(Node):
 
         # 3) 대기 위치 이탈 — 성공/실패/취소/타임아웃 관계없이 반드시 시도한다.
         #    permit 이 없으므로 이게 유일한 안전 대응이다 (NIS §6.5 경고).
+        #    수동 waypoints 모드는 park_pose(nail_local_frame 기준 계산값)가
+        #    아니라 waypoints[0](base_link 절대좌표, 이미 검증된 지점)로
+        #    돌아간다 — 좌표계가 안 맞는 park_pose로 이탈을 시도하다 실기에서
+        #    타임아웃(reason=timeout)이 나 램프가 켜진 채 엉뚱한 위치에
+        #    멈추는 사고가 있었다(2026-08-25).
         parked = False
+        if use_custom_waypoints:
+            retreat_pose = task_pose_to_ros_pose(custom_poses[0])
+            retreat_frame_id = 'base_link'
+        else:
+            retreat_pose = park_pose
+            retreat_frame_id = 'nail_local_frame'
         try:
-            retreat_reason, _ = self._move(park_pose, speed_ratio, goal_handle, 15.0,
-                                            ignore_cancel=True)
+            retreat_reason, _ = self._move(retreat_pose, speed_ratio, goal_handle, 15.0,
+                                            ignore_cancel=True, frame_id=retreat_frame_id)
             parked = (retreat_reason == 'ok')
             if not parked:
                 self.get_logger().error(
