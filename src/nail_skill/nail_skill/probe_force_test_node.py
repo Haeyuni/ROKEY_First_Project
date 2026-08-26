@@ -33,7 +33,7 @@ class ProbeForceTestNode(Node):
         d('max_depth_mm', 10.0)
         d('max_force_n', 2.0)
         d('baseline_samples', 30)
-        d('sample_hz', 20.0)
+        d('sample_hz', 10.0)
         d('noise_sigma', 6.0)
         d('min_detect_force_n', 0.15)
         d('confirm_samples', 10)
@@ -72,6 +72,16 @@ class ProbeForceTestNode(Node):
         """이동 대기 중에도 safety subscription을 계속 처리한다."""
         rclpy.spin_once(self, timeout_sec=0.0)
         return self._safe_to_move()
+
+    def _safety_detail(self):
+        if self._latest_safety is None or self._last_safety_rx is None:
+            return '안전 상태 메시지를 아직 받지 못함'
+        msg = self._latest_safety
+        age = time.monotonic() - self._last_safety_rx
+        return (
+            f'safe_to_move={msg.safe_to_move}, estop_released={msg.estop_released}, '
+            f'comm_ok={msg.comm_ok}, active_faults={list(msg.active_faults)}, '
+            f'reason={msg.reason!r}, age={age:.3f}s')
 
     @staticmethod
     def _tool_z_axis(pose):
@@ -123,8 +133,10 @@ class ProbeForceTestNode(Node):
         samples = []
         period = 1.0 / max(1.0, self.get_parameter('sample_hz').value)
         for _ in range(max(2, int(self.get_parameter('baseline_samples').value))):
-            if not self._safe_to_move():
-                raise RuntimeError('baseline 측정 중 안전 상태가 이동을 차단함')
+            if not self._spin_and_check_safety():
+                raise RuntimeError(
+                    'baseline 측정 중 안전 상태가 이동을 차단함: '
+                    + self._safety_detail())
             samples.append(self._sample_force())
             time.sleep(period)
         mean = self._mean(samples)
@@ -281,11 +293,13 @@ class ProbeForceTestNode(Node):
             self.get_logger().warn('dry run 완료. 실제 이동은 execute:=true일 때만 시작함')
             return
         if not self._safe_to_move():
-            raise RuntimeError('/safety/status가 safe_to_move=true 상태가 아님')
+            raise RuntimeError('/safety/status가 safe_to_move=true 상태가 아님: '
+                               + self._safety_detail())
         results = []
         for name, pose, sol in points:
             if not self._safe_to_move():
-                raise RuntimeError('다음 점 시작 전 안전 상태가 이동을 차단함')
+                raise RuntimeError('다음 점 시작 전 안전 상태가 이동을 차단함: '
+                                   + self._safety_detail())
             results.append((name, self._run_point(name, pose, sol)))
         self.get_logger().info(f'3점 Probe 힘 시험 완료: {results}')
 
