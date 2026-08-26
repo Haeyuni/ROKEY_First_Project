@@ -124,7 +124,7 @@ class CuringNode(Node):
             373.27, 106.30, 401.46, 91.21, -150.64, 90.18,
             503.89, 120.55, 367.70, 53.02, -139.86, 56.63,
         ])
-        d('oscillations', 1)
+        d('oscillations', 2)
         d('max_duration_s', 120.0)
         # MoveTo 는 speed_ratio(0~1) 를 받는다 — robot_skill_node 의
         # move_max_speed_mms 를 여기서 알 방법이 없어(별도 프로세스·파라미터)
