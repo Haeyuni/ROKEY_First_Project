@@ -66,8 +66,9 @@ stone_tray: # 스톤 공급 트레이 - 완 (get_current_posx 실측, 2026-08-25
 #   옮겨갔다. 이제 스톤 부착점은 절대 좌표가 아니라 "손톱 프레임의 원점"
 #   이고, session_orchestrator 가 PlaceStone 에 (0,0,0) 으로 넘긴다.
 #
-# ※ 탐침(구 probe / probe_work)도 빠졌다 — ProbePoint 스킬과 scan_node /
-#   inspection_node 가 폐지되어 이 툴을 집을 일이 없다.
+# ※ 탐침(probe)은 feature/probe_test에서 ProbePoint/ScanBoundary가
+#   부활하며 아래에 다시 등록됐다(2026-08-26). tool_rack.yaml의 probe
+#   항목과 짝을 맞출 것.
 
 sander: # 네일 파일 - 재실측 (2026-08-24, get_current_posx)
   x_mm: 501.57
@@ -128,6 +129,91 @@ tweezers: # 핀셋 - 완
   ry_deg: -179.48
   rz2_deg: 3.34
   via_key: rack_transit
+
+probe: # 탐침 - 완 (get_current_posx 실측, 2026-08-26, feature/probe_test 복원)
+  x_mm: 419.69
+  y_mm: 215.72
+  z_mm: 241.17
+  frame_id: base_link
+  rz1_deg: 21.37
+  ry_deg: 177.83
+  rz2_deg: 20.91
+  via_key: rack_transit
+
+# ==========================================================================
+# ScanBoundary/ProbePoint 테스트용 공중 기준점 — feature/probe_test
+# ==========================================================================
+# scan_corners(4점)/nail_reference/dummy_references 는 config 파일이 아니라
+# ScanBoundary goal 필드로 직접 넘긴다 — 여기 키들은 그 goal을 만들 때 쓸
+# 좌표를 임시로 모아두는 곳일 뿐, robot_skill_node가 target_key로 조회하는
+# 값이 아니다(PickPlace/MoveTo에 그대로 쓰려면 target_key로도 동작함).
+
+nail_reference: # 손톱 표면 공중 기준점 (get_current_posx 실측, 2026-08-26)
+  x_mm: 374.32
+  y_mm: -23.63
+  z_mm: 457.00 # 7점 z 통일
+  frame_id: base_link
+  rz1_deg: 11.79
+  ry_deg: -179.56
+  rz2_deg: 12.15
+
+scan_corner_top_left: # scan_corners[0] 공중 코너 (get_current_posx 실측, 2026-08-26)
+  x_mm: 363.99
+  y_mm: -34.12
+  z_mm: 457.00 # 7점 z 통일
+  frame_id: base_link
+  rz1_deg: 23.50
+  ry_deg: 178.86
+  rz2_deg: 23.30
+
+scan_corner_top_right: # scan_corners[1] 공중 코너 (get_current_posx 실측, 2026-08-26)
+  x_mm: 376.48
+  y_mm: -34.89
+  z_mm: 457.00 # 7점 z 통일
+  frame_id: base_link
+  rz1_deg: 29.75
+  ry_deg: 179.04
+  rz2_deg: 29.42
+
+scan_corner_bottom_right: # scan_corners[2] 공중 코너 (재실측, nail_reference와 자세 통일, 2026-08-26)
+  # 이전 값: x_mm: 378.18, y_mm: -24.44, z_mm: 457.00,
+  #         rz1_deg: 63.93, ry_deg: 179.39, rz2_deg: 63.48
+  x_mm: 386.42
+  y_mm: -19.95
+  z_mm: 457.81
+  frame_id: base_link
+  rz1_deg: 3.76
+  ry_deg: -178.82
+  rz2_deg: 4.06
+
+scan_corner_bottom_left: # scan_corners[3] 공중 코너 (재실측, nail_reference와 자세 통일, 2026-08-26)
+  # 이전 값: x_mm: 369.40, y_mm: -24.39, z_mm: 457.00,
+  #         rz1_deg: 96.11, ry_deg: 179.43, rz2_deg: 95.73
+  x_mm: 375.99
+  y_mm: -19.57
+  z_mm: 458.98
+  frame_id: base_link
+  rz1_deg: 4.15
+  ry_deg: -178.92
+  rz2_deg: 4.49
+
+dummy_reference_1: # scan_corner_top_left와 동일 (dummy_references[0], 2026-08-26)
+  x_mm: 363.99
+  y_mm: -34.12
+  z_mm: 457.00 # 7점 z 통일
+  frame_id: base_link
+  rz1_deg: 23.50
+  ry_deg: 178.86
+  rz2_deg: 23.30
+
+dummy_reference_2: # scan_corner_top_right와 동일 (dummy_references[1], 2026-08-26)
+  x_mm: 376.48
+  y_mm: -34.89
+  z_mm: 457.00 # 7점 z 통일
+  frame_id: base_link
+  rz1_deg: 29.75
+  ry_deg: 179.04
+  rz2_deg: 29.42
 
 # ============================================================================
 # 작업대(핸드레스트/손톱) 작업 시작 자세 — 툴별

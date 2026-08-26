@@ -133,7 +133,7 @@ class ToolManagerNode(Node):
         d('safety_status_timeout_s', 1.0)
         d('node_timeout_s', 120.0)
         d('use_mock_hardware', False)
-        d('tool_list', ['sander', 'brush', 'coater', 'uv', 'tweezers'])
+        d('tool_list', ['sander', 'brush', 'coater', 'uv', 'tweezers', 'probe'])
         d('rack_config_file', 'config/tool_rack.yaml')
         d('sync_tcp_on_startup', True)
         d('approach_height_mm', 50.0)

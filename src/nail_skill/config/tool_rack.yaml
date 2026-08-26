@@ -83,10 +83,6 @@
 #
 # ============================================================================
 
-# ※ probe(탐침)는 목록에서 빠졌다 — ProbePoint 스킬과 그걸 쓰던
-#   scan_node / inspection_node 가 폐지되어 집을 일이 없다. 여기 없는
-#   이름은 ChangeTool 이 E_INVALID_GOAL 로 거부한다.
-
 tools:
   sander:                             # 네일 파일: width_mm(clear)
     slot_frame: sander
@@ -119,4 +115,10 @@ tools:
                                        # 반드시 같은 값으로 맞출 것 — 다르면
                                        # 스톤 놓을 때 핀셋을 놓치거나
                                        # 손잡이를 계속 짓누르게 된다.
+    tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)
+
+  probe:                               # 탐침 — ProbePoint/ScanBoundary 전용
+                                       # (feature/probe_test 복원, 2026-08-26)
+    slot_frame: probe
+    expected_grip_width_mm: 15.0      # TODO: 손잡이 폭 실측
     tcp_offset: [0, 0, 0, 0, 0, 0]    # TODO: 실측 전까지 0으로 초기화 (안전한 시작점)

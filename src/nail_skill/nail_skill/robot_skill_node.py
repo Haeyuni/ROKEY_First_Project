@@ -1324,14 +1324,18 @@ class RobotSkillNode(Node):
                 state['reason'] = 'cancel'
                 return True
             force = self._adapter.get_tool_force()
+            # total 은 baseline(공중 정지 상태, 툴 자체 무게 포함) 대비 변화량이다
+            # — compression/lateral 과 같은 기준. 예전엔 여기서 baseline을 안 뺀
+            # 원본 힘 크기(raw_total, 그냥 툴 무게만으로도 몇 N이 됨)를 썼는데,
+            # 그러면 움직이기도 전에 max_force_n 을 항상 넘겨버려 실기에서
+            # 즉시(0mm) E_OVERFORCE 로 죽는 버그가 있었다(2026-08-26 확인).
             compression, lateral, total = self._probe_force_metrics(force, baseline, axis)
-            raw_total = math.sqrt(sum(value * value for value in force[:3]))
             torque = math.sqrt(sum((force[i] - baseline[i]) ** 2 for i in range(3, 6)))
             state['last'] = (compression, lateral, total)
             state['last_force'] = force
             peak['compression'] = max(peak['compression'], compression)
             peak['lateral'] = max(peak['lateral'], lateral)
-            peak['total'] = max(peak['total'], raw_total)
+            peak['total'] = max(peak['total'], total)
             peak['torque'] = max(peak['torque'], torque)
 
             actual = self._adapter.get_pose()
@@ -1343,11 +1347,11 @@ class RobotSkillNode(Node):
             feedback.traveled_mm = max(0.0, traveled)
             feedback.compression_force_n = compression
             feedback.lateral_force_n = lateral
-            feedback.total_force_n = raw_total
+            feedback.total_force_n = total
             feedback.confirmed_samples = state['confirmed']
             goal_handle.publish_feedback(feedback)
 
-            if raw_total >= goal.max_force_n or lateral >= goal.lateral_force_limit_n:
+            if total >= goal.max_force_n or lateral >= goal.lateral_force_limit_n:
                 state['reason'] = 'force'
                 return True
             if threshold is not None and compression >= threshold:
