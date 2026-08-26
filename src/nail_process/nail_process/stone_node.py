@@ -123,6 +123,11 @@ class StoneNode(Node):
         for key in ('pick_speed_ratio', 'place_speed_ratio'):
             if not 0.0 < float(config.get(key, 0.0)) <= 1.0:
                 raise StoneConfigError(f'{key}는 0 초과 1 이하이어야 함')
+        # 압착 이동(place_approach->place)만 더 저속으로 누르고 싶을 때 쓴다.
+        # 없으면 place_speed_ratio 를 그대로 쓴다(하위호환).
+        press_ratio = config.get('place_press_speed_ratio', config.get('place_speed_ratio'))
+        if not 0.0 < float(press_ratio) <= 1.0:
+            raise StoneConfigError('place_press_speed_ratio는 0 초과 1 이하이어야 함')
         return config
 
     def _call_validate_precondition(self, session_id, timeout_s=5.0):
@@ -289,8 +294,9 @@ class StoneNode(Node):
         if error is not None:
             return fail(error, f'부착 접근 이동 실패: {error}')
         feedback(2, 50.0)
+        press_ratio = float(config.get('place_press_speed_ratio', config['place_speed_ratio']))
         press_result, error = self._call_move_to_key(
-            config['place_key'], float(config['place_speed_ratio']), timeout_s, goal_handle)
+            config['place_key'], press_ratio, timeout_s, goal_handle)
         if error is not None:
             return fail(error, f'부착 압착 이동 실패: {error}')
 

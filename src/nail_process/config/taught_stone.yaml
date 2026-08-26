@@ -17,3 +17,6 @@ release_width_mm: 17.0
 # MoveL 속도 비율. F/T·순응제어 없이 티칭 위치로만 내려가므로 낮게 유지한다.
 pick_speed_ratio: 0.1
 place_speed_ratio: 0.1
+# stone_place_approach -> stone_place(압착) 구간만 더 저속으로(요청,
+# 2026-08-26, place_speed_ratio의 1/5). 없으면 place_speed_ratio를 그대로 쓴다.
+place_press_speed_ratio: 0.02
