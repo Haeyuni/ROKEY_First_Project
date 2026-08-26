@@ -342,7 +342,8 @@ timeout이다.
 ### 6.0 `ScanBoundary.action`
 
 `scan_corners`에는 top-left, top-right, bottom-right, bottom-left 순서의 공중 Pose
-네 점을 넣는다. `nail_reference`는 손톱 내부 기준점, `dummy_references`는 손톱
+네 점을 넣는다. 직사각형뿐 아니라 사다리꼴 같은 볼록 사변형도 가능하다.
+`nail_reference`는 손톱 내부 기준점, `dummy_references`는 손톱
 밖 더미손 기준점이다. 누르는 방향은 항상 `base_link (0, 0, -1)`로 고정하며
 별도 입력하지 않는다. 기준점의 반복 강성 중앙값 차이가
 `material_min_separation_n_per_mm`보다 작으면 `E_NO_BOUNDARY`로 중단한다. 각

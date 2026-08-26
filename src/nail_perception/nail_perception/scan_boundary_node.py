@@ -74,7 +74,7 @@ class ScanBoundaryNode(Node):
         return width * 1000.0, height * 1000.0
 
     @classmethod
-    def _corners_form_rectangle(cls, corners):
+    def _corners_form_area(cls, corners):
         def vector(a, b):
             return b.x - a.x, b.y - a.y, b.z - a.z
 
@@ -82,9 +82,18 @@ class ScanBoundaryNode(Node):
         left = vector(corners[0].position, corners[3].position)
         top_length = math.sqrt(sum(value * value for value in top))
         left_length = math.sqrt(sum(value * value for value in left))
-        if top_length < 1e-6 or left_length < 1e-6:
+        edges = [
+            cls._distance(corners[index].position, corners[(index + 1) % 4].position)
+            for index in range(4)
+        ]
+        cross_length = math.sqrt(sum(value * value for value in (
+            top[1] * left[2] - top[2] * left[1],
+            top[2] * left[0] - top[0] * left[2],
+            top[0] * left[1] - top[1] * left[0],
+        )))
+        if top_length < 1e-6 or left_length < 1e-6 or cross_length < 1e-9:
             return False
-        return abs(sum(a * b for a, b in zip(top, left)) / (top_length * left_length)) <= 0.2
+        return all(length > 1e-6 for length in edges)
 
     def _call_validate(self, session_id, timeout_s=5.0):
         if not self._validate_client.wait_for_service(timeout_sec=timeout_s):
@@ -119,7 +128,7 @@ class ScanBoundaryNode(Node):
             and goal.manual_probe_tool_confirmed
             and (not goal.frame_id or goal.frame_id == base_frame)
             and corner_count == 4
-            and self._corners_form_rectangle(goal.scan_corners)
+            and self._corners_form_area(goal.scan_corners)
             and len(goal.dummy_references) >= 1
             and 3.0 <= width_mm <= 40.0
             and 3.0 <= height_mm <= 40.0
