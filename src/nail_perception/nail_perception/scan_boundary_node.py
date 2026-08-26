@@ -191,7 +191,7 @@ class ScanBoundaryNode(Node):
                 return None, code, detail
         child = state.get('handle')
         if child is None or not child.accepted:
-            return None, ErrorCode.E_SAFETY_BLOCKED, 'ProbePoint goal 거부됨'
+            return None, ErrorCode.E_MOTION_FAILED, 'ProbePoint goal 거부됨'
         self._probe_goal_handle = child
 
         done = threading.Event()
@@ -254,6 +254,11 @@ class ScanBoundaryNode(Node):
         probe.manual_probe_tool_confirmed = goal.manual_probe_tool_confirmed
         return probe
 
+    @staticmethod
+    def _probe_wait_timeout(point_timeout_s):
+        # ProbePoint 한 점은 공중/실제 각각 접근, 탐색, 복귀를 수행한다.
+        return point_timeout_s * 6.0 + 5.0
+
     def _publish_feedback(self, goal_handle, stage, measurement, done, total, candidates):
         feedback = ScanBoundary.Feedback()
         feedback.stage = stage
@@ -305,7 +310,7 @@ class ScanBoundaryNode(Node):
             pose = self._pose_at(goal.center_search_start, x_axis, y_axis, x_mm, y_mm)
             probe_result, code, detail = self._call_probe(
                 self._probe_goal(goal, pose, ProbePoint.Goal.SOURCE_COARSE),
-                goal_handle, goal.point_timeout_s * 4.0)
+                goal_handle, self._probe_wait_timeout(goal.point_timeout_s))
             if code is not None:
                 return self._finish_error(goal_handle, result, code, detail, started_at)
             measurement = probe_result.measurement
@@ -344,7 +349,7 @@ class ScanBoundaryNode(Node):
             pose = self._pose_at(goal.center_search_start, x_axis, y_axis, x_mm, y_mm)
             probe_result, code, detail = self._call_probe(
                 self._probe_goal(goal, pose, ProbePoint.Goal.SOURCE_FINE),
-                goal_handle, goal.point_timeout_s * 4.0)
+                goal_handle, self._probe_wait_timeout(goal.point_timeout_s))
             if code is not None:
                 return self._finish_error(goal_handle, result, code, detail, started_at)
             measurement = probe_result.measurement

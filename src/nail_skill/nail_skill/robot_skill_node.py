@@ -1320,14 +1320,22 @@ class RobotSkillNode(Node):
             time.sleep(period)
         return [statistics.fmean(values) for values in zip(*samples)], 'ok'
 
+    def _probe_motion_reason(self, completed, goal_handle, target):
+        """이동 완료 여부와 실제 목표 Pose 도달 여부를 함께 판정한다."""
+        if not completed:
+            return 'cancel' if goal_handle.is_cancel_requested else 'timeout'
+        return self._verify_position_reached('ok', target)[0]
+
     def _probe_profile(self, goal_handle, search_start, axis, threshold, phase, timeout_s):
         goal = goal_handle.request
         speed = self.get_parameter('probe_approach_speed_mms').value
 
         self._adapter.start_move_joint_to_pose(search_start, speed, speed * 2.0)
-        if not self._adapter.wait_motion_done(timeout_s, 10.0,
-                should_abort=lambda: goal_handle.is_cancel_requested):
-            return None, 'cancel'
+        completed = self._adapter.wait_motion_done(
+            timeout_s, 10.0, should_abort=lambda: goal_handle.is_cancel_requested)
+        reason = self._probe_motion_reason(completed, goal_handle, search_start)
+        if reason != 'ok':
+            return None, reason
 
         baseline, reason = self._probe_baseline(goal_handle)
         if reason != 'ok':
@@ -1389,6 +1397,8 @@ class RobotSkillNode(Node):
             timeout_s, self.get_parameter('probe_sample_hz').value,
             should_abort=should_abort)
         reason = 'ok' if completed else (state['reason'] or 'timeout')
+        if reason == 'ok':
+            reason = self._probe_motion_reason(completed, goal_handle, target)
 
         stopped = self._adapter.get_pose()
         traveled = sum((value - start) * direction for value, start, direction in zip(
@@ -1400,10 +1410,16 @@ class RobotSkillNode(Node):
             self._adapter.start_move_line(
                 search_start, goal.probe_speed_mms,
                 self.get_parameter('probe_accel_mms2').value)
-            self._adapter.wait_motion_done(timeout_s, 10.0)
+            completed = self._adapter.wait_motion_done(
+                timeout_s, 10.0, should_abort=lambda: goal_handle.is_cancel_requested)
+            retreat_reason = self._probe_motion_reason(
+                completed, goal_handle, search_start)
+            if retreat_reason != 'ok':
+                reason = retreat_reason
 
         return {
             'reason': reason,
+            'contact_detected': state['reason'] == 'contact',
             'stopped': stopped,
             'traveled': max(0.0, traveled),
             'peak_compression': peak['compression'],
@@ -1420,12 +1436,16 @@ class RobotSkillNode(Node):
         measurement.header.frame_id = self._base_frame_id
         measurement.source = goal.source or ProbePoint.Goal.SOURCE_MANUAL
         measurement.requested_point = goal.search_start.position
-        measurement.valid = profile is not None and not force_limit
+        measurement.valid = (
+            profile is not None
+            and profile['reason'] in ('ok', 'contact')
+            and not force_limit)
         measurement.reached_max_force = force_limit
         if profile is None:
             return measurement
         measurement.contact_point = task_pose_to_ros_pose(profile['stopped']).position
-        measurement.contact_detected = profile['reason'] == 'contact'
+        measurement.contact_detected = profile.get(
+            'contact_detected', profile['reason'] == 'contact')
         measurement.traveled_mm = profile['traveled']
         measurement.air_peak_compression_n = air['peak_compression'] if air else 0.0
         measurement.contact_peak_compression_n = profile['peak_compression']
@@ -1446,10 +1466,11 @@ class RobotSkillNode(Node):
 
     def _finish_probe_failure(self, reason, goal_handle, result, started_at, detail,
                               profile=None, air=None):
+        if profile is not None:
+            result.measurement = self._probe_measurement(
+                goal_handle.request, profile, air, force_limit=reason == 'force')
         if reason == 'force':
             goal_handle.abort()
-            result.measurement = self._probe_measurement(
-                goal_handle.request, profile, air, force_limit=True)
             result.base = self._result_base(
                 False, ErrorCode.E_OVERFORCE, detail, started_at)
         else:
