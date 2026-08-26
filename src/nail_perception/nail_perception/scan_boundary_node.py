@@ -179,18 +179,37 @@ class ScanBoundaryNode(Node):
         return base
 
     @staticmethod
-    def _pose_at(corners, orientation_source, x_mm, y_mm, width_mm, height_mm):
-        """네 공중 모서리 안의 격자점을 bilinear 보간한다."""
+    def _pose_at(corners, x_mm, y_mm, width_mm, height_mm):
+        """네 공중 모서리의 위치와 자세를 bilinear 보간한다."""
         u = (x_mm + width_mm / 2.0) / width_mm
         v = (y_mm + height_mm / 2.0) / height_mm
         weights = ((1.0 - u) * (1.0 - v), u * (1.0 - v), u * v, (1.0 - u) * v)
-        pose = copy.deepcopy(orientation_source)
+        pose = copy.deepcopy(corners[0])
         pose.position.x = sum(weight * corner.position.x
                               for weight, corner in zip(weights, corners))
         pose.position.y = sum(weight * corner.position.y
                               for weight, corner in zip(weights, corners))
         pose.position.z = sum(weight * corner.position.z
                               for weight, corner in zip(weights, corners))
+
+        # Quaternion 부호(q/-q)는 같은 자세다. 첫 코너와 반대 부호인 경우를
+        # 맞춘 뒤 가중 평균하고 정규화해 코너 사이 자세를 부드럽게 연결한다.
+        reference = corners[0].orientation
+        values = []
+        for corner in corners:
+            q = corner.orientation
+            sign = 1.0 if (reference.x * q.x + reference.y * q.y
+                           + reference.z * q.z + reference.w * q.w) >= 0.0 else -1.0
+            values.append((sign * q.x, sign * q.y, sign * q.z, sign * q.w))
+        qx, qy, qz, qw = (
+            sum(weight * value[index] for weight, value in zip(weights, values))
+            for index in range(4))
+        norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+        if norm > 1e-9:
+            pose.orientation.x = qx / norm
+            pose.orientation.y = qy / norm
+            pose.orientation.z = qz / norm
+            pose.orientation.w = qw / norm
         return pose
 
     def _call_probe(self, probe_goal, parent_goal, timeout_s):
@@ -338,7 +357,7 @@ class ScanBoundaryNode(Node):
         return min(
             candidates,
             key=lambda entry: self._distance(
-                self._pose_at(corners, nail_reference, entry[2], entry[3],
+                self._pose_at(corners, entry[2], entry[3],
                               width_mm, height_mm).position,
                 nail_reference.position))[:2]
 
@@ -411,8 +430,7 @@ class ScanBoundaryNode(Node):
         total = reference_count + len(coarse_grid)
 
         for ix, iy, x_mm, y_mm in coarse_grid:
-            pose = self._pose_at(
-                corners, goal.nail_reference, x_mm, y_mm, width_mm, height_mm)
+            pose = self._pose_at(corners, x_mm, y_mm, width_mm, height_mm)
             probe_result, code, detail = self._call_probe(
                 self._probe_goal(goal, pose, ProbePoint.Goal.SOURCE_COARSE),
                 goal_handle, self._probe_wait_timeout(goal.point_timeout_s))
@@ -452,8 +470,7 @@ class ScanBoundaryNode(Node):
         fine_classes = {}
         total += len(fine_grid)
         for ix, iy, x_mm, y_mm in fine_grid:
-            pose = self._pose_at(
-                corners, goal.nail_reference, x_mm, y_mm, width_mm, height_mm)
+            pose = self._pose_at(corners, x_mm, y_mm, width_mm, height_mm)
             probe_result, code, detail = self._call_probe(
                 self._probe_goal(goal, pose, ProbePoint.Goal.SOURCE_FINE),
                 goal_handle, self._probe_wait_timeout(goal.point_timeout_s))
@@ -489,8 +506,7 @@ class ScanBoundaryNode(Node):
         boundary_map.session_id = goal.session_id
         boundary_map.measurements = measurements
         for x_mm, y_mm in boundary_offsets:
-            pose = self._pose_at(
-                corners, goal.nail_reference, x_mm, y_mm, width_mm, height_mm)
+            pose = self._pose_at(corners, x_mm, y_mm, width_mm, height_mm)
             boundary_map.boundary_polygon.append(Point(
                 x=pose.position.x, y=pose.position.y, z=pose.position.z))
         boundary_map.coarse_pitch_mm = goal.coarse_pitch_mm
@@ -525,7 +541,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
