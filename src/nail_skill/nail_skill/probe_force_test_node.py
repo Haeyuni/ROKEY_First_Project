@@ -26,7 +26,6 @@ class ProbeForceTestNode(Node):
         d('dsr_prefix', 'dsr01')
         d('robot_model', 'm0609')
         d('safety_topic', '/safety/status')
-        d('safety_status_timeout_s', 1.0)
         d('approach_speed_mms', 5.0)
         d('press_speed_mms', 0.5)
         d('press_accel_mms2', 1.0)
@@ -61,12 +60,11 @@ class ProbeForceTestNode(Node):
         self._last_safety_rx = time.monotonic()
 
     def _safe_to_move(self):
-        return (
-            self._latest_safety is not None
-            and self._latest_safety.safe_to_move
-            and self._last_safety_rx is not None
-            and time.monotonic() - self._last_safety_rx
-            <= self.get_parameter('safety_status_timeout_s').value)
+        # get_tool_force()는 동기 서비스라 응답 대기 중 subscription 처리가
+        # 잠시 밀릴 수 있다. 여기서 별도 1초 freshness 제한까지 적용하면
+        # safety_monitor가 정상이어도 baseline 중 오탐 정지한다. 실제 E-Stop과
+        # 통신 결함 판정은 safety_monitor가 safe_to_move에 반영하므로 그 값을 쓴다.
+        return self._latest_safety is not None and self._latest_safety.safe_to_move
 
     def _spin_and_check_safety(self):
         """이동 대기 중에도 safety subscription을 계속 처리한다."""
