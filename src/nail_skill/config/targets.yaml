@@ -81,6 +81,7 @@ sander: # 네일 파일 - 재실측 (2026-08-24, get_current_posx)
 
 
 brush: # 붓 - 완 (get_current_posx 실측)
+  # via_key(rack_transit) 제거 — 붓 픽업/반납 시 경유하지 않는다(요청, 2026-08-26)
   x_mm: 277.53
   y_mm: 224.72
   z_mm: 283.38
@@ -88,7 +89,6 @@ brush: # 붓 - 완 (get_current_posx 실측)
   rz1_deg: 50.74
   ry_deg: -179.14
   rz2_deg: 50.13
-  via_key: rack_transit
 
 coater: # 젤 네일 - 완
   # 뚜껑 열고 닫기(tool_rack.yaml 의 unscrew: true)를 쓰는 슬롯이다. 이 자세의
@@ -110,6 +110,7 @@ coater: # 젤 네일 - 완
   via_key: rack_transit
 
 uv: # 자외선 램프 - 완
+  # via_key(rack_transit) 제거 — UV 픽업/반납 시 경유하지 않는다(요청, 2026-08-26)
   x_mm: 330.34
   y_mm: 40.83
   z_mm: 286.04
@@ -117,7 +118,6 @@ uv: # 자외선 램프 - 완
   rz1_deg: 15.12
   ry_deg: -178.77
   rz2_deg: 13.26
-  via_key: rack_transit
 
 tweezers: # 핀셋 - 완
   x_mm: 616.09

@@ -340,18 +340,22 @@ class SessionOrchestratorNode(Node):
         return self._call_action(self._move_client, goal, our_goal_handle, timeout_s,
                                  ignore_cancel=ignore_cancel)
 
-    def _go_to_work(self, tool_key, our_goal_handle, move_to_work=True):
+    def _go_to_work(self, tool_key, our_goal_handle, move_to_work=True, via_transit=True):
         """ChangeTool 직후 공통 이동: 경유점(tool_transit_key) → <tool_key>_work.
 
         반환: (work_result, None) 성공 / (None, err) 실패 — err 은
         _finish_by_err 에 그대로 넘기면 된다. 대각선 이동으로 방금 집은 툴이
         랙/구조물과 부딪히는 문제 대응(PickPlace via_key 라우팅과 동일한 이유).
+
+        via_transit=False 면 이 경유점 이동 자체를 건너뛴다 — brush/uv는
+        작업위치로 바로 가도 문제없다고 확인돼(요청, 2026-08-26) 경유를 뺐다.
         """
-        transit_key = self.get_parameter('tool_transit_key').value
         timeout_s = self.get_parameter('tool_transit_timeout_s').value
-        _, err = self._call_move_to_key(transit_key, our_goal_handle, timeout_s)
-        if err is not None:
-            return None, err
+        if via_transit:
+            transit_key = self.get_parameter('tool_transit_key').value
+            _, err = self._call_move_to_key(transit_key, our_goal_handle, timeout_s)
+            if err is not None:
+                return None, err
         # 브러시/코터의 6-Pose 경로는 ContactPath가 접근까지 담당하므로
         # orchestrator가 별도 작업점으로 먼저 직접 이동하지 않는다.
         if not move_to_work:
@@ -534,7 +538,7 @@ class SessionOrchestratorNode(Node):
                                         started_at, started_mono, state)
         state['current_tool'] = ToolState.BRUSH
 
-        _, err = self._go_to_work('brush', goal_handle, move_to_work=False)
+        _, err = self._go_to_work('brush', goal_handle, move_to_work=False, via_transit=False)
         if err is not None:
             return self._finish_by_err(goal_handle, result, err,
                                         '경유/작업위치 이동 실패(brush)', started_at,
@@ -595,7 +599,7 @@ class SessionOrchestratorNode(Node):
                                             started_at, started_mono, state)
             state['current_tool'] = ToolState.UV
 
-            _, err = self._go_to_work('uv', goal_handle)
+            _, err = self._go_to_work('uv', goal_handle, via_transit=False)
             if err is not None:
                 return self._finish_by_err(goal_handle, result, err,
                                             '경유/작업위치 이동 실패(uv)', started_at,

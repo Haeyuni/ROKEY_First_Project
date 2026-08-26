@@ -165,8 +165,8 @@ class RobotSkillNode(Node):
         # via_key 높이보다 낮은 쪽을 쓴다(그보다 더 올라갈 필요는 없음).
         d('pick_place_transit_clearance_mm', 100.0)
         d('motion_timeout_s', 30.0)
-        d('move_max_speed_mms', 300.0)
-        d('move_max_accel_mms2', 600.0)
+        d('move_max_speed_mms', 600.0)
+        d('move_max_accel_mms2', 1200.0)
         d('move_pose_tolerance_mm', 1.0)
         # 좌표 전용 ContactPath/LateralContact
         d('lateral_search_speed_mms', 3.0)
