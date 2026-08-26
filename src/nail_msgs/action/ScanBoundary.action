@@ -1,5 +1,6 @@
 string session_id
 # scan_corners: top_left, top_right, bottom_right, bottom_left 순서의 공중 Pose 4개
+# 직사각형뿐 아니라 사다리꼴 등 손톱을 둘러싼 볼록 사변형을 허용한다.
 geometry_msgs/Pose[] scan_corners
 geometry_msgs/Pose nail_reference
 geometry_msgs/Pose[] dummy_references
