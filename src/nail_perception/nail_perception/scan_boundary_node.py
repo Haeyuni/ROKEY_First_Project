@@ -10,10 +10,9 @@ from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalRespons
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from nail_msgs.action import ProbePoint, ScanBoundary
-from nail_msgs.msg import BoundaryMap, ErrorCode, ResultBase, SafetyState
+from nail_msgs.msg import BoundaryMap, ErrorCode, ResultBase
 from nail_msgs.srv import ValidatePrecondition
 
 from .geometry2d import (
@@ -25,23 +24,13 @@ class ScanBoundaryNode(Node):
     def __init__(self):
         super().__init__('scan_boundary_node')
         self.declare_parameter('base_frame_id', 'base_0')
-        self.declare_parameter('safety_topic', '/safety/status')
-        self.declare_parameter('safety_status_timeout_s', 1.0)
 
-        self._latest_safety = None
-        self._last_safety_rx = None
         self._probe_goal_handle = None
         self._running = False
         self._late_probe_pending = False
         self._running_lock = threading.Lock()
         self._cb_action = MutuallyExclusiveCallbackGroup()
         self._cb_client = MutuallyExclusiveCallbackGroup()
-        safety_qos = QoSProfile(
-            depth=1, reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.create_subscription(
-            SafetyState, self.get_parameter('safety_topic').value,
-            self._on_safety, safety_qos, callback_group=self._cb_client)
         self._validate_client = self.create_client(
             ValidatePrecondition, '/safety/validate', callback_group=self._cb_client)
         self._probe_client = ActionClient(
@@ -53,17 +42,6 @@ class ScanBoundaryNode(Node):
             cancel_callback=self._on_cancel,
             callback_group=self._cb_action)
         self.get_logger().info('scan_boundary_node ready (독립 Probe 검증용)')
-
-    def _on_safety(self, msg):
-        self._latest_safety = msg
-        self._last_safety_rx = time.monotonic()
-
-    def _safe_to_move(self):
-        timeout = self.get_parameter('safety_status_timeout_s').value
-        return (self._latest_safety is not None
-                and self._latest_safety.safe_to_move
-                and self._last_safety_rx is not None
-                and time.monotonic() - self._last_safety_rx <= timeout)
 
     def _on_cancel(self, _goal_handle):
         if self._probe_goal_handle is not None:
@@ -140,10 +118,7 @@ class ScanBoundaryNode(Node):
             valid = len(coarse) <= 400
         if not valid:
             self.get_logger().warn(
-                'ScanBoundary REJECT: E_INVALID_GOAL (도구 확인, base frame, 축/격자 범위 오류)')
-            return GoalResponse.REJECT
-        if not self._safe_to_move():
-            self.get_logger().warn('ScanBoundary REJECT: E_SAFETY_BLOCKED')
+                'ScanBoundary REJECT: E_INVALID_GOAL (도구 확인, base frame, 축/격지 범위 오류)')
             return GoalResponse.REJECT
         ok, reasons = self._call_validate(goal.session_id)
         if not ok:
@@ -206,8 +181,6 @@ class ScanBoundaryNode(Node):
             detail = ''
             if parent_goal.is_cancel_requested:
                 code, detail = ErrorCode.E_CANCELLED, 'ProbePoint 전송 중 사용자 취소'
-            elif not self._safe_to_move():
-                code, detail = ErrorCode.E_SAFETY_BLOCKED, 'ProbePoint 전송 중 안전 차단'
             elif time.monotonic() > send_deadline:
                 code, detail = ErrorCode.E_TIMEOUT, 'ProbePoint goal 전송 타임아웃'
             if code is not None:
@@ -241,11 +214,6 @@ class ScanBoundaryNode(Node):
                 child.cancel_goal_async()
                 cancel_reason = ErrorCode.E_CANCELLED
                 cancel_detail = '사용자 취소를 ProbePoint에 전파함'
-                cancel_deadline = time.monotonic() + 15.0
-            elif not self._safe_to_move() and cancel_reason is None:
-                child.cancel_goal_async()
-                cancel_reason = ErrorCode.E_SAFETY_BLOCKED
-                cancel_detail = '안전 차단을 ProbePoint에 전파함'
                 cancel_deadline = time.monotonic() + 15.0
             elif time.monotonic() > deadline and cancel_reason is None:
                 child.cancel_goal_async()

@@ -1307,38 +1307,7 @@ class RobotSkillNode(Node):
             self.get_logger().warn(
                 'ProbePoint REJECT: E_INVALID_GOAL (도구 확인, base frame, 축 또는 안전 범위 오류)')
             return GoalResponse.REJECT
-        if not self._safe_to_move():
-            self.get_logger().warn('ProbePoint REJECT: E_SAFETY_BLOCKED')
-            return GoalResponse.REJECT
         return GoalResponse.ACCEPT
-
-    def _probe_move_to_start(self, goal_handle, target, timeout_s):
-        speed = self.get_parameter('probe_approach_speed_mms').value
-        self._adapter.start_move_joint_to_pose(target, speed, speed * 2.0)
-        reason = self._monitor(goal_handle, timeout_s, 10.0, None)
-        if (reason != 'ok' and not self._probe_wait_stopped()
-                and not self._probe_stop_and_wait()):
-            return 'comm'
-        return self._verify_position_reached(reason, target)[0]
-
-    def _probe_wait_stopped(self, timeout_s=5.0):
-        deadline = time.monotonic() + timeout_s
-        try:
-            while self._adapter.is_moving():
-                if time.monotonic() > deadline:
-                    self.get_logger().error('Probe 정지 완료를 제한시간 안에 확인하지 못함')
-                    return False
-                time.sleep(0.05)
-            return True
-        except DsrAdapterError as exc:
-            self.get_logger().error(f'Probe 정지 상태 조회 실패: {exc}')
-            return False
-
-    def _probe_stop_and_wait(self):
-        if not self._adapter.stop():
-            self.get_logger().error('Probe 정지 명령 전송 실패')
-            return False
-        return self._probe_wait_stopped()
 
     def _probe_baseline(self, goal_handle):
         samples = []
@@ -1347,32 +1316,23 @@ class RobotSkillNode(Node):
         for _ in range(count):
             if goal_handle.is_cancel_requested:
                 return None, 'cancel'
-            if not self._safe_to_move():
-                return None, 'safety'
-            force = self._adapter.get_tool_force()
-            if math.sqrt(sum(value * value for value in force[:3])) \
-                    >= goal_handle.request.max_force_n:
-                return None, 'force'
-            samples.append(force)
+            samples.append(self._adapter.get_tool_force())
             time.sleep(period)
         return [statistics.fmean(values) for values in zip(*samples)], 'ok'
 
     def _probe_profile(self, goal_handle, search_start, axis, threshold, phase, timeout_s):
-        preapproach = self.get_parameter('probe_preapproach_mm').value
-        safe_start = TaskPose(
-            search_start.x_mm - axis[0] * preapproach,
-            search_start.y_mm - axis[1] * preapproach,
-            search_start.z_mm - axis[2] * preapproach,
-            search_start.rz1_deg, search_start.ry_deg, search_start.rz2_deg)
-        reason = self._probe_move_to_start(goal_handle, safe_start, timeout_s)
-        if reason != 'ok':
-            return None, reason
+        goal = goal_handle.request
+        speed = self.get_parameter('probe_approach_speed_mms').value
+
+        self._adapter.start_move_joint_to_pose(search_start, speed, speed * 2.0)
+        if not self._adapter.wait_motion_done(timeout_s, 10.0,
+                should_abort=lambda: goal_handle.is_cancel_requested):
+            return None, 'cancel'
 
         baseline, reason = self._probe_baseline(goal_handle)
         if reason != 'ok':
             return None, reason
 
-        goal = goal_handle.request
         target = TaskPose(
             search_start.x_mm + axis[0] * goal.max_depth_mm,
             search_start.y_mm + axis[1] * goal.max_depth_mm,
@@ -1385,9 +1345,6 @@ class RobotSkillNode(Node):
         def should_abort():
             if goal_handle.is_cancel_requested:
                 state['reason'] = 'cancel'
-                return True
-            if not self._safe_to_move():
-                state['reason'] = 'safety'
                 return True
             force = self._adapter.get_tool_force()
             compression, lateral, total = self._probe_force_metrics(force, baseline, axis)
@@ -1413,8 +1370,7 @@ class RobotSkillNode(Node):
             feedback.confirmed_samples = state['confirmed']
             goal_handle.publish_feedback(feedback)
 
-            if (raw_total >= goal.max_force_n or total >= goal.max_force_n
-                    or lateral >= goal.lateral_force_limit_n):
+            if raw_total >= goal.max_force_n or lateral >= goal.lateral_force_limit_n:
                 state['reason'] = 'force'
                 return True
             if threshold is not None and compression >= threshold:
@@ -1426,75 +1382,25 @@ class RobotSkillNode(Node):
                 state['confirmed'] = 0
             return False
 
-        try:
-            self._adapter.start_move_line(
-                target, goal.probe_speed_mms,
-                self.get_parameter('probe_accel_mms2').value)
-            completed = self._adapter.wait_motion_done(
-                timeout_s, self.get_parameter('probe_sample_hz').value,
-                should_abort=should_abort)
-        except Exception:
-            self._probe_stop_and_wait()
-            raise
+        self._adapter.start_move_line(
+            target, goal.probe_speed_mms,
+            self.get_parameter('probe_accel_mms2').value)
+        completed = self._adapter.wait_motion_done(
+            timeout_s, self.get_parameter('probe_sample_hz').value,
+            should_abort=should_abort)
         reason = 'ok' if completed else (state['reason'] or 'timeout')
-        stopped_confirmed = completed or self._probe_wait_stopped()
-        if not stopped_confirmed:
-            stopped_confirmed = self._probe_stop_and_wait()
-        if not stopped_confirmed:
-            reason = 'comm'
-        if reason == 'ok':
-            reason = self._verify_position_reached(reason, target)[0]
 
         stopped = self._adapter.get_pose()
         traveled = sum((value - start) * direction for value, start, direction in zip(
             (stopped.x_mm, stopped.y_mm, stopped.z_mm),
             (search_start.x_mm, search_start.y_mm, search_start.z_mm), axis))
 
-        # 안전 차단 뒤에는 이동하지 않는다. 사용자 취소·접촉·힘 상한은 안전 상태가
-        # 살아 있을 때 취소 요청과 무관하게 안전 접근점까지 이탈한다.
-        original_reason = reason
-        if stopped_confirmed and reason != 'safety' and self._safe_to_move():
-            initial_retreat_force = self._adapter.get_tool_force()
-            initial_retreat_total = math.sqrt(
-                sum(value * value for value in initial_retreat_force[:3]))
-            retreat_state = {'reason': None}
-
-            def abort_retreat():
-                if not self._safe_to_move():
-                    retreat_state['reason'] = 'safety'
-                    return True
-                force = self._adapter.get_tool_force()
-                raw_total = math.sqrt(sum(value * value for value in force[:3]))
-                # 과힘에서 빠져나올 때는 시작 힘 자체보다 0.3N 더 증가하는지만
-                # 감시하고, 정상 힘에서 시작하면 goal의 절대 상한을 그대로 쓴다.
-                retreat_limit = initial_retreat_total + 0.3 \
-                    if initial_retreat_total >= goal.max_force_n else goal.max_force_n
-                if raw_total >= retreat_limit:
-                    retreat_state['reason'] = 'force'
-                    return True
-                return False
-
+        # 탐색 완료 후 시작점으로 복귀
+        if reason != 'cancel':
             self._adapter.start_move_line(
-                safe_start, self.get_parameter('probe_retreat_speed_mms').value,
+                search_start, goal.probe_speed_mms,
                 self.get_parameter('probe_accel_mms2').value)
-            completed_retreat = self._adapter.wait_motion_done(
-                timeout_s, 10.0, should_abort=abort_retreat)
-            retreat_stopped = completed_retreat or self._probe_wait_stopped()
-            if not retreat_stopped:
-                retreat_stopped = self._probe_stop_and_wait()
-            retreat_reason = 'ok' if completed_retreat else \
-                (retreat_state['reason'] or 'timeout')
-            if not retreat_stopped:
-                retreat_reason = 'comm'
-            retreat_reason = self._verify_position_reached(retreat_reason, safe_start)[0]
-            if retreat_reason != 'ok':
-                if retreat_reason == 'comm':
-                    reason = 'comm'
-                else:
-                    reason = 'force' if 'force' in (original_reason, retreat_reason) \
-                        else retreat_reason
-            else:
-                reason = original_reason
+            self._adapter.wait_motion_done(timeout_s, 10.0)
 
         return {
             'reason': reason,
@@ -1546,11 +1452,6 @@ class RobotSkillNode(Node):
                 goal_handle.request, profile, air, force_limit=True)
             result.base = self._result_base(
                 False, ErrorCode.E_OVERFORCE, detail, started_at)
-        elif reason == 'comm':
-            goal_handle.abort()
-            result.base = self._result_base(
-                False, ErrorCode.E_COMM_LOST,
-                f'{detail}; 로봇 정지 완료를 확인하지 못함', started_at)
         else:
             result.base = self._finish_from_reason(
                 reason, goal_handle, started_at, context='ProbePoint')
@@ -1582,11 +1483,11 @@ class RobotSkillNode(Node):
                 goal_handle, start, axis, threshold,
                 ProbePoint.Feedback.PHASE_CONTACT, goal.timeout_s)
         except Exception as exc:
-            stopped = self._probe_stop_and_wait()
+            self._adapter.stop()
             goal_handle.abort()
             result.base = self._result_base(
                 False, ErrorCode.E_MOTION_FAILED,
-                f'ProbePoint 실행 실패: {exc}; 정지확인={stopped}', started_at)
+                f'ProbePoint 실행 실패: {exc}', started_at)
             return result
 
         if reason not in ('ok', 'contact'):
