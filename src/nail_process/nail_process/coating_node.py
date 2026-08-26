@@ -5,8 +5,10 @@
 추정치일 뿐 실제 도포량이 아니며 판정 기준이 아니다 — result 에 두께
 필드를 두지 않는다.
 
-코터 전용 세 티칭 Pose(p1/p2/p3)를 그 순서(p1→p2→p3)로 `repeats`번
-왕복한다(2026-08-25 변경 — 6-Pose 쌍 기반에서 3점 반복으로 단순화).
+경로는 taught_surfaces.yaml의 coater.sequence(예: p1→p2→p3→p4→p1→p2→p3r
+→p4→...)를 그대로 waypoint 순서로 쓴다(2026-08-26 변경 — 바퀴마다 세
+번째 점만 바뀌는 고정 시퀀스). sequence가 없으면 예전처럼 p1..pN을
+`repeats`번 반복한다(build_repeat_path 참고).
 실제 이동은 robot_skill_node의 `/skill/contact_path`가 담당한다.
 """
 import threading

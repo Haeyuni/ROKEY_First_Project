@@ -231,13 +231,15 @@ brush_work: # 이전 단일 붓 접촉점 기록 (현재 공정 미사용)
   rz2_deg: 24.58
 
 coater_work: # 이전 단일 코터 접촉점 기록 (현재 공정 미사용)
-  x_mm: 380.86
-  y_mm: -20.46
-  z_mm: 440.93
+  # 이전 값: x_mm: 380.86, y_mm: -20.46, z_mm: 440.93,
+  #         rz1_deg: 25.59, ry_deg: -178.71, rz2_deg: 25.38
+  x_mm: 376.01
+  y_mm: -19.81
+  z_mm: 458.26
   frame_id: base_link
-  rz1_deg: 25.59
-  ry_deg: -178.71
-  rz2_deg: 25.38
+  rz1_deg: 33.27
+  ry_deg: -178.95
+  rz2_deg: 33.04
 
 uv_work: # UV 조사 작업 시작 자세 - 재실측 (2026-08-25, get_current_posx)
   # 이전 값: x_mm: 371.85, y_mm: 115.89, z_mm: 385.62,

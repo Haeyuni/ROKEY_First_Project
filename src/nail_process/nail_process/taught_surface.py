@@ -107,9 +107,35 @@ def build_repeat_path(config_path, surface_name, repeats=1):
     repeats 번 도는 경로를 만든다 — coater 전용(요청, 2026-08-25; 왕복이
     아니라 항상 p1→...→pN→p1 방향으로만 순환). 점 개수는 p1..pN 이 몇
     개까지 정의됐는지로 자동 결정된다(최소 2개 필요). pitch/inset
-    세분화나 곡선 피팅 없이 점들을 직선으로 잇는다."""
+    세분화나 곡선 피팅 없이 점들을 직선으로 잇는다.
+
+    surfaces.<surface_name>.sequence 가 있으면(예: coater 의 p3/p3r/p3l 처럼
+    바퀴마다 한 점만 바뀌는 경우, 요청 2026-08-26) 그 이름 목록을 그대로
+    waypoint 순서로 쓰고 이 함수의 나머지 로직(p1..pN 자동감지 + repeats
+    반복)은 건너뛴다 — poses 에 있는 아무 키나 원하는 순서/횟수로 나열 가능."""
     entry = _load_surface(config_path, surface_name)
     poses_dict = entry['poses']
+    sequence = entry.get('sequence')
+    if sequence:
+        if not isinstance(sequence, list) or len(sequence) < 2:
+            raise SurfaceConfigError(
+                f'surfaces.{surface_name}.sequence 는 최소 2개 이상의 점 이름 '
+                f'목록이어야 함')
+        missing = [name for name in sequence if name not in poses_dict]
+        if missing:
+            raise SurfaceConfigError(
+                f'surfaces.{surface_name}.sequence 의 {missing} 이(가) poses 에 없음')
+        waypoints = [_pose_from_entry(poses_dict, name) for name in sequence]
+        boundary = [Point(x=pose.position.x, y=pose.position.y, z=pose.position.z)
+                    for pose in waypoints]
+        return SurfacePath(
+            frame_id=str(entry.get('frame_id') or 'base_link'),
+            waypoints=waypoints,
+            circular_via_indices=[],
+            allowed_polygon=boundary,
+            row_count=sum(1 for name in sequence if name == sequence[0]),
+        )
+
     point_keys = []
     i = 1
     while f'p{i}' in poses_dict:

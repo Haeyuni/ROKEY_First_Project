@@ -14,13 +14,21 @@ surfaces:
       # 이전 값: x_mm: 371.67, y_mm: -20.87, z_mm: 492.89, rz1_deg: 20.31, ry_deg: -179.26, rz2_deg: 19.55
       p6: {x_mm: 371.51, y_mm: -18.48, z_mm: 492.54, rz1_deg: 40.45, ry_deg: -179.04, rz2_deg: 38.67}
 
-  # coater 는 6점(쌍 3개)이 아니라 p1..pN 을 순서대로 쓴다(2026-08-25 변경,
-  # 이후 p4 추가) — coating_node 가 이 순서(p1→p2→p3→p4)를 repeats 번 왕복한다.
+  # coater 는 6점(쌍 3개)이 아니라 아래 sequence 목록 순서 그대로 waypoint로
+  # 쓴다(2026-08-26 변경) — 바퀴마다 세 번째 점만 p3/p3r/p3l로 바뀐다.
+  # sequence 가 있으면 repeats/p1..pN 자동감지는 쓰지 않는다.
   coater:
     configured: true
     frame_id: base_link
+    sequence: [p1, p2, p3, p4, p1, p2, p3r, p4, p1, p2, p3l, p4]
     poses:
-      p1: {x_mm: 418.65, y_mm: 168.43, z_mm: 357.69, rz1_deg: 78.13, ry_deg: -132.42, rz2_deg: 54.26}
-      p2: {x_mm: 407.19, y_mm: 186.42, z_mm: 322.43, rz1_deg: 81.75, ry_deg: -127.77, rz2_deg: 51.93}
-      p3: {x_mm: 401.05, y_mm: 196.65, z_mm: 322.98, rz1_deg: 82.47, ry_deg: -128.07, rz2_deg: 52.29}
-      p4: {x_mm: 401.05, y_mm: 196.65, z_mm: 357.69, rz1_deg: 82.47, ry_deg: -128.07, rz2_deg: 52.29}
+      # 이전 값: x_mm: 418.65, y_mm: 168.43, z_mm: 357.69, rz1_deg: 78.13, ry_deg: -132.42, rz2_deg: 54.26
+      p1: {x_mm: 370.59, y_mm: 179.01, z_mm: 350.72, rz1_deg: 90.88, ry_deg: -130.93, rz2_deg: 87.55}
+      # 이전 값: x_mm: 375.09, y_mm: 187.46, z_mm: 329.14, rz1_deg: 89.42, ry_deg: -129.01, rz2_deg: 84.29
+      p2: {x_mm: 375.56, y_mm: 188.21, z_mm: 327.29, rz1_deg: 89.29, ry_deg: -128.87, rz2_deg: 84.02}
+      # 이전 값: x_mm: 370.71, y_mm: 202.41, z_mm: 321.47, rz1_deg: 90.72, ry_deg: -127.43, rz2_deg: 83.87
+      p3: {x_mm: 376.56, y_mm: 200.97, z_mm: 310.46, rz1_deg: 89.24, ry_deg: -128.62, rz2_deg: 83.85}
+      # 이전 값: x_mm: 370.71, y_mm: 202.41, z_mm: 351.47, rz1_deg: 90.72, ry_deg: -127.43, rz2_deg: 83.87
+      p4: {x_mm: 376.56, y_mm: 200.97, z_mm: 340.46, rz1_deg: 89.24, ry_deg: -128.62, rz2_deg: 83.85}
+      p3r: {x_mm: 382.36, y_mm: 197.85, z_mm: 315.16, rz1_deg: 89.22, ry_deg: -128.44, rz2_deg: 83.65}
+      p3l: {x_mm: 369.23, y_mm: 199.44, z_mm: 315.92, rz1_deg: 89.23, ry_deg: -128.56, rz2_deg: 83.54}
