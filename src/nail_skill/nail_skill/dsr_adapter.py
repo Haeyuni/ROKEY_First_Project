@@ -4,8 +4,7 @@
 robot_skill_node 의 액션 구현은 이 클래스만 호출하고, 두산 서비스 이름/시그니처를
 직접 알 필요가 없다. 드라이버 버전이 바뀌어도 여기만 고치면 된다.
 
-현재 장비에는 사용할 수 있는 F/T 센서가 없으므로 이동, 로봇 상태, TCP,
-그리퍼 API만 제공한다.
+이동, 로봇 상태, TCP, 그리퍼와 두산 컨트롤러의 외력 조회 API를 제공한다.
 """
 import threading
 import time
@@ -85,6 +84,7 @@ class DsrAdapter:
         self._posx = posx
         # E-Stop과 통신 상태는 외부 센서가 아니라 컨트롤러 robot_state로 확인한다.
         self._get_robot_state = dsr.get_robot_state
+        self._get_tool_force = dsr.get_tool_force
 
         # DSR_ROBOT2 의 각 wrapper 호출은 내부적으로 self._dr_node 를 임시
         # executor 에 물려 spin_until_future_complete 한다. 이 dr_node 를 두
@@ -329,6 +329,15 @@ class DsrAdapter:
         예외 없이 리턴하면 통신 생존, 예외/타임아웃이면 comm_ok=False."""
         with self._lock:
             return self._get_robot_state()
+
+    def get_tool_force(self, ref=None):
+        """두산 컨트롤러가 계산한 외력/토크 6축 값을 읽는다."""
+        force_ref = self._DR_BASE if ref is None else ref
+        with self._lock:
+            values = self._get_tool_force(ref=force_ref)
+        if not isinstance(values, (list, tuple)) or len(values) != 6:
+            raise DsrAdapterError(f'get_tool_force 응답 오류: {values!r}')
+        return [float(value) for value in values]
 
     # --- tool / TCP ------------------------------------------------------------
     def set_tcp(self, name: str):

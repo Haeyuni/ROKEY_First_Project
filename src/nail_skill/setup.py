@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'robot_skill_node = nail_skill.robot_skill_node:main',
             'tool_manager = nail_skill.tool_manager_node:main',
+            'probe_force_test = nail_skill.probe_force_test_node:main',
         ],
     },
 )

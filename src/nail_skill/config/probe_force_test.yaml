@@ -1,0 +1,30 @@
+# 새 Probe 도구의 힘 감지 가능성을 확인하는 독립 3점 시험 설정이다.
+# 좌표는 티칭할 때와 같은 TCP/좌표계 상태의 TASK-BASE 값이어야 한다.
+# 각 자세의 방향을 바꾸지 않고 해당 작업축으로만 하강한다.
+configured: true
+frame_id: base_link
+points:
+  center:
+    x_mm: 377.54
+    y_mm: -18.66
+    z_mm: 446.37
+    rz1_deg: 44.80
+    ry_deg: -177.87
+    rz2_deg: 48.15
+    sol: 2
+  left:
+    x_mm: 182.69
+    y_mm: -5.90
+    z_mm: 376.70
+    rz1_deg: 174.33
+    ry_deg: -140.27
+    rz2_deg: 172.47
+    sol: 2
+  right:
+    x_mm: 400.35
+    y_mm: -3.45
+    z_mm: 442.56
+    rz1_deg: 38.87
+    ry_deg: -173.14
+    rz2_deg: 36.24
+    sol: 2
