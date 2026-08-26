@@ -1,0 +1,31 @@
+string SOURCE_COARSE = "coarse"
+string SOURCE_FINE = "fine"
+string SOURCE_MANUAL = "manual"
+
+geometry_msgs/Pose search_start
+geometry_msgs/Vector3 press_direction
+string frame_id
+string source
+
+float64 air_offset_z_mm
+float64 max_depth_mm
+float64 probe_speed_mms
+float64 comparison_margin_n
+float64 max_force_n
+float64 lateral_force_limit_n
+int32 confirm_samples
+float64 timeout_s
+bool manual_probe_tool_confirmed
+---
+nail_msgs/ResultBase base
+nail_msgs/ProbeMeasurement measurement
+---
+string PHASE_AIR = "AIR"
+string PHASE_CONTACT = "CONTACT"
+
+string phase
+float64 traveled_mm
+float64 compression_force_n
+float64 lateral_force_n
+float64 total_force_n
+int32 confirmed_samples

@@ -1,0 +1,38 @@
+string session_id
+geometry_msgs/Pose center_search_start
+geometry_msgs/Vector3 scan_x_axis
+geometry_msgs/Vector3 scan_y_axis
+geometry_msgs/Vector3 press_direction
+string frame_id
+
+float64 area_x_mm
+float64 area_y_mm
+float64 margin_mm
+float64 coarse_pitch_mm
+float64 fine_pitch_mm
+float64 boundary_band_mm
+int32 fine_max_points
+
+float64 air_offset_z_mm
+float64 max_depth_mm
+float64 probe_speed_mms
+float64 comparison_margin_n
+float64 max_force_n
+float64 lateral_force_limit_n
+int32 confirm_samples
+float64 point_timeout_s
+
+bool manual_probe_tool_confirmed
+---
+nail_msgs/ResultBase base
+nail_msgs/BoundaryMap map
+---
+string STAGE_COARSE = "COARSE"
+string STAGE_FINE = "FINE"
+
+string stage
+nail_msgs/ProbeMeasurement last_measurement
+int32 points_done
+int32 points_total
+int32 boundary_candidate_count
+float64 percent
