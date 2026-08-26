@@ -7,6 +7,7 @@ string STAGE_BRUSH    = "BRUSH"
 string STAGE_COAT     = "COAT"
 string STAGE_CURE     = "CURE"
 string STAGE_STONE    = "STONE"
+string STAGE_TOOL_CHANGE = "TOOL_CHANGE"
 string STAGE_FINISH   = "FINISH"
 string STAGE_ABORTED  = "ABORTED"
 

@@ -16,6 +16,18 @@ const STAGE_LABEL_KO: Record<Stage, string> = {
   STONE: "스톤",
 };
 
+// TOOL_CHANGE 동안 orchestrator는 아직 current_tool을 새 툴로 바꾸기 전이라
+// (session_orchestrator_node.py: emit(TOOL_CHANGE) → _call_change_tool →
+// state['current_tool'] 갱신 순서), current_tool은 "방금 끝난 단계에서 쓰던
+// 툴"을 가리킨다 — 그걸로 방금까지 어디까지 끝났는지 역산한다.
+const TOOL_TO_COMPLETED_STAGE: Partial<Record<string, Stage>> = {
+  sander: "SAND",
+  brush: "BRUSH",
+  coater: "COAT",
+  uv: "CURE",
+  tweezers: "STONE",
+};
+
 type StationStatus = "done" | "active" | "pending";
 
 const TAG_LABEL: Record<StationStatus, string> = {
@@ -38,23 +50,33 @@ export function ProgressStep({ safety, connected, processState, enableStone, loc
   const stage = processState?.stage ?? "PRECHECK";
   const isAborted = stage === "ABORTED";
   const isFinished = stage === "FINISH";
+  const isToolChange = stage === "TOOL_CHANGE";
   const currentIndex = stations.indexOf(stage as Stage);
+
+  const completedStage = isToolChange
+    ? TOOL_TO_COMPLETED_STAGE[processState?.current_tool ?? ""]
+    : undefined;
+  const completedIndex = completedStage ? stations.indexOf(completedStage) : -1;
 
   const activeLabel = currentIndex >= 0 ? STAGE_LABEL_KO[stations[currentIndex]] : null;
   const stageTitle = isAborted
     ? "공정이 중단됐어요"
     : isFinished
       ? "코팅이 마무리되고 있어요"
-      : activeLabel
-        ? `${activeLabel} 중이에요`
-        : "코팅을 준비하고 있어요";
+      : isToolChange
+        ? "툴 교체 중이에요"
+        : activeLabel
+          ? `${activeLabel} 중이에요`
+          : "코팅을 준비하고 있어요";
   const caption = isAborted
     ? "공정이 중단됐어요"
     : isFinished
       ? "코티가 마무리하고 있어요"
-      : activeLabel
-        ? `코티가 ${activeLabel} 중이에요`
-        : "코티가 준비하고 있어요";
+      : isToolChange
+        ? "코티가 툴을 바꾸고 있어요"
+        : activeLabel
+          ? `코티가 ${activeLabel} 중이에요`
+          : "코티가 준비하고 있어요";
 
   return (
     <div className="screen screen--peach">
@@ -81,6 +103,7 @@ export function ProgressStep({ safety, connected, processState, enableStone, loc
           let status: StationStatus;
           if (isAborted) status = i < currentIndex ? "done" : "pending";
           else if (isFinished) status = "done";
+          else if (isToolChange) status = i <= completedIndex ? "done" : "pending";
           else if (currentIndex < 0) status = "pending";
           else if (i < currentIndex) status = "done";
           else if (i === currentIndex) status = "active";

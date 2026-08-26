@@ -15,7 +15,7 @@ type Screen = "color" | "parts" | "progress" | "complete";
 
 // 세션이 진행 중인 것으로 보는 stage 집합(FR-33 uiLocked와 별개로, 새로고침 시
 // 서버 상태를 보고 진행 화면으로 복귀하기 위해 씀).
-const ACTIVE_STAGES = new Set(["PRECHECK", "SAND", "BRUSH", "COAT", "CURE", "STONE"]);
+const ACTIVE_STAGES = new Set(["PRECHECK", "SAND", "BRUSH", "COAT", "CURE", "STONE", "TOOL_CHANGE"]);
 
 export default function App() {
   const { connected, safety, processState, sessionResult } = useRosWebSocket();

@@ -506,6 +506,7 @@ class SessionOrchestratorNode(Node):
         emit(ProcessState.STAGE_PRECHECK, 100.0)
 
         # --- SAND ------------------------------------------------------------------
+        emit(ProcessState.STAGE_TOOL_CHANGE, 0.0)
         _, err = self._call_change_tool(ToolState.SANDER, goal_handle, t_tool)
         if err is not None:
             return self._finish_by_err(goal_handle, result, err, 'ChangeTool(sander) 실패',
@@ -532,6 +533,7 @@ class SessionOrchestratorNode(Node):
         emit(ProcessState.STAGE_SAND, 100.0)
 
         # --- BRUSH (고정 공정) ------------------------------------------------------
+        emit(ProcessState.STAGE_TOOL_CHANGE, 0.0)
         _, err = self._call_change_tool(ToolState.BRUSH, goal_handle, t_tool)
         if err is not None:
             return self._finish_by_err(goal_handle, result, err, 'ChangeTool(brush) 실패',
@@ -565,6 +567,7 @@ class SessionOrchestratorNode(Node):
             state['layer_index'] = layer_index
 
             # COAT
+            emit(ProcessState.STAGE_TOOL_CHANGE, 0.0)
             _, err = self._call_change_tool(ToolState.COATER, goal_handle, t_tool)
             if err is not None:
                 return self._finish_by_err(goal_handle, result, err, 'ChangeTool(coater) 실패',
@@ -593,6 +596,7 @@ class SessionOrchestratorNode(Node):
             emit(ProcessState.STAGE_COAT, 100.0, layer_index)
 
             # CURE — 전체 영역 1회
+            emit(ProcessState.STAGE_TOOL_CHANGE, 0.0)
             _, err = self._call_change_tool(ToolState.UV, goal_handle, t_tool)
             if err is not None:
                 return self._finish_by_err(goal_handle, result, err, 'ChangeTool(uv) 실패',
@@ -622,6 +626,7 @@ class SessionOrchestratorNode(Node):
 
         # --- STONE (옵션, docstring #3 — 목표 좌표 가정) ------------------------------
         if enable_stone:
+            emit(ProcessState.STAGE_TOOL_CHANGE, 0.0)
             _, err = self._call_change_tool(ToolState.TWEEZERS, goal_handle, t_tool)
             if err is not None:
                 return self._finish_by_err(goal_handle, result, err,
@@ -648,6 +653,7 @@ class SessionOrchestratorNode(Node):
             emit(ProcessState.STAGE_STONE, 100.0)
 
         # --- FINISH ------------------------------------------------------------------
+        emit(ProcessState.STAGE_TOOL_CHANGE, 0.0)
         _, err = self._call_change_tool(ToolState.NONE, goal_handle, t_tool)
         if err is not None:
             return self._finish_by_err(
