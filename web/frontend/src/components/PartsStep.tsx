@@ -9,7 +9,6 @@ import { StepDots } from "./StepDots";
 export interface StartSettings {
   shapeProfileId: string;
   targetMaterial: string;
-  layerTotal: number;
 }
 
 interface Props {
@@ -25,8 +24,9 @@ interface Props {
   errorMessage: string | null;
 }
 
-// Step 2 — 파츠(큐빅) 선택 + 소재/형상/레이어 수 같은 기술 파라미터를
-// 담는 접이식 "고급 설정"(기존 SessionStart의 나머지 필드들).
+// Step 2 — 파츠(큐빅) 선택 + 소재/형상 같은 기술 파라미터를 담는 접이식
+// "고급 설정"(기존 SessionStart의 나머지 필드들). layer_total은 항상 1로
+// 고정이라(sessions.py FIXED_LAYER_TOTAL) 사용자 입력에서 뺐다.
 export function PartsStep({
   safety,
   connected,
@@ -41,11 +41,10 @@ export function PartsStep({
 }: Props) {
   const [shapeProfileId, setShapeProfileId] = useState("default");
   const [targetMaterial, setTargetMaterial] = useState<string>(TARGET_MATERIALS[0]);
-  const [layerTotal, setLayerTotal] = useState(2);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   function handleStart() {
-    onStart({ shapeProfileId, targetMaterial, layerTotal });
+    onStart({ shapeProfileId, targetMaterial });
   }
 
   return (
@@ -103,7 +102,7 @@ export function PartsStep({
 
       <button type="button" className="settings-bar" onClick={() => setSettingsOpen((o) => !o)} aria-expanded={settingsOpen}>
         <GearIcon size={20} />
-        <span className="settings-bar__text">고급 설정 · 소재 / 레이어 수</span>
+        <span className="settings-bar__text">고급 설정 · 소재</span>
         <ChevronDownIcon size={16} />
       </button>
 
@@ -122,17 +121,6 @@ export function PartsStep({
           <label>
             형상 프로필
             <input type="text" value={shapeProfileId} onChange={(e) => setShapeProfileId(e.target.value)} disabled={busy} />
-          </label>
-          <label>
-            레이어 수
-            <input
-              type="number"
-              min={1}
-              max={5}
-              value={layerTotal}
-              onChange={(e) => setLayerTotal(Number(e.target.value))}
-              disabled={busy}
-            />
           </label>
         </div>
       )}

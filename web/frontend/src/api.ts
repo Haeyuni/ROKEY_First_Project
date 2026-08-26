@@ -31,7 +31,6 @@ export async function fetchHealth(): Promise<HealthResponse> {
 export interface CreateSessionBody {
   shape_profile_id: string;
   target_material: string;
-  layer_total: number;
   enable_stone: boolean;
 }
 

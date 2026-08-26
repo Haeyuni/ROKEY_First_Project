@@ -1,6 +1,6 @@
 import datetime as dt
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 # FR-03: target_material 허용 목록. IDS RunSession.action 주석(BR-029: 사람
 # 신체 금지)과 web.md FR-03 이 같은 값을 가리킨다.
@@ -10,7 +10,6 @@ ALLOWED_TARGET_MATERIALS = ("silicone_model", "artificial_tip")
 class CreateSessionRequest(BaseModel):
     shape_profile_id: str
     target_material: str
-    layer_total: int = Field(default=2, ge=1, le=5)
     enable_stone: bool = False
 
 

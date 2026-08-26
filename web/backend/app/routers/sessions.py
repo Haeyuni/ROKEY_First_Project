@@ -37,6 +37,11 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 # 값이 필요하다 — orchestrator는 분기에 쓰지 않는 메타데이터라 고정값으로 채운다.
 DEFAULT_RECIPE_ID = "default"
 
+# layer_total은 orchestrator의 COAT→CURE 레이어 루프 반복 횟수를 그대로
+# 결정한다(session_orchestrator_node.py: for layer_index in range(layer_total)).
+# 항상 1회만 도포/경화하도록 웹에서 사용자 선택 없이 고정한다.
+FIXED_LAYER_TOTAL = 1
+
 
 # 관리자 대시보드: 세션 이력 목록(최신순, 페이지네이션 + 결과 코드 필터).
 @router.get("", response_model=list[SessionListItem])
@@ -91,7 +96,7 @@ async def create_session(
         recipe_id=DEFAULT_RECIPE_ID,
         shape_profile_id=body.shape_profile_id,
         target_material=body.target_material,
-        layer_total=body.layer_total,
+        layer_total=FIXED_LAYER_TOTAL,
         started_at=dt.datetime.now(dt.timezone.utc),
     )
     db.add(record)
@@ -102,7 +107,7 @@ async def create_session(
         recipe_id=DEFAULT_RECIPE_ID,
         shape_profile_id=body.shape_profile_id,
         target_material=body.target_material,
-        layer_total=body.layer_total,
+        layer_total=FIXED_LAYER_TOTAL,
         enable_stone=body.enable_stone,
     )
 
