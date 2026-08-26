@@ -233,7 +233,7 @@ class RobotSkillNode(Node):
         # 훑어 떨어뜨린다. unscrew_wipe_lift_mm 는 슬롯 파지 z 기준 높이다 —
         # 붓이 병 입구에 살짝 닿는 높이로 실측해서 맞출 것.
         # 0 을 주면 이 단계를 통째로 건너뛴다.
-        d('unscrew_wipe_lift_mm', 30.0)
+        d('unscrew_wipe_lift_mm', 35.0)
         d('unscrew_wipe_x_mm', 5.0)
         d('unscrew_wipe_cycles', 3)
         d('unscrew_wipe_speed_mms', 20.0)
