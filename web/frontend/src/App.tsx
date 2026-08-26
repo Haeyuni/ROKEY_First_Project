@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { cancelSession, createSession } from "./api";
+import { useEffect, useRef, useState } from "react";
+import { cancelSession, createSession, fetchSessionReport } from "./api";
 import { AlertModal } from "./components/AlertModal";
 import { ColorStep } from "./components/ColorStep";
 import { CompleteStep } from "./components/CompleteStep";
@@ -7,7 +7,9 @@ import { PartsStep, type StartSettings } from "./components/PartsStep";
 import { ProgressStep } from "./components/ProgressStep";
 import { useRosWebSocket } from "./hooks/useWebSocket";
 import { CUBICS, DESIGNS, isStoneEnabled, type CubicId, type DesignId } from "./options";
-import { SEV_SAFETY, SEV_WARN } from "./types";
+import { SEV_SAFETY, SEV_WARN, type RunSessionResult } from "./types";
+
+const TERMINAL_STAGES = new Set(["FINISH", "ABORTED"]);
 
 type Screen = "color" | "parts" | "progress" | "complete";
 
@@ -26,6 +28,12 @@ export default function App() {
   const [ackErrorKey, setAckErrorKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const [fallbackResult, setFallbackResult] = useState<RunSessionResult | null>(null);
+
+  // IR-05: 서버는 "result"를 접속 스냅샷에 안 넣는다(이벤트성). WS가 그
+  // 메시지가 나가는 순간 끊겨 있었으면 sessionResult는 영영 안 온다 —
+  // 같은 종료를 두 번 처리하지 않도록 세션 id로 dedupe.
+  const handledTerminalSessionRef = useRef<string | null>(null);
 
   const enableStone = isStoneEnabled(cubic);
 
@@ -44,11 +52,35 @@ export default function App() {
   }, [processState, screen]);
 
   useEffect(() => {
-    if (sessionResult && screen === "progress") {
+    if (screen !== "progress") return;
+
+    if (sessionResult) {
       setFinishedAt(Date.now());
       setScreen("complete");
+      return;
     }
-  }, [sessionResult, screen]);
+
+    // sessionResult 없이 ProcessState만 종료 단계(FINISH/ABORTED)로 넘어온
+    // 경우 — "result" WS 이벤트를 놓친 것이므로 REST로 마지막 결과를 다시
+    // 가져와 화면을 넘긴다.
+    if (!processState || !TERMINAL_STAGES.has(processState.stage)) return;
+    if (handledTerminalSessionRef.current === processState.session_id) return;
+    handledTerminalSessionRef.current = processState.session_id;
+
+    setFinishedAt(Date.now());
+    setScreen("complete");
+    fetchSessionReport(processState.session_id)
+      .then((report) => {
+        const code = report.result_code ?? "UNKNOWN";
+        setFallbackResult({
+          success: code === "COMPLETED" || code === "COMPLETED_WITH_WARN",
+          result_code: code,
+          warn_count: 0,
+          final_error: { code: "", severity: 0, detail: report.abort_reason ?? "" },
+        });
+      })
+      .catch(() => {});
+  }, [sessionResult, processState, screen]);
 
   async function handleStart(settings: StartSettings) {
     setBusy(true);
@@ -62,6 +94,7 @@ export default function App() {
       void session_id; // WS의 ProcessState.session_id로 화면을 갱신하므로 별도 보관은 불필요
       setStartedAt(Date.now());
       setFinishedAt(null);
+      setFallbackResult(null);
       setScreen("progress");
     } catch (err) {
       setStartError(String(err));
@@ -82,6 +115,7 @@ export default function App() {
     setCubic(CUBICS[0].id);
     setStartedAt(null);
     setFinishedAt(null);
+    setFallbackResult(null);
     setAckErrorKey(null);
     setStartError(null);
   }
@@ -132,7 +166,7 @@ export default function App() {
           connected={connected}
           design={design}
           cubic={cubic}
-          result={sessionResult}
+          result={sessionResult ?? fallbackResult}
           elapsedMs={elapsedMs}
           onRestart={handleRestart}
         />

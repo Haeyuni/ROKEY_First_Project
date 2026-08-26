@@ -49,6 +49,22 @@ export async function createSession(
   return res.json();
 }
 
+export interface SessionReport {
+  session_id: string;
+  target_material: string;
+  layer_total: number;
+  result_code: string | null;
+  abort_reason: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export async function fetchSessionReport(sessionId: string): Promise<SessionReport> {
+  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/report`);
+  if (!res.ok) throw new Error(`세션 리포트 조회 실패: ${res.status}`);
+  return res.json();
+}
+
 export async function cancelSession(sessionId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/cancel`, {
     method: "POST",
