@@ -68,6 +68,11 @@ class ProbeForceTestNode(Node):
             and time.monotonic() - self._last_safety_rx
             <= self.get_parameter('safety_status_timeout_s').value)
 
+    def _spin_and_check_safety(self):
+        """이동 대기 중에도 safety subscription을 계속 처리한다."""
+        rclpy.spin_once(self, timeout_sec=0.0)
+        return self._safe_to_move()
+
     @staticmethod
     def _tool_z_axis(pose):
         rz1 = math.radians(pose.rz1_deg)
@@ -166,7 +171,7 @@ class ProbeForceTestNode(Node):
         if not self._adapter.wait_motion_done(
                 self.get_parameter('motion_timeout_s').value,
                 poll_hz=self.get_parameter('sample_hz').value,
-                on_tick=on_tick, should_abort=lambda: not self._safe_to_move()):
+                on_tick=on_tick, should_abort=lambda: not self._spin_and_check_safety()):
             raise RuntimeError('이동 실패, 타임아웃 또는 안전 차단')
         self._verify_reached(pose, '티칭 Pose')
 
@@ -235,7 +240,7 @@ class ProbeForceTestNode(Node):
         completed = self._adapter.wait_motion_done(
             self.get_parameter('motion_timeout_s').value,
             poll_hz=self.get_parameter('sample_hz').value,
-            should_abort=lambda: not self._safe_to_move() or monitor_force())
+            should_abort=lambda: not self._spin_and_check_safety() or monitor_force())
         if not completed:
             self._wait_until_stopped()
         elif state['result'] is None:
