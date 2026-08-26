@@ -343,7 +343,8 @@ timeout이다.
 
 `scan_corners`에는 top-left, top-right, bottom-right, bottom-left 순서의 공중 Pose
 네 점을 넣는다. `nail_reference`는 손톱 내부 기준점, `dummy_references`는 손톱
-밖 더미손 기준점이다. 기준점의 반복 강성 중앙값 차이가
+밖 더미손 기준점이다. 누르는 방향은 항상 `base_link (0, 0, -1)`로 고정하며
+별도 입력하지 않는다. 기준점의 반복 강성 중앙값 차이가
 `material_min_separation_n_per_mm`보다 작으면 `E_NO_BOUNDARY`로 중단한다. 각
 격자점은 가까운 강성 기준으로 분류하고, 손톱 기준점에 연결된 영역만 사용한다.
 3mm 거친 탐색 뒤 전환 구간 주변을 1mm로 재탐색한다. 결과는 `BoundaryMap`이며

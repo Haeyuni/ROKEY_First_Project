@@ -110,7 +110,6 @@ class ScanBoundaryNode(Node):
             if self._running or self._late_probe_pending:
                 self.get_logger().warn('ScanBoundary REJECT: 이전 스캔/Probe가 종료되지 않음')
                 return GoalResponse.REJECT
-        press_axis = self._unit(goal.press_direction)
         base_frame = self.get_parameter('base_frame_id').value
         corner_count = len(goal.scan_corners)
         width_mm, height_mm = self._corner_dimensions(goal.scan_corners) \
@@ -122,7 +121,6 @@ class ScanBoundaryNode(Node):
             and corner_count == 4
             and self._corners_form_rectangle(goal.scan_corners)
             and len(goal.dummy_references) >= 1
-            and press_axis is not None
             and 3.0 <= width_mm <= 40.0
             and 3.0 <= height_mm <= 40.0
             and 1.0 <= goal.coarse_pitch_mm <= 5.0
@@ -146,7 +144,7 @@ class ScanBoundaryNode(Node):
             valid = len(coarse) <= 400
         if not valid:
             self.get_logger().warn(
-                'ScanBoundary REJECT: E_INVALID_GOAL (사각형, 기준점, 축 또는 격자 범위 오류)')
+                'ScanBoundary REJECT: E_INVALID_GOAL (사각형, 기준점 또는 격자 범위 오류)')
             return GoalResponse.REJECT
         ok, reasons = self._call_validate(goal.session_id)
         if not ok:
@@ -275,7 +273,10 @@ class ScanBoundaryNode(Node):
     def _probe_goal(self, goal, pose, source):
         probe = ProbePoint.Goal()
         probe.search_start = pose
-        probe.press_direction = goal.press_direction
+        # 경계 스캔은 PickPlace 뒤에도 항상 base 좌표계 수직 아래로 누른다.
+        probe.press_direction.x = 0.0
+        probe.press_direction.y = 0.0
+        probe.press_direction.z = -1.0
         probe.frame_id = goal.frame_id
         probe.source = source
         probe.air_offset_z_mm = goal.air_offset_z_mm

@@ -3,7 +3,6 @@ string session_id
 geometry_msgs/Pose[] scan_corners
 geometry_msgs/Pose nail_reference
 geometry_msgs/Pose[] dummy_references
-geometry_msgs/Vector3 press_direction
 string frame_id
 
 float64 coarse_pitch_mm
