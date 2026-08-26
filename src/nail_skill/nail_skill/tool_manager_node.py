@@ -407,6 +407,11 @@ class ToolManagerNode(Node):
             place_goal.mode = PickPlace.Goal.MODE_PLACE
             place_goal.target_key = cur_cfg['slot_frame']
             place_goal.approach_height_mm = approach_height
+            # 나사로 잠긴 툴(코터)은 반납 시 반대방향으로 돌려 뚜껑을 다시
+            # 잠근다 — 이 필드가 없어서 do_close 가 항상 False 로 평가돼
+            # 조이는 회전이 한 번도 실행되지 않던 누락이었다(2026-08-26).
+            place_goal.unscrew = bool(cur_cfg.get('unscrew', False))
+            place_goal.unscrew_grip_width_mm = float(cur_cfg.get('unscrew_grip_width_mm', 0.0))
 
             pp_result, err_code, err_detail = self._call_pick_place(
                 place_goal, goal_handle, timeout_s)

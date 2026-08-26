@@ -26,7 +26,11 @@ class ProbeForceTestNode(Node):
         d('dsr_prefix', 'dsr01')
         d('robot_model', 'm0609')
         d('safety_topic', '/safety/status')
-        d('safety_status_timeout_s', 1.0)
+        # safety_monitor 의 publish_rate_hz=3(주기 약 0.33s) 대비 1.0s는 여유가
+        # 거의 없어 사소한 지연에도 오탐(false E_SAFETY_BLOCKED)이 났다
+        # (실기 확인, 2026-08-26 — safe_to_move 등은 전부 정상인데 age=1.049s
+        # 만 넘겨서 차단됨). 다른 8개 소비 노드와 같은 이유로 여유를 더 둔다.
+        d('safety_status_timeout_s', 2.0)
         d('approach_speed_mms', 5.0)
         d('press_speed_mms', 0.5)
         d('press_accel_mms2', 1.0)
