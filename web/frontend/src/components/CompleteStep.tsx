@@ -5,6 +5,11 @@ import { ArrowRightIcon } from "../icons";
 import { translateError } from "../faultMessages";
 import { TopBar } from "./TopBar";
 
+// orchestrator가 RunSession result의 result_code를 못 채우는 경로가 있어
+// (예: "UNKNOWN") 정상 완료인데도 실패로 잘못 표시되는 문제가 있었다.
+// 그래서 "COMPLETED만 성공"이 아니라 "이 코드들만 명확히 실패"로 뒤집는다.
+const FAILURE_CODES = new Set(["FAILED", "ABORTED_SAFETY", "CANCELLED"]);
+
 const RESULT_LABEL_KO: Record<string, string> = {
   COMPLETED: "코팅이 완료됐어요!",
   COMPLETED_WITH_WARN: "코팅이 완료됐어요 (경고 있었음)",
@@ -34,7 +39,7 @@ function formatElapsed(ms: number | null): string {
 // Step 4 — 코팅 완료 페이지. 팝업이 아니라 전용 화면으로 결과를 보여주고,
 // "새 손님 맞이하기"로 Step1부터 다시 시작한다.
 export function CompleteStep({ safety, connected, design, cubic, result, elapsedMs, onRestart }: Props) {
-  const ok = !result || result.result_code === "COMPLETED";
+  const ok = !result || !FAILURE_CODES.has(result.result_code);
   const title = result ? (RESULT_LABEL_KO[result.result_code] ?? "코팅이 끝났어요") : "코팅이 완료됐어요!";
   const stoneNote = isStoneEnabled(cubic) ? " · 스톤" : "";
 
