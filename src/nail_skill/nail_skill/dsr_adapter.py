@@ -7,6 +7,7 @@ robot_skill_node 의 액션 구현은 이 클래스만 호출하고, 두산 서�
 현재 장비에는 사용할 수 있는 F/T 센서가 없으므로 이동, 로봇 상태, TCP,
 그리퍼 API만 제공한다.
 """
+import math
 import threading
 import time
 
@@ -68,6 +69,10 @@ class DsrAdapter:
         self._amovel = dsr.amovel
         self._amovejx = dsr.amovejx
         self._amovec = dsr.amovec
+        # 뚜껑을 한 번에 돌리는 데만 쓴다(스플라인 경유점 이동).
+        # 드라이버 버전에 따라 없을 수 있어 없으면 None 으로 두고,
+        # 호출부가 끊어 도는 방식으로 물러선다.
+        self._amovesx = getattr(dsr, 'amovesx', None)
         self._check_motion = dsr.check_motion
         self._get_current_posx = dsr.get_current_posx
         # 나사 뚜껑 풀기에서 손목(J6) 잔여 가동범위를 확인하는 데만 쓴다.
@@ -252,6 +257,82 @@ class DsrAdapter:
             TaskPose(0.0, 0.0, float(along_z_mm), float(delta_deg), 0.0, 0.0),
             vel_mms, acc_mms2, relative=True,
             vel_degs=vel_degs, acc_degs2=acc_degs2)
+
+    def has_spline(self) -> bool:
+        """movesx(스플라인 경유점 이동)를 쓸 수 있는 드라이버인지."""
+        return self._amovesx is not None
+
+    def start_rotate_tool_z_continuous(self, delta_deg: float, along_z_mm: float,
+                                        step_deg: float, duration_s: float,
+                                        vel_mms: float, acc_mms2: float,
+                                        vel_degs: float, acc_degs2: float):
+        """tool +Z 축 둘레로 delta_deg 를 **한 번의 이동**으로 돈다 (중간에 안 섬).
+
+        start_rotate_tool_z() 로는 180° 넘는 회전을 한 명령에 담을 수 없다.
+        상대 이동은 결국 "목표 자세" 하나로 환산되는데, 540° 회전한 자세는
+        180° 회전한 자세와 완전히 같은 자세다 — 컨트롤러는 최단 경로로 돌아
+        540° 명령이 180° 회전으로 줄어들거나 방향이 뒤집힌다. 뚜껑 풀기가
+        segment 로 끊겨 있던 것도 이 한계 때문이다.
+
+        그래서 여기서는 step_deg(<180°) 간격의 **절대** 경유점을 직접 만들어
+        movesx 스플라인 하나로 잇는다. 경유점 사이가 매번 180° 미만이라
+        회전 방향이 확정되고, 스플라인이라 경유점마다 감속/정지하지 않는다.
+
+        경유점 계산: ZYZ(A,B,C) 자세에서 tool Z 축 회전은
+            R·Rz(θ) = Rz(A)·Ry(B)·Rz(C+θ)
+        이므로 C 에 θ 를 더하기만 하면 된다. tool Z 축의 base 방향은 C 와
+        무관하게 (sinB·cosA, sinB·sinA, cosB) 라 축방향 이동도 같이 얹는다.
+
+        along_z_mm 은 부호 포함 (음수 = tool -Z = 뚜껑이 떠오르는 쪽).
+
+        속도는 vel/acc 가 아니라 duration_s(전체 이동 시간)로 준다. 경유점들이
+        거의 제자리 회전이라 병진 거리가 몇 mm 밖에 안 되는데, 컨트롤러가
+        병진 속도만 보고 시간을 정하면 손목이 순식간에 몇 바퀴를 돈다. 시간을
+        직접 못 박으면 회전 속도가 확정된다 (vel/acc 도 같이 넘겨서 time 을
+        안 보는 드라이버에서도 상한이 걸리게 둔다).
+
+        movesx 를 못 쓰면 DsrAdapterError — 호출부가 끊어 도는 쪽으로 물러선다.
+        """
+        if self._amovesx is None:
+            raise DsrAdapterError('이 드라이버에는 movesx 가 없습니다')
+
+        # 경유점 간격은 180° 미만이어야 방향이 확정된다. 여유를 둬 170° 로 자른다.
+        step = min(abs(float(step_deg)) or 90.0, 170.0)
+        n = max(1, int(math.ceil(abs(float(delta_deg)) / step)))
+
+        cur = self.get_pose()
+        a = math.radians(cur.rz1_deg)
+        b = math.radians(cur.ry_deg)
+        ux = math.sin(b) * math.cos(a)
+        uy = math.sin(b) * math.sin(a)
+        uz = math.cos(b)
+
+        points = []
+        for k in range(1, n + 1):
+            f = k / float(n)
+            points.append(self._posx(
+                cur.x_mm + ux * float(along_z_mm) * f,
+                cur.y_mm + uy * float(along_z_mm) * f,
+                cur.z_mm + uz * float(along_z_mm) * f,
+                cur.rz1_deg, cur.ry_deg, cur.rz2_deg + float(delta_deg) * f))
+
+        if len(points) < 2:
+            # 경유점이 하나면 스플라인을 쓸 이유가 없다(=180° 이하 회전).
+            self.start_rotate_tool_z(delta_deg, along_z_mm, vel_mms, acc_mms2,
+                                       vel_degs, acc_degs2)
+            return
+
+        vel = [float(vel_mms), float(vel_degs)]
+        acc = [float(acc_mms2), float(acc_degs2)]
+        try:
+            with self._lock:
+                ret = self._amovesx(points, vel=vel, acc=acc,
+                                     time=max(0.0, float(duration_s)),
+                                     ref=self._DR_BASE, mod=self._DR_MV_MOD_ABS)
+        except Exception as exc:
+            raise DsrAdapterError(f'amovesx 호출 실패: {exc}') from exc
+        if ret is not None and ret != 0:
+            raise DsrAdapterError(f'amovesx 명령 거부(ret={ret})')
 
     def start_move_rel_base_xyz(self, dx_mm: float, dy_mm: float, dz_mm: float,
                                  vel_mms: float, acc_mms2: float):

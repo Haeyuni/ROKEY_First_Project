@@ -178,8 +178,8 @@ class RobotSkillNode(Node):
         d('gripper_open_width_mm', 60.0)
         d('targets_yaml_path', '')
         # --- 나사 뚜껑 풀기 (PickPlace goal.unscrew) ---------------------------
-        # 한 번에 다 돌리지 않고 unscrew_segment_deg 씩 끊어 도는 이유는
-        # _turn_tool_z() 주석 참고 (매 구간 J6 잔여 가동범위 재계산 + 취소 확인).
+        # 기본은 unscrew_continuous=True — 전체 각도를 스플라인 경유점 하나로
+        # 이어 **끊지 않고 한 번에** 돈다 (_turn_tool_z() 주석 참고).
         #
         # ⚠️ unscrew_total_deg 의 부호가 곧 회전 방향이다. tool +Z 는 그리퍼가
         #    뚜껑을 내려다보는 방향(아래)이므로, 오른나사를 푸는 방향(위에서
@@ -194,7 +194,17 @@ class RobotSkillNode(Node):
         # 닫을 때(PLACE) 돌릴 각도. 0 이면 -unscrew_total_deg 를 그대로 쓴다 —
         # 푼 만큼만 되감으면 원래 상태로 돌아가고 과조임이 안 생긴다.
         d('unscrew_close_deg', 0.0)
-        d('unscrew_segment_deg', 180.0)
+        # 뚜껑을 끊지 않고 한 번에 돌린다. movesx 경유점 스플라인을 쓰므로
+        # 회전 중에도 취소/안전 감시는 그대로 돈다(_monitor 가 이동 중 폴링).
+        # 회전이 이상하면 False 로 두면 예전처럼 segment 단위로 끊어 돈다.
+        d('unscrew_continuous', True)
+        # 연속 회전을 만들 때 쓰는 경유점 간격. 180° 이상이면 두 경유점 사이
+        # 회전 방향이 확정되지 않으므로 반드시 180° 미만이어야 한다.
+        d('unscrew_waypoint_deg', 90.0)
+        # unscrew_continuous=False 이거나 movesx 를 못 쓸 때만 쓰는 분할 각도.
+        # 180 이 아니라 120 인 이유: 상대 이동 한 번으로 180° 를 돌리면 목표
+        # 자세가 시계/반시계 어느 쪽으로도 같은 거리라 방향이 확정되지 않는다.
+        d('unscrew_segment_deg', 120.0)
         # 첫 구간만 짧게 돌려 "명령 1도당 J6 가 어느 쪽으로 몇 도 움직이는가"를
         # 실측한다 — 그리퍼 장착 방향에 따라 부호가 달라서 미리 가정할 수 없다.
         d('unscrew_probe_deg', 5.0)
@@ -509,11 +519,19 @@ class RobotSkillNode(Node):
                       lift_per_turn_mm, j6_rate=None):
         """tool Z 축 둘레로 direction(+1/-1) 쪽으로 최대 budget_deg 만큼 돌린다.
 
-        한 번의 이동 명령으로 다 돌리지 않고 unscrew_segment_deg 씩 쪼개는 이유:
-          · 매 구간 J6 를 실측해 남은 가동범위를 다시 계산한다. 예산을 다 못
-            쓰더라도 손목 한계 직전까지는 돌린다.
-          · 구간 사이에 취소/안전 확인이 들어간다. 720° 를 한 명령으로 보내면
-            도는 동안 아무것도 끼어들 수 없다.
+        j6_rate 를 이미 아는 경우(=뚜껑을 실제로 푸는 회전)에는 손목 잔여
+        가동범위 안에서 돌 수 있는 만큼을 **한 번의 이동으로 이어서** 돈다
+        (adapter.start_rotate_tool_z_continuous → movesx 스플라인). 예전처럼
+        unscrew_segment_deg 씩 끊으면 구간마다 감속·정지 후 J6 를 다시 읽느라
+        뚜껑이 덜컥덜컥 열린다. 취소/안전 확인은 구간 경계가 아니라 _monitor
+        가 이동 중 폴링으로 하고 있으므로 끊을 이유가 되지 않는다.
+
+        끊어 도는 경로는 두 경우에만 남는다:
+          · j6_rate 를 아직 모를 때(첫 탐색 구간) — 아래 설명 참고.
+          · unscrew_continuous=False 이거나 드라이버에 movesx 가 없을 때.
+        이때 unscrew_segment_deg 를 180° 미만으로 두는 건 필수다. 상대 이동
+        하나로 180° 를 명령하면 목표 자세가 양쪽으로 같은 거리라 컨트롤러가
+        어느 쪽으로 돌지 확정할 수 없다.
 
         j6_rate(명령 1도당 J6 변화량, 부호 포함)를 모르면 첫 구간을
         unscrew_probe_deg 만큼만 짧게 돌려 실측한다 — 그리퍼 장착 방향에 따라
@@ -526,16 +544,22 @@ class RobotSkillNode(Node):
         반환: (reason, 실제 회전량[deg, 부호 포함], j6_rate)
         """
         p = self.get_parameter
-        segment_deg = abs(p('unscrew_segment_deg').value) or 90.0
+        segment_deg = abs(p('unscrew_segment_deg').value) or 120.0
         probe_deg = abs(p('unscrew_probe_deg').value) or 5.0
+        waypoint_deg = abs(p('unscrew_waypoint_deg').value) or 90.0
         vel_degs = p('unscrew_speed_degs').value
         acc_degs2 = p('unscrew_accel_degs2').value
         j6_limit = abs(p('unscrew_j6_limit_deg').value)
         j6_margin = abs(p('unscrew_j6_margin_deg').value)
+        continuous = (bool(p('unscrew_continuous').value)
+                       and self._adapter.has_spline())
 
         remaining = abs(budget_deg)
         turned = 0.0
-        seg_cap = segment_deg if j6_rate is not None else probe_deg
+        # 연속 회전이면 애초에 쪼개지 않는다 — 손목 가동범위만이 한 번에 돌
+        # 수 있는 각도를 정한다(아래 headroom).
+        seg_cap = (remaining if continuous else segment_deg) \
+            if j6_rate is not None else probe_deg
 
         while remaining > 1.0:
             seg = min(seg_cap, remaining)
@@ -554,22 +578,42 @@ class RobotSkillNode(Node):
                 break
 
             lift_mm = lift_per_turn_mm * seg / 360.0
+            spline = continuous and seg > waypoint_deg
             try:
-                self._adapter.start_rotate_tool_z(
-                    direction * seg, lift_mm,
-                    vel_mms=max(1.0, abs(lift_mm) * 4.0), acc_mms2=20.0,
-                    vel_degs=vel_degs, acc_degs2=acc_degs2)
+                if spline:
+                    # 이동 시간을 직접 준다 — 끊어 돌 때와 같은 회전 속도가
+                    # 되도록 seg / vel_degs. 이유는 adapter 쪽 주석 참고.
+                    self._adapter.start_rotate_tool_z_continuous(
+                        direction * seg, lift_mm, waypoint_deg,
+                        duration_s=seg / max(1.0, abs(vel_degs)),
+                        vel_mms=max(1.0, abs(lift_mm) * 4.0), acc_mms2=20.0,
+                        vel_degs=vel_degs, acc_degs2=acc_degs2)
+                else:
+                    self._adapter.start_rotate_tool_z(
+                        direction * seg, lift_mm,
+                        vel_mms=max(1.0, abs(lift_mm) * 4.0), acc_mms2=20.0,
+                        vel_degs=vel_degs, acc_degs2=acc_degs2)
             except DsrAdapterError as exc:
+                if spline:
+                    # 연속 회전만 실패한 것 — 아직 아무것도 안 돌았으므로
+                    # 예전처럼 끊어 도는 방식으로 같은 각도를 다시 시도한다.
+                    self.get_logger().warn(
+                        f'뚜껑 회전: 연속 회전 불가({exc}) — '
+                        f'{segment_deg:.0f}° 씩 끊어 돕니다.')
+                    continuous = False
+                    seg_cap = segment_deg
+                    continue
                 self.get_logger().error(f'뚜껑 회전: 명령 거부 — {exc}')
                 return 'unreachable', turned * direction, j6_rate
 
-            reason = self._monitor(goal_handle, timeout_s, 10.0, on_tick)
+            reason = self._monitor(goal_handle, timeout_s, 20.0, on_tick)
             if reason != 'ok':
                 return reason, turned * direction, j6_rate
 
             turned += seg
             remaining -= seg
-            seg_cap = segment_deg   # 탐색 구간은 첫 회뿐
+            # 탐색 구간은 첫 회뿐 — 그 다음부터는 연속이면 남은 전부를 한 번에.
+            seg_cap = remaining if continuous else segment_deg
 
             j6_after = self._joint6_deg()
             if j6_before is not None and j6_after is not None:
