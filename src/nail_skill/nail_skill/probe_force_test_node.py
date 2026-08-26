@@ -27,15 +27,17 @@ class ProbeForceTestNode(Node):
         d('robot_model', 'm0609')
         d('safety_topic', '/safety/status')
         d('approach_speed_mms', 5.0)
-        d('press_speed_mms', 0.5)
+        d('press_speed_mms', 0.7)
         d('press_accel_mms2', 1.0)
         d('max_depth_mm', 10.0)
-        d('max_force_n', 2.0)
+        d('max_force_n', 5.0)
+        d('air_offset_z_mm', 60.0)
+        d('comparison_margin_n', 0.3)
         d('baseline_samples', 30)
         d('sample_hz', 10.0)
         d('noise_sigma', 6.0)
         d('min_detect_force_n', 0.15)
-        d('confirm_samples', 10)
+        d('confirm_samples', 3)
         d('motion_timeout_s', 40.0)
         d('move_pose_tolerance_mm', 1.0)
         d('move_axis_tolerance_deg', 3.0)
@@ -185,24 +187,15 @@ class ProbeForceTestNode(Node):
             raise RuntimeError('이동 실패, 타임아웃 또는 안전 차단')
         self._verify_reached(pose, '티칭 Pose')
 
-    def _run_point(self, name, pose, sol):
-        tool_z = self._tool_z_axis(pose)
-        # TCP가 없는 시험이므로 각 플랜지 자세에서 base_link 아래를 향하는 축을 고른다.
-        press_axis = tool_z if tool_z[2] < 0.0 else tuple(-value for value in tool_z)
-        axis_name = '+Z' if tool_z[2] < 0.0 else '-Z'
-        self.get_logger().info(
-            f'[{name}] press_axis={axis_name} base=({press_axis[0]:.3f}, '
-            f'{press_axis[1]:.3f}, {press_axis[2]:.3f})')
+    def _run_profile(self, name, phase, pose, press_axis, sol, compression_threshold=None):
+        label = f'{name}/{phase}'
         self._move_and_wait(
             pose, self.get_parameter('approach_speed_mms').value,
             self.get_parameter('approach_speed_mms').value * 2.0, sol)
         baseline, normal_noise, force_noise, torque_noise = self._baseline(press_axis)
-        detect_threshold = max(
-            self.get_parameter('min_detect_force_n').value,
-            normal_noise * self.get_parameter('noise_sigma').value)
         self.get_logger().info(
-            f'[{name}] baseline force={baseline[:3]} torque={baseline[3:]} '
-            f'normal_noise={normal_noise:.4f}N detect_threshold={detect_threshold:.4f}N')
+            f'[{label}] baseline force={baseline[:3]} torque={baseline[3:]} '
+            f'normal_noise={normal_noise:.4f}N')
 
         depth = self.get_parameter('max_depth_mm').value
         target = TaskPose(
@@ -210,35 +203,41 @@ class ProbeForceTestNode(Node):
             pose.y_mm + press_axis[1] * depth,
             pose.z_mm + press_axis[2] * depth,
             pose.rz1_deg, pose.ry_deg, pose.rz2_deg)
-        peak = {'normal': 0.0, 'lateral': 0.0, 'force': 0.0, 'torque': 0.0}
+        peak = {'compression': 0.0, 'normal': 0.0, 'lateral': 0.0,
+                'force': 0.0, 'torque': 0.0}
         state = {'result': None, 'last': None, 'confirmed_samples': 0, 'sample_count': 0}
 
         def monitor_force():
             force = self._sample_force()
             delta = self._sub(force, baseline)
             normal = sum(delta[i] * press_axis[i] for i in range(3))
+            # 접촉 반력은 누르는 방향의 반대이므로 -normal만 압축력으로 쓴다.
+            compression = max(0.0, -normal)
             lateral = self._norm([
                 delta[i] - normal * press_axis[i] for i in range(3)])
             total_force = self._norm(delta[:3])
             torque = self._norm(delta[3:])
-            state['last'] = (force, normal, lateral, total_force, torque)
+            state['last'] = (force, normal, compression, lateral, total_force, torque)
             state['sample_count'] += 1
+            peak['compression'] = max(peak['compression'], compression)
             peak['normal'] = max(peak['normal'], abs(normal))
             peak['lateral'] = max(peak['lateral'], lateral)
             peak['force'] = max(peak['force'], total_force)
             peak['torque'] = max(peak['torque'], torque)
             if state['sample_count'] % max(1, int(self.get_parameter('sample_hz').value / 4.0)) == 0:
                 self.get_logger().info(
-                    f'[{name}] force={force[:3]} torque={force[3:]} '
-                    f'delta_normal={normal:.4f}N lateral={lateral:.4f}N '
-                    f'total={total_force:.4f}N')
-            if total_force >= self.get_parameter('max_force_n').value:
-                state['result'] = 'FORCE_LIMIT'
+                    f'[{label}] force={force[:3]} torque={force[3:]} '
+                    f'normal={normal:.4f}N compression={compression:.4f}N '
+                    f'lateral={lateral:.4f}N total={total_force:.4f}N')
+            # 공중 경로는 표면보다 base +Z 60mm에서 끝나므로 접촉 제한을
+            # 적용하지 않고 이동 자체의 힘을 끝까지 기록한다.
+            if phase != 'air' and total_force >= self.get_parameter('max_force_n').value:
+                state['result'] = f'{phase.upper()}_FORCE_LIMIT'
                 return True
-            if abs(normal) >= detect_threshold:
+            if compression_threshold is not None and compression >= compression_threshold:
                 state['confirmed_samples'] += 1
                 if state['confirmed_samples'] >= self.get_parameter('confirm_samples').value:
-                    state['result'] = 'DETECTED_CONFIRMED'
+                    state['result'] = 'CONTACT_CONFIRMED'
                     return True
             else:
                 state['confirmed_samples'] = 0
@@ -254,29 +253,75 @@ class ProbeForceTestNode(Node):
         if not completed:
             self._wait_until_stopped()
         elif state['result'] is None:
-            self._verify_reached(target, f'[{name}] 최대 하강점')
+            self._verify_reached(target, f'[{label}] 최대 하강점')
         if not self._safe_to_move():
-            raise RuntimeError(f'[{name}] 안전 차단 뒤에는 자동 이탈 이동을 실행하지 않음')
+            raise RuntimeError(f'[{label}] 안전 차단 뒤에는 자동 이탈 이동을 실행하지 않음')
+
+        stopped_pose = self._adapter.get_pose()
+        traveled_mm = sum((value - start) * axis for value, start, axis in zip(
+            (stopped_pose.x_mm, stopped_pose.y_mm, stopped_pose.z_mm),
+            (pose.x_mm, pose.y_mm, pose.z_mm), press_axis))
         try:
             self._move_and_wait(
                 pose, self.get_parameter('press_speed_mms').value,
                 self.get_parameter('press_accel_mms2').value, sol, linear=True)
         except DsrAdapterError as exc:
-            self.get_logger().error(f'[{name}] 이탈 실패: {exc}')
+            self.get_logger().error(f'[{label}] 이탈 실패: {exc}')
 
-        result = state['result'] or ('NO_RESPONSE' if completed else 'MOTION_ABORTED')
+        result = state['result'] or (
+            f'{phase.upper()}_COMPLETE' if completed else 'MOTION_ABORTED')
         lateral_warning = peak['lateral'] > peak['normal']
         torque_warning = peak['torque'] > torque_noise * self.get_parameter('noise_sigma').value
         last_force = state['last'][0] if state['last'] is not None else baseline
         last_delta = self._sub(last_force, baseline)
         self.get_logger().info(
-            f'[{name}] result={result} peak_normal={peak["normal"]:.4f}N '
+            f'[{label}] result={result} traveled={traveled_mm:.3f}mm '
+            f'peak_compression={peak["compression"]:.4f}N '
+            f'peak_normal={peak["normal"]:.4f}N '
             f'peak_lateral={peak["lateral"]:.4f}N peak_force={peak["force"]:.4f}N '
             f'peak_torque={peak["torque"]:.4f} lateral_warning={lateral_warning} '
             f'torque_warning={torque_warning} baseline_force_noise={force_noise:.4f}N '
             f'confirmed_samples={state["confirmed_samples"]} last_force={last_force} '
             f'last_delta={last_delta}')
-        return result
+        return {
+            'result': result,
+            'peak_compression': peak['compression'],
+            'peak_lateral': peak['lateral'],
+            'peak_force': peak['force'],
+            'traveled_mm': traveled_mm,
+            'normal_noise': normal_noise,
+        }
+
+    def _run_point(self, name, pose, sol):
+        tool_z = self._tool_z_axis(pose)
+        # TCP가 없는 시험이므로 각 플랜지 자세에서 base_link 아래를 향하는 축을 고른다.
+        press_axis = tool_z if tool_z[2] < 0.0 else tuple(-value for value in tool_z)
+        axis_name = '+Z' if tool_z[2] < 0.0 else '-Z'
+        self.get_logger().info(
+            f'[{name}] press_axis={axis_name} base=({press_axis[0]:.3f}, '
+            f'{press_axis[1]:.3f}, {press_axis[2]:.3f})')
+
+        air_pose = TaskPose(
+            pose.x_mm, pose.y_mm,
+            pose.z_mm + self.get_parameter('air_offset_z_mm').value,
+            pose.rz1_deg, pose.ry_deg, pose.rz2_deg)
+        air = self._run_profile(name, 'air', air_pose, press_axis, sol)
+
+        threshold = max(
+            self.get_parameter('min_detect_force_n').value,
+            air['peak_compression'] + self.get_parameter('comparison_margin_n').value)
+        self.get_logger().info(
+            f'[{name}] 공중 peak_compression={air["peak_compression"]:.4f}N '
+            f'→ 실제 접촉 threshold={threshold:.4f}N')
+        contact = self._run_profile(
+            name, 'contact', pose, press_axis, sol, compression_threshold=threshold)
+        residual = contact['peak_compression'] - air['peak_compression']
+        separated = contact['result'] == 'CONTACT_CONFIRMED'
+        self.get_logger().info(
+            f'[{name}] COMPARISON air={air["peak_compression"]:.4f}N '
+            f'contact={contact["peak_compression"]:.4f}N residual={residual:.4f}N '
+            f'separated={separated} contact_result={contact["result"]}')
+        return 'SEPARATED' if separated else 'NOT_SEPARATED'
 
     def run(self):
         points = self._load_points()
@@ -286,7 +331,8 @@ class ProbeForceTestNode(Node):
             self.get_logger().info(
                 f'[{name}] pose=({pose.x_mm:.2f}, {pose.y_mm:.2f}, {pose.z_mm:.2f}, '
                 f'{pose.rz1_deg:.2f}, {pose.ry_deg:.2f}, {pose.rz2_deg:.2f}), '
-                f'downward_axis={axis_name}')
+                f'downward_axis={axis_name}, '
+                f'air_start_z={pose.z_mm + self.get_parameter("air_offset_z_mm").value:.2f}mm')
         if not self.get_parameter('execute').value:
             self.get_logger().warn('dry run 완료. 실제 이동은 execute:=true일 때만 시작함')
             return
