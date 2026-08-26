@@ -1,11 +1,155 @@
 """2D 다각형 유틸리티. 단위는 전부 mm, 평면은 `nail_local_frame` 의 XY.
 
-강성 스캔(scan_node)이 폐지되면서 격자 생성·군집 외곽선(convex_hull)·주성분
-축 추정 같은 "측정 결과로부터 경계를 만드는" 함수들은 함께 제거됐다. 지금
-경계는 측정이 아니라 **설정값**에서 온다 — `nail_boundary_polygon()` 이
-그 유일한 출처다.
+설정 경계와 독립 Probe 검증에서 사용하는 측정 경계를 함께 지원한다.
 """
 import math
+
+
+def _axis_values(extent_mm, pitch_mm):
+    """중앙 0과 양 끝을 포함하는 대칭 격자 축을 만든다."""
+    half = extent_mm / 2.0
+    values = [0.0]
+    value = pitch_mm
+    while value < half - 1e-6:
+        values.extend((-value, value))
+        value += pitch_mm
+    if half > 1e-6:
+        values.extend((-half, half))
+    return sorted(set(round(value, 6) for value in values))
+
+
+def make_grid(size_x_mm, size_y_mm, pitch_mm, margin_mm=0.0):
+    """영역과 바깥 margin을 덮는 (ix, iy, x_mm, y_mm) 지그재그 격자."""
+    xs = _axis_values(size_x_mm + 2.0 * margin_mm, pitch_mm)
+    ys = _axis_values(size_y_mm + 2.0 * margin_mm, pitch_mm)
+    points = []
+    for iy, y in enumerate(ys):
+        row = [(ix, iy, x, y) for ix, x in enumerate(xs)]
+        if iy % 2:
+            row.reverse()
+        points.extend(row)
+    return points
+
+
+def grid_transition_midpoints(grid, classifications):
+    """상하좌우 이웃의 접촉 판정이 바뀌는 구간 중점을 반환한다."""
+    by_index = {(ix, iy): (x, y) for ix, iy, x, y in grid}
+    result = []
+    for (ix, iy), point in by_index.items():
+        here = classifications.get((ix, iy))
+        if here is None:
+            continue
+        for neighbor in ((ix + 1, iy), (ix, iy + 1)):
+            there = classifications.get(neighbor)
+            if there is None or there == here or neighbor not in by_index:
+                continue
+            other = by_index[neighbor]
+            result.append(((point[0] + other[0]) / 2.0,
+                           (point[1] + other[1]) / 2.0))
+    return result
+
+
+def central_contact_component(grid, classifications, seed_index=None):
+    """기준점(없으면 중심)에 가장 가까운 접촉점과 연결된 성분만 남긴다."""
+    by_index = {(ix, iy): (x, y) for ix, iy, x, y in grid}
+    contacts = {index for index, value in classifications.items() if value}
+    if not contacts:
+        return set()
+    seed = seed_index if seed_index in contacts else min(
+        contacts, key=lambda index: sum(value * value for value in by_index[index]))
+    component = {seed}
+    pending = [seed]
+    while pending:
+        ix, iy = pending.pop()
+        for neighbor in ((ix - 1, iy), (ix + 1, iy), (ix, iy - 1), (ix, iy + 1)):
+            if neighbor in contacts and neighbor not in component:
+                component.add(neighbor)
+                pending.append(neighbor)
+    return component
+
+
+def convex_hull(points_xy):
+    """Andrew monotonic chain. 중복을 제거한 반시계 방향 볼록 외곽선."""
+    points = sorted(set(points_xy))
+    if len(points) <= 1:
+        return points
+
+    def cross(origin, a, b):
+        return ((a[0] - origin[0]) * (b[1] - origin[1])
+                - (a[1] - origin[1]) * (b[0] - origin[0]))
+
+    lower = []
+    for point in points:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0.0:
+            lower.pop()
+        lower.append(point)
+    upper = []
+    for point in reversed(points):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0.0:
+            upper.pop()
+        upper.append(point)
+    return lower[:-1] + upper[:-1]
+
+
+def grid_contour_polygon(grid, classifications):
+    """이진 격자 분류의 전환선을 Marching Squares로 연결한 가장 긴 폐곡선."""
+    points = {(ix, iy): (x, y) for ix, iy, x, y in grid}
+    # 각 cell의 (bottom, right, top, left) 전환 edge 쌍.
+    cases = {
+        1: ((3, 0),), 2: ((0, 1),), 3: ((3, 1),), 4: ((1, 2),),
+        5: ((3, 2), (0, 1)), 6: ((0, 2),), 7: ((3, 2),), 8: ((2, 3),),
+        9: ((0, 2),), 10: ((0, 3), (1, 2)), 11: ((1, 2),),
+        12: ((1, 3),), 13: ((0, 1),), 14: ((0, 3),),
+    }
+    adjacency = {}
+
+    def midpoint(a, b):
+        return (round((a[0] + b[0]) / 2.0, 6), round((a[1] + b[1]) / 2.0, 6))
+
+    for ix, iy in points:
+        indices = ((ix, iy), (ix + 1, iy), (ix + 1, iy + 1), (ix, iy + 1))
+        if any(index not in points or index not in classifications for index in indices):
+            continue
+        values = [classifications[index] for index in indices]
+        case = sum((1 << bit) for bit, value in enumerate(values) if value)
+        if case in (0, 15):
+            continue
+        edge_points = (
+            midpoint(points[indices[0]], points[indices[1]]),
+            midpoint(points[indices[1]], points[indices[2]]),
+            midpoint(points[indices[3]], points[indices[2]]),
+            midpoint(points[indices[0]], points[indices[3]]),
+        )
+        for first, second in cases[case]:
+            a, b = edge_points[first], edge_points[second]
+            adjacency.setdefault(a, []).append(b)
+            adjacency.setdefault(b, []).append(a)
+
+    loops = []
+    visited_edges = set()
+    for start, neighbors in adjacency.items():
+        for first in neighbors:
+            edge = tuple(sorted((start, first)))
+            if edge in visited_edges:
+                continue
+            loop = [start]
+            previous, current = start, first
+            while True:
+                visited_edges.add(tuple(sorted((previous, current))))
+                loop.append(current)
+                if current == start:
+                    break
+                next_points = [point for point in adjacency.get(current, []) if point != previous]
+                if len(next_points) != 1:
+                    loop = []
+                    break
+                previous, current = current, next_points[0]
+            if len(loop) >= 4:
+                loops.append(loop[:-1])
+
+    if not loops:
+        return []
+    return max(loops, key=polygon_area)
 
 
 def point_in_polygon(x, y, polygon_xy):

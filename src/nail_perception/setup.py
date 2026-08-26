@@ -15,10 +15,12 @@ setup(
     zip_safe=True,
     maintainer='jje',
     maintainer_email='jje320594@gmail.com',
-    description='공정 노드가 공유하는 2D 다각형 기하 유틸리티 (실행 노드 없음)',
+    description='2D 다각형 기하 유틸리티와 독립 Probe 경계 탐색 노드',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
-        'console_scripts': [],
+        'console_scripts': [
+            'scan_boundary_node = nail_perception.scan_boundary_node:main',
+        ],
     },
 )

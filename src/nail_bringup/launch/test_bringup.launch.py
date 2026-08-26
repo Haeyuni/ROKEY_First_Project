@@ -41,7 +41,7 @@ ros2 launch nail_bringup test_bringup.launch.py nodes:=safety,skill,tool,sanding
 ```
 
 `nodes` 토큰: `frames` `safety` `skill` `tool` `sanding` `brushing`
-`coating` `curing` `stone` `orchestrator` (또는 `all`). 콤마로 여러 개.
+`coating` `curing` `stone` `probe` `orchestrator` (또는 `all`). 콤마로 여러 개.
 
 연마·경화·스톤 경계는 `static_frames.yaml`, 브러싱·코팅 경계는
 `nail_process/config/taught_surfaces.yaml`의 툴별 6-Pose에서 온다.
@@ -89,6 +89,7 @@ _NODE_SPECS = {
     'coating':      ('nail_process',      'coating_node',                'coating_node',           False),
     'curing':       ('nail_process',      'curing_node',                 'curing_node',            False),
     'stone':        ('nail_process',      'stone_node',                  'stone_node',             False),
+    'probe':        ('nail_perception',   'scan_boundary_node',          'scan_boundary_node',     False),
     'orchestrator': ('nail_orchestrator', 'session_orchestrator_node',   'session_orchestrator',   False),
 }
 
@@ -366,6 +367,8 @@ def _launch_setup(context, *args, **kwargs):
         if token == 'skill':
             params['targets_yaml_path'] = targets_yaml_path
             params['base_frame_id'] = base_frame_id
+        if token == 'probe':
+            params['base_frame_id'] = base_frame_id
         if token in ('brushing', 'coating'):
             params['surface_config_path'] = surface_config_path
         if token == 'stone':
@@ -405,7 +408,7 @@ def generate_launch_description():
             'nodes', default_value='safety,skill,tool',
             description=(
                 "쉼표로 구분한 노드 토큰 또는 'all'. 토큰: frames, safety, skill, "
-                "tool, sanding, brushing, coating, curing, stone, orchestrator. "
+                "tool, sanding, brushing, coating, curing, stone, probe, orchestrator. "
                 "의존 노드는 자동으로 추가되지 않는다 — 직접 나열할 것. 공정 "
                 "노드는 nail_local_frame 이 필요하니 frames 를 꼭 같이 넣을 것.")),
         DeclareLaunchArgument(

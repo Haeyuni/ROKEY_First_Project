@@ -1,0 +1,22 @@
+std_msgs/Header header
+string source
+
+geometry_msgs/Point requested_point
+geometry_msgs/Point contact_point
+
+bool valid
+bool contact_detected
+bool reached_max_force
+
+float64 traveled_mm
+float64 air_peak_compression_n
+float64 contact_peak_compression_n
+float64 separation_n
+float64 peak_lateral_force_n
+float64 peak_total_force_n
+float64 peak_torque_nm
+float64 contact_compression_n
+float64 stiffness_compression_n
+float64 stiffness_n_per_mm
+geometry_msgs/Wrench stopped_wrench
+int32 confirmed_samples

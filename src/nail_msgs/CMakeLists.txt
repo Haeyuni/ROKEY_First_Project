@@ -14,6 +14,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ToolState.msg"
   "msg/ProcessState.msg"
   "msg/TaskPose.msg"
+  "msg/ProbeMeasurement.msg"
+  "msg/BoundaryMap.msg"
   "srv/ValidatePrecondition.srv"
   "srv/ResetSafety.srv"
   "srv/GetToolInfo.srv"
@@ -28,6 +30,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/CureUV.action"
   "action/PlaceStone.action"
   "action/RunSession.action"
+  "action/ProbePoint.action"
+  "action/ScanBoundary.action"
   DEPENDENCIES std_msgs geometry_msgs builtin_interfaces
 )
 

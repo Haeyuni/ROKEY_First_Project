@@ -1,6 +1,6 @@
 # 인터페이스 정의서
 
-**문서 ID** IDS-NAIL-v1.2 · **개정일** 2026-08-24 · **대상** `nail_msgs`
+**문서 ID** IDS-NAIL-v1.2 · **개정일** 2026-08-26 · **대상** `nail_msgs`
 
 이 문서는 현재 `src/nail_msgs` 파일을 그대로 요약한다. 코드 생성의 최종 입력은
 항상 실제 `.msg`, `.srv`, `.action` 파일이다.
@@ -14,7 +14,10 @@ nail_msgs/
 |   |-- ResultBase.msg
 |   |-- SafetyState.msg
 |   |-- ToolState.msg
-|   `-- ProcessState.msg
+|   |-- ProcessState.msg
+|   |-- TaskPose.msg
+|   |-- ProbeMeasurement.msg
+|   `-- BoundaryMap.msg
 |-- srv/
 |   |-- ValidatePrecondition.srv
 |   |-- ResetSafety.srv
@@ -30,10 +33,12 @@ nail_msgs/
     |-- CoatGel.action
     |-- CureUV.action
     |-- PlaceStone.action
-    `-- RunSession.action
+    |-- RunSession.action
+    |-- ProbePoint.action
+    `-- ScanBoundary.action
 ```
 
-합계는 msg 5, srv 3, action 11이다. 별도 센서 샘플 메시지는 없다.
+합계는 msg 8, srv 3, action 13이다. Probe 측정 메시지는 독립 검증용이다.
 
 ## 2. 공통 규약
 
@@ -42,7 +47,7 @@ nail_msgs/
 - 모든 스킬·공정 action result의 첫 필드는 `nail_msgs/ResultBase base`다.
 - `geometry_msgs/Pose`와 `Point`는 ROS 표준 단위인 m, rad를 사용한다.
 - 이름에 `_mm`, `_mms`, `_s`, `_deg`가 붙은 스칼라는 해당 단위를 사용한다.
-- 경로 액션은 티칭 좌표 기반이며 센서 측정 필드를 포함하지 않는다.
+- 생산 경로 액션은 티칭 좌표 기반이다. Probe 액션만 계산 외력 측정값을 포함한다.
 - `PickPlace`는 그리퍼 명령 계약이며 파지 측정 필드를 포함하지 않는다.
 
 ## 3. 메시지
@@ -59,6 +64,8 @@ string E_TIMEOUT         = "E_TIMEOUT"
 string E_CANCELLED       = "E_CANCELLED"
 string E_COMM_LOST       = "E_COMM_LOST"
 string E_MOTION_FAILED   = "E_MOTION_FAILED"
+string E_OVERFORCE       = "E_OVERFORCE"
+string E_NO_BOUNDARY     = "E_NO_BOUNDARY"
 string E_LATERAL_LIMIT   = "E_LATERAL_LIMIT"
 string E_TOOL_MISMATCH   = "E_TOOL_MISMATCH"
 string E_GRIP_FAILED     = "E_GRIP_FAILED"
@@ -149,6 +156,12 @@ string current_tool
 nail_msgs/ErrorCode last_error
 ```
 
+### 3.6 Probe 측정 메시지
+
+`ProbeMeasurement`는 요청·정지 위치, 접촉 여부, 이동거리, 공중/실제 압축력,
+분리값, 옆힘과 전체 힘을 기록한다. `BoundaryMap`은 모든 측정값과
+`boundary_polygon`, coarse/fine 점 수, 접촉 비율 및 유효성 사유를 묶는다.
+
 ## 4. 서비스
 
 ### 4.1 `ValidatePrecondition.srv`
@@ -159,6 +172,7 @@ string STAGE_BRUSH = "BRUSH"
 string STAGE_COAT  = "COAT"
 string STAGE_CURE  = "CURE"
 string STAGE_STONE = "STONE"
+string STAGE_PROBE = "PROBE"
 
 string stage
 string session_id
@@ -313,7 +327,28 @@ float64 percent
 현재 구현의 feedback 단계는 0 반납, 1 랙 이동, 2 픽업, 3 TCP, 4 상태 확정이다.
 `target_tool="none"`은 반납만 수행한다.
 
+### 5.6 `ProbePoint.action`
+
+입력은 `search_start`, `press_direction`, 공중 Z 오프셋, 최대 깊이·속도,
+공중 비교 margin, 전체/옆힘 상한, 연속 확인 수, 접촉 뒤 강성 측정 거리와
+timeout이다.
+`manual_probe_tool_confirmed=true`가 필수다. result의 `ProbeMeasurement`에서
+비접촉은 `base.success=true`, `contact_detected=false`로 표현한다. 힘 상한은
+`E_OVERFORCE`다. `stiffness_n_per_mm`은 접촉 뒤 `stiffness_depth_mm` 동안의
+압축력 증가율이며 재질 분류용이다.
+
 ## 6. 공정 액션
+
+### 6.0 `ScanBoundary.action`
+
+`scan_corners`에는 top-left, top-right, bottom-right, bottom-left 순서의 공중 Pose
+네 점을 넣는다. `nail_reference`는 손톱 내부 기준점, `dummy_references`는 손톱
+밖 더미손 기준점이다. 기준점의 반복 강성 중앙값 차이가
+`material_min_separation_n_per_mm`보다 작으면 `E_NO_BOUNDARY`로 중단한다. 각
+격자점은 가까운 강성 기준으로 분류하고, 손톱 기준점에 연결된 영역만 사용한다.
+3mm 거친 탐색 뒤 전환 구간 주변을 1mm로 재탐색한다. 결과는 `BoundaryMap`이며
+경계가 없으면 `E_NO_BOUNDARY`다. `BoundaryMap`에는 손톱·더미 기준 강성 중앙값과
+차이도 반환해 실기 기준값을 조정할 수 있다. 독립 검증용으로 세션 orchestrator에는 연결되지 않는다.
 
 ### 6.1 `SandSurface.action`
 

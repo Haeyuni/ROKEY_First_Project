@@ -5,13 +5,12 @@
 안에만 있고, 이 파일은 그 래퍼만 호출한다 (SDS §4.1).
 
 제공: /skill/move_to, /skill/pick_place, /skill/contact_path,
-      /skill/lateral_contact (Action)
+      /skill/lateral_contact, /skill/probe_point (Action)
       /robot/pose(50Hz) (Topic)
 
-`/skill/probe_point`(ProbePoint) 는 폐지됐다 — 이 스킬을 쓰던 scan_node /
-inspection_node 가 함께 제거됐고, 남은 stone_node 는 티칭된
-`nail_local_frame` 높이를 그대로 써서 압입 탐색 없이 동작한다. 법선 접촉이
-필요하면 `ContactPath` 를 쓴다.
+`/skill/probe_point`는 별도 TCP가 없는 새 Probe의 검증용 스킬이다. 각 점에서
+공중 경로와 실제 경로를 같은 자세·속도로 비교하며, 전체 공정에는 자동 연결하지
+않는다.
 
 참고로 삼은 문서: docs/노드별_인터페이스명세서_v0.2.md §5.1 (사용자 지정),
 docs/개발명세서_SDS.md §3~5, docs/인터페이스정의서_IDS.md (실제 필드명 — nail_msgs).
@@ -21,6 +20,7 @@ docs/개발명세서_SDS.md §3~5, docs/인터페이스정의서_IDS.md (실제 
 그건 stage 를 아는 B계층 공정 노드의 몫이다 (§3.1 ④는 공정 노드가 수행).
 """
 import math
+import statistics
 import time
 
 import rclpy
@@ -34,8 +34,8 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from tf2_ros import Buffer, TransformListener
 
-from nail_msgs.action import ContactPath, LateralContact, MoveTo, PickPlace
-from nail_msgs.msg import ErrorCode, ResultBase, SafetyState
+from nail_msgs.action import ContactPath, LateralContact, MoveTo, PickPlace, ProbePoint
+from nail_msgs.msg import ErrorCode, ProbeMeasurement, ResultBase, SafetyState
 from nail_perception.geometry2d import point_in_polygon, point_to_polygon_distance
 
 from .conversions import TaskPose, pose_to_task_pose, task_pose_to_ros_pose
@@ -49,6 +49,7 @@ SEVERITY_BY_CODE = {
     ErrorCode.E_TIMEOUT: ErrorCode.SEV_ABORT,
     ErrorCode.E_COMM_LOST: ErrorCode.SEV_ABORT,
     ErrorCode.E_LATERAL_LIMIT: ErrorCode.SEV_SAFETY,
+    ErrorCode.E_OVERFORCE: ErrorCode.SEV_SAFETY,
     ErrorCode.E_SAFETY_BLOCKED: ErrorCode.SEV_SAFETY,
 }
 
@@ -122,6 +123,12 @@ class RobotSkillNode(Node):
             goal_callback=self._on_goal_lateral_contact,
             cancel_callback=self._on_cancel,
             callback_group=self._cb_skill)
+        self._probe_point_server = ActionServer(
+            self, ProbePoint, '/skill/probe_point',
+            execute_callback=self._execute_probe_point,
+            goal_callback=self._on_goal_probe_point,
+            cancel_callback=self._on_cancel,
+            callback_group=self._cb_skill)
         self.get_logger().info('robot_skill_node ready')
 
     def destroy_node(self):
@@ -171,6 +178,15 @@ class RobotSkillNode(Node):
         # 좌표 전용 ContactPath/LateralContact
         d('lateral_search_speed_mms', 3.0)
         d('lateral_retreat_mm', 10.0)
+        # ProbePoint: 실기 비교 시험에서 사용한 저속·힘 상한을 기본 안전 한계로 둔다.
+        d('probe_approach_speed_mms', 5.0)
+        d('probe_accel_mms2', 1.0)
+        d('probe_sample_hz', 10.0)
+        d('probe_baseline_samples', 30)
+        d('probe_min_detect_force_n', 0.15)
+        d('probe_hard_force_limit_n', 5.0)
+        d('probe_preapproach_mm', 10.0)
+        d('probe_retreat_speed_mms', 2.0)
         # 그리퍼
         d('gripper_settle_s', 1.0)
         # PICK 하강 전 / PLACE 놓기 개방폭(mm). 그리퍼 완전개방('o')은 랙 슬롯
@@ -1213,6 +1229,294 @@ class RobotSkillNode(Node):
 
         goal_handle.succeed()
         result.base = self._result_base(True, ErrorCode.OK, '', started_at)
+        return result
+
+    # =========================================================================
+    # ProbePoint — 공중 힘 프로파일과 실제 탐색 프로파일 비교
+    # =========================================================================
+    @staticmethod
+    def _probe_vector_tuple(vector):
+        length = math.sqrt(vector.x ** 2 + vector.y ** 2 + vector.z ** 2)
+        if length < 1e-9:
+            return None
+        return vector.x / length, vector.y / length, vector.z / length
+
+    @staticmethod
+    def _probe_force_metrics(force, baseline, axis):
+        delta = [value - zero for value, zero in zip(force, baseline)]
+        normal = sum(delta[index] * axis[index] for index in range(3))
+        compression = max(0.0, -normal)
+        lateral = math.sqrt(sum(
+            (delta[index] - normal * axis[index]) ** 2 for index in range(3)))
+        total = math.sqrt(sum(value * value for value in delta[:3]))
+        return compression, lateral, total
+
+    def _on_goal_probe_point(self, goal):
+        axis = self._probe_vector_tuple(goal.press_direction)
+        valid = (
+            goal.manual_probe_tool_confirmed
+            and (not goal.frame_id or goal.frame_id == self._base_frame_id)
+            and axis is not None
+            and 10.0 <= goal.air_offset_z_mm <= 150.0
+            and 0.5 <= goal.max_depth_mm <= 20.0
+            and 0.1 <= goal.probe_speed_mms <= 2.0
+            and 0.05 <= goal.comparison_margin_n <= 2.0
+            and 0.5 <= goal.max_force_n
+            <= min(5.0, self.get_parameter('probe_hard_force_limit_n').value)
+            and 0.1 <= goal.lateral_force_limit_n <= goal.max_force_n
+            and 1 <= goal.confirm_samples <= 10
+            and 0.0 <= goal.stiffness_depth_mm <= 2.0
+            and 5.0 <= goal.timeout_s <= 120.0)
+        if not valid:
+            self.get_logger().warn(
+                'ProbePoint REJECT: E_INVALID_GOAL (도구 확인, base frame, 축 또는 안전 범위 오류)')
+            return GoalResponse.REJECT
+        return GoalResponse.ACCEPT
+
+    def _probe_baseline(self, goal_handle):
+        samples = []
+        count = max(2, self.get_parameter('probe_baseline_samples').value)
+        period = 1.0 / max(1.0, self.get_parameter('probe_sample_hz').value)
+        for _ in range(count):
+            if goal_handle.is_cancel_requested:
+                return None, 'cancel'
+            samples.append(self._adapter.get_tool_force())
+            time.sleep(period)
+        return [statistics.fmean(values) for values in zip(*samples)], 'ok'
+
+    def _probe_motion_reason(self, completed, goal_handle, target):
+        """이동 완료 여부와 실제 목표 Pose 도달 여부를 함께 판정한다."""
+        if not completed:
+            return 'cancel' if goal_handle.is_cancel_requested else 'timeout'
+        return self._verify_position_reached('ok', target)[0]
+
+    def _probe_profile(self, goal_handle, search_start, axis, threshold, phase, timeout_s):
+        goal = goal_handle.request
+        speed = self.get_parameter('probe_approach_speed_mms').value
+
+        self._adapter.start_move_joint_to_pose(search_start, speed, speed * 2.0)
+        completed = self._adapter.wait_motion_done(
+            timeout_s, 10.0, should_abort=lambda: goal_handle.is_cancel_requested)
+        reason = self._probe_motion_reason(completed, goal_handle, search_start)
+        if reason != 'ok':
+            return None, reason
+
+        baseline, reason = self._probe_baseline(goal_handle)
+        if reason != 'ok':
+            return None, reason
+
+        target = TaskPose(
+            search_start.x_mm + axis[0] * goal.max_depth_mm,
+            search_start.y_mm + axis[1] * goal.max_depth_mm,
+            search_start.z_mm + axis[2] * goal.max_depth_mm,
+            search_start.rz1_deg, search_start.ry_deg, search_start.rz2_deg)
+        peak = {'compression': 0.0, 'lateral': 0.0, 'total': 0.0, 'torque': 0.0}
+        state = {
+            'reason': None, 'confirmed': 0,
+            'last': (0.0, 0.0, 0.0), 'last_force': baseline,
+            'contact_traveled': None, 'contact_pose': None,
+            'contact_compression': 0.0, 'stiffness_compression': 0.0,
+            'stiffness_n_per_mm': 0.0,
+        }
+
+        def should_abort():
+            if goal_handle.is_cancel_requested:
+                state['reason'] = 'cancel'
+                return True
+            force = self._adapter.get_tool_force()
+            compression, lateral, total = self._probe_force_metrics(force, baseline, axis)
+            raw_total = math.sqrt(sum(value * value for value in force[:3]))
+            torque = math.sqrt(sum((force[i] - baseline[i]) ** 2 for i in range(3, 6)))
+            state['last'] = (compression, lateral, total)
+            state['last_force'] = force
+            peak['compression'] = max(peak['compression'], compression)
+            peak['lateral'] = max(peak['lateral'], lateral)
+            peak['total'] = max(peak['total'], raw_total)
+            peak['torque'] = max(peak['torque'], torque)
+
+            actual = self._adapter.get_pose()
+            traveled = sum((value - start) * direction for value, start, direction in zip(
+                (actual.x_mm, actual.y_mm, actual.z_mm),
+                (search_start.x_mm, search_start.y_mm, search_start.z_mm), axis))
+            feedback = ProbePoint.Feedback()
+            feedback.phase = phase
+            feedback.traveled_mm = max(0.0, traveled)
+            feedback.compression_force_n = compression
+            feedback.lateral_force_n = lateral
+            feedback.total_force_n = raw_total
+            feedback.confirmed_samples = state['confirmed']
+            goal_handle.publish_feedback(feedback)
+
+            if raw_total >= goal.max_force_n or lateral >= goal.lateral_force_limit_n:
+                state['reason'] = 'force'
+                return True
+            if threshold is not None and compression >= threshold:
+                state['confirmed'] += 1
+                if state['confirmed'] >= goal.confirm_samples:
+                    if state['contact_traveled'] is None:
+                        state['reason'] = 'contact'
+                        state['contact_traveled'] = max(0.0, traveled)
+                        state['contact_pose'] = actual
+                        state['contact_compression'] = compression
+                    if goal.stiffness_depth_mm <= 0.0:
+                        return True
+            else:
+                state['confirmed'] = 0
+            if state['contact_traveled'] is not None:
+                post_contact_mm = max(0.0, traveled - state['contact_traveled'])
+                if post_contact_mm >= goal.stiffness_depth_mm:
+                    state['stiffness_compression'] = compression
+                    state['stiffness_n_per_mm'] = max(
+                        0.0, (compression - state['contact_compression']) / post_contact_mm)
+                    return True
+            return False
+
+        self._adapter.start_move_line(
+            target, goal.probe_speed_mms,
+            self.get_parameter('probe_accel_mms2').value)
+        completed = self._adapter.wait_motion_done(
+            timeout_s, self.get_parameter('probe_sample_hz').value,
+            should_abort=should_abort)
+        reason = state['reason'] if state['reason'] == 'contact' \
+            else ('ok' if completed else (state['reason'] or 'timeout'))
+        if reason == 'ok':
+            reason = self._probe_motion_reason(completed, goal_handle, target)
+
+        stopped = self._adapter.get_pose()
+        traveled = sum((value - start) * direction for value, start, direction in zip(
+            (stopped.x_mm, stopped.y_mm, stopped.z_mm),
+            (search_start.x_mm, search_start.y_mm, search_start.z_mm), axis))
+
+        # 탐색 완료 후 시작점으로 복귀
+        if reason != 'cancel':
+            self._adapter.start_move_line(
+                search_start, goal.probe_speed_mms,
+                self.get_parameter('probe_accel_mms2').value)
+            completed = self._adapter.wait_motion_done(
+                timeout_s, 10.0, should_abort=lambda: goal_handle.is_cancel_requested)
+            retreat_reason = self._probe_motion_reason(
+                completed, goal_handle, search_start)
+            if retreat_reason != 'ok':
+                reason = retreat_reason
+
+        return {
+            'reason': reason,
+            'contact_detected': state['reason'] == 'contact',
+            'stopped': stopped,
+            'contact_pose': state['contact_pose'] or stopped,
+            'traveled': max(0.0, traveled),
+            'peak_compression': peak['compression'],
+            'peak_lateral': peak['lateral'],
+            'peak_total': peak['total'],
+            'peak_torque': peak['torque'],
+            'last_force': state['last_force'],
+            'confirmed': state['confirmed'],
+            'contact_compression': state['contact_compression'],
+            'stiffness_compression': state['stiffness_compression'],
+            'stiffness_n_per_mm': state['stiffness_n_per_mm'],
+        }, reason
+
+    def _probe_measurement(self, goal, profile, air=None, force_limit=False):
+        measurement = ProbeMeasurement()
+        measurement.header.stamp = self.get_clock().now().to_msg()
+        measurement.header.frame_id = self._base_frame_id
+        measurement.source = goal.source or ProbePoint.Goal.SOURCE_MANUAL
+        measurement.requested_point = goal.search_start.position
+        measurement.valid = (
+            profile is not None
+            and profile['reason'] in ('ok', 'contact')
+            and not force_limit)
+        measurement.reached_max_force = force_limit
+        if profile is None:
+            return measurement
+        measurement.contact_point = task_pose_to_ros_pose(profile['contact_pose']).position
+        measurement.contact_detected = profile.get(
+            'contact_detected', profile['reason'] == 'contact')
+        measurement.traveled_mm = profile['traveled']
+        measurement.air_peak_compression_n = air['peak_compression'] if air else 0.0
+        measurement.contact_peak_compression_n = profile['peak_compression']
+        measurement.separation_n = measurement.contact_peak_compression_n \
+            - measurement.air_peak_compression_n
+        measurement.peak_lateral_force_n = profile['peak_lateral']
+        measurement.peak_total_force_n = profile['peak_total']
+        measurement.peak_torque_nm = profile['peak_torque']
+        measurement.contact_compression_n = profile['contact_compression']
+        measurement.stiffness_compression_n = profile['stiffness_compression']
+        measurement.stiffness_n_per_mm = profile['stiffness_n_per_mm']
+        force = profile['last_force']
+        measurement.stopped_wrench.force.x = force[0]
+        measurement.stopped_wrench.force.y = force[1]
+        measurement.stopped_wrench.force.z = force[2]
+        measurement.stopped_wrench.torque.x = force[3]
+        measurement.stopped_wrench.torque.y = force[4]
+        measurement.stopped_wrench.torque.z = force[5]
+        measurement.confirmed_samples = profile['confirmed']
+        return measurement
+
+    def _finish_probe_failure(self, reason, goal_handle, result, started_at, detail,
+                              profile=None, air=None):
+        if profile is not None:
+            result.measurement = self._probe_measurement(
+                goal_handle.request, profile, air, force_limit=reason == 'force')
+        if reason == 'force':
+            goal_handle.abort()
+            result.base = self._result_base(
+                False, ErrorCode.E_OVERFORCE, detail, started_at)
+        else:
+            result.base = self._finish_from_reason(
+                reason, goal_handle, started_at, context='ProbePoint')
+        return result
+
+    def _execute_probe_point(self, goal_handle):
+        started_at = time.monotonic()
+        goal = goal_handle.request
+        result = ProbePoint.Result()
+        axis = self._probe_vector_tuple(goal.press_direction)
+        start = pose_to_task_pose(goal.search_start)
+        air_start = TaskPose(
+            start.x_mm, start.y_mm, start.z_mm + goal.air_offset_z_mm,
+            start.rz1_deg, start.ry_deg, start.rz2_deg)
+
+        try:
+            air, reason = self._probe_profile(
+                goal_handle, air_start, axis, None,
+                ProbePoint.Feedback.PHASE_AIR, goal.timeout_s)
+            if reason != 'ok':
+                detail = '공중 힘 프로파일에서 힘 상한 또는 이동 오류 발생'
+                return self._finish_probe_failure(
+                    reason, goal_handle, result, started_at, detail, air)
+
+            threshold = max(
+                self.get_parameter('probe_min_detect_force_n').value,
+                air['peak_compression'] + goal.comparison_margin_n)
+            contact, reason = self._probe_profile(
+                goal_handle, start, axis, threshold,
+                ProbePoint.Feedback.PHASE_CONTACT, goal.timeout_s)
+        except Exception as exc:
+            self._adapter.stop()
+            goal_handle.abort()
+            result.base = self._result_base(
+                False, ErrorCode.E_MOTION_FAILED,
+                f'ProbePoint 실행 실패: {exc}', started_at)
+            return result
+
+        if reason not in ('ok', 'contact'):
+            detail = '실제 탐색에서 힘 상한 또는 이동 오류 발생'
+            return self._finish_probe_failure(
+                reason, goal_handle, result, started_at, detail, contact, air)
+
+        contact['reason'] = reason
+        measurement = self._probe_measurement(goal, contact, air)
+        result.measurement = measurement
+
+        goal_handle.succeed()
+        detail = '접촉 감지' if measurement.contact_detected else '최대 깊이까지 접촉 없음'
+        result.base = self._result_base(True, ErrorCode.OK, detail, started_at)
+        self.get_logger().info(
+            f'ProbePoint {detail}: air={measurement.air_peak_compression_n:.3f}N '
+            f'contact={measurement.contact_peak_compression_n:.3f}N '
+            f'separation={measurement.separation_n:.3f}N '
+            f'traveled={measurement.traveled_mm:.2f}mm')
         return result
 
     # =========================================================================

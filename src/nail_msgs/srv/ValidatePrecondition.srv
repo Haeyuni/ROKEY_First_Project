@@ -5,6 +5,7 @@ string STAGE_BRUSH   = "BRUSH"
 string STAGE_COAT    = "COAT"
 string STAGE_CURE    = "CURE"
 string STAGE_STONE   = "STONE"
+string STAGE_PROBE   = "PROBE"
 
 string stage
 string session_id

@@ -10,6 +10,8 @@ string E_TIMEOUT               = "E_TIMEOUT"
 string E_CANCELLED             = "E_CANCELLED"
 string E_COMM_LOST             = "E_COMM_LOST"
 string E_MOTION_FAILED         = "E_MOTION_FAILED"
+string E_OVERFORCE             = "E_OVERFORCE"
+string E_NO_BOUNDARY           = "E_NO_BOUNDARY"
 
 # 티칭 경계 — 연마 전용
 string E_LATERAL_LIMIT          = "E_LATERAL_LIMIT"
