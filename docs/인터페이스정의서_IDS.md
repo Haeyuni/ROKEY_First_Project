@@ -330,19 +330,25 @@ float64 percent
 ### 5.6 `ProbePoint.action`
 
 입력은 `search_start`, `press_direction`, 공중 Z 오프셋, 최대 깊이·속도,
-공중 비교 margin, 전체/옆힘 상한, 연속 확인 수와 timeout이다.
+공중 비교 margin, 전체/옆힘 상한, 연속 확인 수, 접촉 뒤 강성 측정 거리와
+timeout이다.
 `manual_probe_tool_confirmed=true`가 필수다. result의 `ProbeMeasurement`에서
 비접촉은 `base.success=true`, `contact_detected=false`로 표현한다. 힘 상한은
-`E_OVERFORCE`다.
+`E_OVERFORCE`다. `stiffness_n_per_mm`은 접촉 뒤 `stiffness_depth_mm` 동안의
+압축력 증가율이며 재질 분류용이다.
 
 ## 6. 공정 액션
 
 ### 6.0 `ScanBoundary.action`
 
-중심 Pose와 서로 직교하는 scan X/Y 및 press 축, 예상 영역, margin,
-coarse/fine pitch와 ProbePoint 안전값을 받는다. 3mm 거친 탐색 후 전환 구간
-주변을 1mm로 재탐색하는 것이 기본 운용값이다. 결과는 `BoundaryMap`이며 경계가
-없으면 `E_NO_BOUNDARY`다. 독립 검증용으로 세션 orchestrator에는 연결되지 않는다.
+`scan_corners`에는 top-left, top-right, bottom-right, bottom-left 순서의 공중 Pose
+네 점을 넣는다. `nail_reference`는 손톱 내부 기준점, `dummy_references`는 손톱
+밖 더미손 기준점이다. 기준점의 반복 강성 중앙값 차이가
+`material_min_separation_n_per_mm`보다 작으면 `E_NO_BOUNDARY`로 중단한다. 각
+격자점은 가까운 강성 기준으로 분류하고, 손톱 기준점에 연결된 영역만 사용한다.
+3mm 거친 탐색 뒤 전환 구간 주변을 1mm로 재탐색한다. 결과는 `BoundaryMap`이며
+경계가 없으면 `E_NO_BOUNDARY`다. `BoundaryMap`에는 손톱·더미 기준 강성 중앙값과
+차이도 반환해 실기 기준값을 조정할 수 있다. 독립 검증용으로 세션 orchestrator에는 연결되지 않는다.
 
 ### 6.1 `SandSurface.action`
 

@@ -1,13 +1,11 @@
 string session_id
-geometry_msgs/Pose center_search_start
-geometry_msgs/Vector3 scan_x_axis
-geometry_msgs/Vector3 scan_y_axis
+# scan_corners: top_left, top_right, bottom_right, bottom_left 순서의 공중 Pose 4개
+geometry_msgs/Pose[] scan_corners
+geometry_msgs/Pose nail_reference
+geometry_msgs/Pose[] dummy_references
 geometry_msgs/Vector3 press_direction
 string frame_id
 
-float64 area_x_mm
-float64 area_y_mm
-float64 margin_mm
 float64 coarse_pitch_mm
 float64 fine_pitch_mm
 float64 boundary_band_mm
@@ -20,6 +18,9 @@ float64 comparison_margin_n
 float64 max_force_n
 float64 lateral_force_limit_n
 int32 confirm_samples
+float64 stiffness_depth_mm
+float64 material_min_separation_n_per_mm
+int32 reference_repeats
 float64 point_timeout_s
 
 bool manual_probe_tool_confirmed

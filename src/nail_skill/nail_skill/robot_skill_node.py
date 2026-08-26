@@ -1302,6 +1302,7 @@ class RobotSkillNode(Node):
             <= min(5.0, self.get_parameter('probe_hard_force_limit_n').value)
             and 0.1 <= goal.lateral_force_limit_n <= goal.max_force_n
             and 1 <= goal.confirm_samples <= 10
+            and 0.0 <= goal.stiffness_depth_mm <= 2.0
             and 5.0 <= goal.timeout_s <= 120.0)
         if not valid:
             self.get_logger().warn(
@@ -1347,8 +1348,13 @@ class RobotSkillNode(Node):
             search_start.z_mm + axis[2] * goal.max_depth_mm,
             search_start.rz1_deg, search_start.ry_deg, search_start.rz2_deg)
         peak = {'compression': 0.0, 'lateral': 0.0, 'total': 0.0, 'torque': 0.0}
-        state = {'reason': None, 'confirmed': 0,
-                 'last': (0.0, 0.0, 0.0), 'last_force': baseline}
+        state = {
+            'reason': None, 'confirmed': 0,
+            'last': (0.0, 0.0, 0.0), 'last_force': baseline,
+            'contact_traveled': None, 'contact_pose': None,
+            'contact_compression': 0.0, 'stiffness_compression': 0.0,
+            'stiffness_n_per_mm': 0.0,
+        }
 
         def should_abort():
             if goal_handle.is_cancel_requested:
@@ -1384,10 +1390,22 @@ class RobotSkillNode(Node):
             if threshold is not None and compression >= threshold:
                 state['confirmed'] += 1
                 if state['confirmed'] >= goal.confirm_samples:
-                    state['reason'] = 'contact'
-                    return True
+                    if state['contact_traveled'] is None:
+                        state['reason'] = 'contact'
+                        state['contact_traveled'] = max(0.0, traveled)
+                        state['contact_pose'] = actual
+                        state['contact_compression'] = compression
+                    if goal.stiffness_depth_mm <= 0.0:
+                        return True
             else:
                 state['confirmed'] = 0
+            if state['contact_traveled'] is not None:
+                post_contact_mm = max(0.0, traveled - state['contact_traveled'])
+                if post_contact_mm >= goal.stiffness_depth_mm:
+                    state['stiffness_compression'] = compression
+                    state['stiffness_n_per_mm'] = max(
+                        0.0, (compression - state['contact_compression']) / post_contact_mm)
+                    return True
             return False
 
         self._adapter.start_move_line(
@@ -1396,7 +1414,8 @@ class RobotSkillNode(Node):
         completed = self._adapter.wait_motion_done(
             timeout_s, self.get_parameter('probe_sample_hz').value,
             should_abort=should_abort)
-        reason = 'ok' if completed else (state['reason'] or 'timeout')
+        reason = state['reason'] if state['reason'] == 'contact' \
+            else ('ok' if completed else (state['reason'] or 'timeout'))
         if reason == 'ok':
             reason = self._probe_motion_reason(completed, goal_handle, target)
 
@@ -1421,6 +1440,7 @@ class RobotSkillNode(Node):
             'reason': reason,
             'contact_detected': state['reason'] == 'contact',
             'stopped': stopped,
+            'contact_pose': state['contact_pose'] or stopped,
             'traveled': max(0.0, traveled),
             'peak_compression': peak['compression'],
             'peak_lateral': peak['lateral'],
@@ -1428,6 +1448,9 @@ class RobotSkillNode(Node):
             'peak_torque': peak['torque'],
             'last_force': state['last_force'],
             'confirmed': state['confirmed'],
+            'contact_compression': state['contact_compression'],
+            'stiffness_compression': state['stiffness_compression'],
+            'stiffness_n_per_mm': state['stiffness_n_per_mm'],
         }, reason
 
     def _probe_measurement(self, goal, profile, air=None, force_limit=False):
@@ -1443,7 +1466,7 @@ class RobotSkillNode(Node):
         measurement.reached_max_force = force_limit
         if profile is None:
             return measurement
-        measurement.contact_point = task_pose_to_ros_pose(profile['stopped']).position
+        measurement.contact_point = task_pose_to_ros_pose(profile['contact_pose']).position
         measurement.contact_detected = profile.get(
             'contact_detected', profile['reason'] == 'contact')
         measurement.traveled_mm = profile['traveled']
@@ -1454,6 +1477,9 @@ class RobotSkillNode(Node):
         measurement.peak_lateral_force_n = profile['peak_lateral']
         measurement.peak_total_force_n = profile['peak_total']
         measurement.peak_torque_nm = profile['peak_torque']
+        measurement.contact_compression_n = profile['contact_compression']
+        measurement.stiffness_compression_n = profile['stiffness_compression']
+        measurement.stiffness_n_per_mm = profile['stiffness_n_per_mm']
         force = profile['last_force']
         measurement.stopped_wrench.force.x = force[0]
         measurement.stopped_wrench.force.y = force[1]

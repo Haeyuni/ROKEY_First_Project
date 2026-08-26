@@ -49,13 +49,14 @@ def grid_transition_midpoints(grid, classifications):
     return result
 
 
-def central_contact_component(grid, classifications):
-    """중심에 가장 가까운 접촉점과 4방향으로 연결된 접촉 인덱스만 남긴다."""
+def central_contact_component(grid, classifications, seed_index=None):
+    """기준점(없으면 중심)에 가장 가까운 접촉점과 연결된 성분만 남긴다."""
     by_index = {(ix, iy): (x, y) for ix, iy, x, y in grid}
     contacts = {index for index, value in classifications.items() if value}
     if not contacts:
         return set()
-    seed = min(contacts, key=lambda index: sum(value * value for value in by_index[index]))
+    seed = seed_index if seed_index in contacts else min(
+        contacts, key=lambda index: sum(value * value for value in by_index[index]))
     component = {seed}
     pending = [seed]
     while pending:
@@ -88,6 +89,67 @@ def convex_hull(points_xy):
             upper.pop()
         upper.append(point)
     return lower[:-1] + upper[:-1]
+
+
+def grid_contour_polygon(grid, classifications):
+    """이진 격자 분류의 전환선을 Marching Squares로 연결한 가장 긴 폐곡선."""
+    points = {(ix, iy): (x, y) for ix, iy, x, y in grid}
+    # 각 cell의 (bottom, right, top, left) 전환 edge 쌍.
+    cases = {
+        1: ((3, 0),), 2: ((0, 1),), 3: ((3, 1),), 4: ((1, 2),),
+        5: ((3, 2), (0, 1)), 6: ((0, 2),), 7: ((3, 2),), 8: ((2, 3),),
+        9: ((0, 2),), 10: ((0, 3), (1, 2)), 11: ((1, 2),),
+        12: ((1, 3),), 13: ((0, 1),), 14: ((0, 3),),
+    }
+    adjacency = {}
+
+    def midpoint(a, b):
+        return (round((a[0] + b[0]) / 2.0, 6), round((a[1] + b[1]) / 2.0, 6))
+
+    for ix, iy in points:
+        indices = ((ix, iy), (ix + 1, iy), (ix + 1, iy + 1), (ix, iy + 1))
+        if any(index not in points or index not in classifications for index in indices):
+            continue
+        values = [classifications[index] for index in indices]
+        case = sum((1 << bit) for bit, value in enumerate(values) if value)
+        if case in (0, 15):
+            continue
+        edge_points = (
+            midpoint(points[indices[0]], points[indices[1]]),
+            midpoint(points[indices[1]], points[indices[2]]),
+            midpoint(points[indices[3]], points[indices[2]]),
+            midpoint(points[indices[0]], points[indices[3]]),
+        )
+        for first, second in cases[case]:
+            a, b = edge_points[first], edge_points[second]
+            adjacency.setdefault(a, []).append(b)
+            adjacency.setdefault(b, []).append(a)
+
+    loops = []
+    visited_edges = set()
+    for start, neighbors in adjacency.items():
+        for first in neighbors:
+            edge = tuple(sorted((start, first)))
+            if edge in visited_edges:
+                continue
+            loop = [start]
+            previous, current = start, first
+            while True:
+                visited_edges.add(tuple(sorted((previous, current))))
+                loop.append(current)
+                if current == start:
+                    break
+                next_points = [point for point in adjacency.get(current, []) if point != previous]
+                if len(next_points) != 1:
+                    loop = []
+                    break
+                previous, current = current, next_points[0]
+            if len(loop) >= 4:
+                loops.append(loop[:-1])
+
+    if not loops:
+        return []
+    return max(loops, key=polygon_area)
 
 
 def point_in_polygon(x, y, polygon_xy):

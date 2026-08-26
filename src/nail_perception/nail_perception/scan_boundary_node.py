@@ -1,6 +1,7 @@
 """공중 보정 ProbePoint를 3mm/1mm 격자로 실행해 손톱 경계를 측정한다."""
 import copy
 import math
+import statistics
 import threading
 import time
 
@@ -16,7 +17,7 @@ from nail_msgs.msg import BoundaryMap, ErrorCode, ResultBase
 from nail_msgs.srv import ValidatePrecondition
 
 from .geometry2d import (
-    central_contact_component, convex_hull, grid_transition_midpoints, make_grid)
+    central_contact_component, grid_contour_polygon, grid_transition_midpoints, make_grid)
 
 
 class ScanBoundaryNode(Node):
@@ -59,6 +60,32 @@ class ScanBoundaryNode(Node):
     def _dot(a, b):
         return sum(x * y for x, y in zip(a, b))
 
+    @staticmethod
+    def _distance(a, b):
+        return math.sqrt(
+            (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2)
+
+    @classmethod
+    def _corner_dimensions(cls, corners):
+        width = (cls._distance(corners[0].position, corners[1].position)
+                 + cls._distance(corners[3].position, corners[2].position)) / 2.0
+        height = (cls._distance(corners[0].position, corners[3].position)
+                  + cls._distance(corners[1].position, corners[2].position)) / 2.0
+        return width * 1000.0, height * 1000.0
+
+    @classmethod
+    def _corners_form_rectangle(cls, corners):
+        def vector(a, b):
+            return b.x - a.x, b.y - a.y, b.z - a.z
+
+        top = vector(corners[0].position, corners[1].position)
+        left = vector(corners[0].position, corners[3].position)
+        top_length = math.sqrt(sum(value * value for value in top))
+        left_length = math.sqrt(sum(value * value for value in left))
+        if top_length < 1e-6 or left_length < 1e-6:
+            return False
+        return abs(sum(a * b for a, b in zip(top, left)) / (top_length * left_length)) <= 0.2
+
     def _call_validate(self, session_id, timeout_s=5.0):
         if not self._validate_client.wait_for_service(timeout_sec=timeout_s):
             return False, ['ValidatePrecondition 서비스 연결 실패']
@@ -83,21 +110,21 @@ class ScanBoundaryNode(Node):
             if self._running or self._late_probe_pending:
                 self.get_logger().warn('ScanBoundary REJECT: 이전 스캔/Probe가 종료되지 않음')
                 return GoalResponse.REJECT
-        x_axis = self._unit(goal.scan_x_axis)
-        y_axis = self._unit(goal.scan_y_axis)
         press_axis = self._unit(goal.press_direction)
         base_frame = self.get_parameter('base_frame_id').value
+        corner_count = len(goal.scan_corners)
+        width_mm, height_mm = self._corner_dimensions(goal.scan_corners) \
+            if corner_count == 4 else (0.0, 0.0)
         valid = (
             bool(goal.session_id)
             and goal.manual_probe_tool_confirmed
             and (not goal.frame_id or goal.frame_id == base_frame)
-            and x_axis is not None and y_axis is not None and press_axis is not None
-            and abs(self._dot(x_axis, y_axis)) <= 0.1
-            and abs(self._dot(x_axis, press_axis)) <= 0.1
-            and abs(self._dot(y_axis, press_axis)) <= 0.1
-            and 3.0 <= goal.area_x_mm <= 40.0
-            and 3.0 <= goal.area_y_mm <= 40.0
-            and 0.0 <= goal.margin_mm <= 5.0
+            and corner_count == 4
+            and self._corners_form_rectangle(goal.scan_corners)
+            and len(goal.dummy_references) >= 1
+            and press_axis is not None
+            and 3.0 <= width_mm <= 40.0
+            and 3.0 <= height_mm <= 40.0
             and 1.0 <= goal.coarse_pitch_mm <= 5.0
             and 0.5 <= goal.fine_pitch_mm < goal.coarse_pitch_mm
             and max(goal.fine_pitch_mm, goal.coarse_pitch_mm / 2.0)
@@ -110,15 +137,16 @@ class ScanBoundaryNode(Node):
             and 0.5 <= goal.max_force_n <= 5.0
             and 0.1 <= goal.lateral_force_limit_n <= goal.max_force_n
             and 1 <= goal.confirm_samples <= 10
+            and 0.1 <= goal.stiffness_depth_mm <= 2.0
+            and 0.0 < goal.material_min_separation_n_per_mm <= 20.0
+            and 1 <= goal.reference_repeats <= 5
             and 5.0 <= goal.point_timeout_s <= 120.0)
         if valid:
-            coarse = make_grid(
-                goal.area_x_mm, goal.area_y_mm,
-                goal.coarse_pitch_mm, goal.margin_mm)
+            coarse = make_grid(width_mm, height_mm, goal.coarse_pitch_mm)
             valid = len(coarse) <= 400
         if not valid:
             self.get_logger().warn(
-                'ScanBoundary REJECT: E_INVALID_GOAL (도구 확인, base frame, 축/격지 범위 오류)')
+                'ScanBoundary REJECT: E_INVALID_GOAL (사각형, 기준점, 축 또는 격자 범위 오류)')
             return GoalResponse.REJECT
         ok, reasons = self._call_validate(goal.session_id)
         if not ok:
@@ -144,11 +172,18 @@ class ScanBoundaryNode(Node):
         return base
 
     @staticmethod
-    def _pose_at(center, x_axis, y_axis, x_mm, y_mm):
-        pose = copy.deepcopy(center)
-        pose.position.x += (x_axis[0] * x_mm + y_axis[0] * y_mm) / 1000.0
-        pose.position.y += (x_axis[1] * x_mm + y_axis[1] * y_mm) / 1000.0
-        pose.position.z += (x_axis[2] * x_mm + y_axis[2] * y_mm) / 1000.0
+    def _pose_at(corners, orientation_source, x_mm, y_mm, width_mm, height_mm):
+        """네 공중 모서리 안의 격자점을 bilinear 보간한다."""
+        u = (x_mm + width_mm / 2.0) / width_mm
+        v = (y_mm + height_mm / 2.0) / height_mm
+        weights = ((1.0 - u) * (1.0 - v), u * (1.0 - v), u * v, (1.0 - u) * v)
+        pose = copy.deepcopy(orientation_source)
+        pose.position.x = sum(weight * corner.position.x
+                              for weight, corner in zip(weights, corners))
+        pose.position.y = sum(weight * corner.position.y
+                              for weight, corner in zip(weights, corners))
+        pose.position.z = sum(weight * corner.position.z
+                              for weight, corner in zip(weights, corners))
         return pose
 
     def _call_probe(self, probe_goal, parent_goal, timeout_s):
@@ -250,6 +285,7 @@ class ScanBoundaryNode(Node):
         probe.max_force_n = goal.max_force_n
         probe.lateral_force_limit_n = goal.lateral_force_limit_n
         probe.confirm_samples = goal.confirm_samples
+        probe.stiffness_depth_mm = goal.stiffness_depth_mm
         probe.timeout_s = goal.point_timeout_s
         probe.manual_probe_tool_confirmed = goal.manual_probe_tool_confirmed
         return probe
@@ -258,6 +294,43 @@ class ScanBoundaryNode(Node):
     def _probe_wait_timeout(point_timeout_s):
         # ProbePoint 한 점은 공중/실제 각각 접근, 탐색, 복귀를 수행한다.
         return point_timeout_s * 6.0 + 5.0
+
+    def _measure_references(self, goal, parent_goal, poses, source):
+        measurements = []
+        for pose in poses:
+            for _ in range(goal.reference_repeats):
+                probe_result, code, detail = self._call_probe(
+                    self._probe_goal(goal, pose, source), parent_goal,
+                    self._probe_wait_timeout(goal.point_timeout_s))
+                if code is not None:
+                    return None, code, detail
+                measurement = probe_result.measurement
+                if (not measurement.valid or not measurement.contact_detected
+                        or measurement.stiffness_n_per_mm <= 0.0):
+                    return None, ErrorCode.E_NO_BOUNDARY, \
+                        '기준점에서 유효한 강성 측정을 얻지 못함'
+                measurements.append(measurement)
+        return measurements, None, ''
+
+    @staticmethod
+    def _is_nail_material(measurement, nail_stiffness, dummy_stiffness):
+        if (not measurement.valid or not measurement.contact_detected
+                or measurement.stiffness_n_per_mm <= 0.0):
+            return False
+        stiffness = measurement.stiffness_n_per_mm
+        return abs(stiffness - nail_stiffness) < abs(stiffness - dummy_stiffness)
+
+    def _seed_index(self, grid, classifications, corners, nail_reference,
+                    width_mm, height_mm):
+        candidates = [entry for entry in grid if classifications[(entry[0], entry[1])]]
+        if not candidates:
+            return None
+        return min(
+            candidates,
+            key=lambda entry: self._distance(
+                self._pose_at(corners, nail_reference, entry[2], entry[3],
+                              width_mm, height_mm).position,
+                nail_reference.position))[:2]
 
     def _publish_feedback(self, goal_handle, stage, measurement, done, total, candidates):
         feedback = ScanBoundary.Feedback()
@@ -297,17 +370,39 @@ class ScanBoundaryNode(Node):
     def _execute_scan(self, goal_handle, started_at):
         goal = goal_handle.request
         result = ScanBoundary.Result()
-        x_axis = self._unit(goal.scan_x_axis)
-        y_axis = self._unit(goal.scan_y_axis)
-        coarse_grid = make_grid(
-            goal.area_x_mm, goal.area_y_mm,
-            goal.coarse_pitch_mm, goal.margin_mm)
+        corners = goal.scan_corners
+        width_mm, height_mm = self._corner_dimensions(corners)
+        nail_references, code, detail = self._measure_references(
+            goal, goal_handle, [goal.nail_reference],
+            ProbePoint.Goal.SOURCE_NAIL_REFERENCE)
+        if code is not None:
+            return self._finish_error(goal_handle, result, code, detail, started_at)
+        dummy_references, code, detail = self._measure_references(
+            goal, goal_handle, goal.dummy_references,
+            ProbePoint.Goal.SOURCE_DUMMY_REFERENCE)
+        if code is not None:
+            return self._finish_error(goal_handle, result, code, detail, started_at)
+
+        nail_stiffness = statistics.median(
+            item.stiffness_n_per_mm for item in nail_references)
+        dummy_stiffness = statistics.median(
+            item.stiffness_n_per_mm for item in dummy_references)
+        if abs(nail_stiffness - dummy_stiffness) < goal.material_min_separation_n_per_mm:
+            detail = (
+                f'손톱/더미 강성 차이={abs(nail_stiffness - dummy_stiffness):.3f}N/mm가 '
+                f'최소값={goal.material_min_separation_n_per_mm:.3f}N/mm보다 작음')
+            return self._finish_error(
+                goal_handle, result, ErrorCode.E_NO_BOUNDARY, detail, started_at)
+
+        coarse_grid = make_grid(width_mm, height_mm, goal.coarse_pitch_mm)
         measurements = []
         coarse_classes = {}
-        total = len(coarse_grid)
+        reference_count = len(nail_references) + len(dummy_references)
+        total = reference_count + len(coarse_grid)
 
         for ix, iy, x_mm, y_mm in coarse_grid:
-            pose = self._pose_at(goal.center_search_start, x_axis, y_axis, x_mm, y_mm)
+            pose = self._pose_at(
+                corners, goal.nail_reference, x_mm, y_mm, width_mm, height_mm)
             probe_result, code, detail = self._call_probe(
                 self._probe_goal(goal, pose, ProbePoint.Goal.SOURCE_COARSE),
                 goal_handle, self._probe_wait_timeout(goal.point_timeout_s))
@@ -315,12 +410,15 @@ class ScanBoundaryNode(Node):
                 return self._finish_error(goal_handle, result, code, detail, started_at)
             measurement = probe_result.measurement
             measurements.append(measurement)
-            coarse_classes[(ix, iy)] = measurement.contact_detected
+            coarse_classes[(ix, iy)] = self._is_nail_material(
+                measurement, nail_stiffness, dummy_stiffness)
             self._publish_feedback(
                 goal_handle, ScanBoundary.Feedback.STAGE_COARSE,
-                measurement, len(measurements), total, 0)
+                measurement, reference_count + len(measurements), total, 0)
 
-        component = central_contact_component(coarse_grid, coarse_classes)
+        seed_index = self._seed_index(
+            coarse_grid, coarse_classes, corners, goal.nail_reference, width_mm, height_mm)
+        component = central_contact_component(coarse_grid, coarse_classes, seed_index)
         coarse_classes = {
             index: index in component for index in coarse_classes
         }
@@ -331,9 +429,7 @@ class ScanBoundaryNode(Node):
             return self._finish_error(
                 goal_handle, result, ErrorCode.E_NO_BOUNDARY, detail, started_at)
 
-        fine_grid_all = make_grid(
-            goal.area_x_mm, goal.area_y_mm,
-            goal.fine_pitch_mm, goal.margin_mm)
+        fine_grid_all = make_grid(width_mm, height_mm, goal.fine_pitch_mm)
         fine_grid = [entry for entry in fine_grid_all
                      if min(math.hypot(entry[2] - x, entry[3] - y)
                             for x, y in coarse_transitions) <= goal.boundary_band_mm]
@@ -346,7 +442,8 @@ class ScanBoundaryNode(Node):
         fine_classes = {}
         total += len(fine_grid)
         for ix, iy, x_mm, y_mm in fine_grid:
-            pose = self._pose_at(goal.center_search_start, x_axis, y_axis, x_mm, y_mm)
+            pose = self._pose_at(
+                corners, goal.nail_reference, x_mm, y_mm, width_mm, height_mm)
             probe_result, code, detail = self._call_probe(
                 self._probe_goal(goal, pose, ProbePoint.Goal.SOURCE_FINE),
                 goal_handle, self._probe_wait_timeout(goal.point_timeout_s))
@@ -354,17 +451,23 @@ class ScanBoundaryNode(Node):
                 return self._finish_error(goal_handle, result, code, detail, started_at)
             measurement = probe_result.measurement
             measurements.append(measurement)
-            fine_classes[(ix, iy)] = measurement.contact_detected
+            fine_classes[(ix, iy)] = self._is_nail_material(
+                measurement, nail_stiffness, dummy_stiffness)
             self._publish_feedback(
                 goal_handle, ScanBoundary.Feedback.STAGE_FINE,
-                measurement, len(measurements), total, len(coarse_transitions))
+                measurement, reference_count + len(measurements), total,
+                len(coarse_transitions))
 
+        fine_seed = self._seed_index(
+            fine_grid, fine_classes, corners, goal.nail_reference, width_mm, height_mm)
+        fine_component = central_contact_component(fine_grid, fine_classes, fine_seed)
+        fine_classes = {index: index in fine_component for index in fine_classes}
         fine_transitions = grid_transition_midpoints(fine_grid, fine_classes)
         if len(fine_transitions) < 3:
             return self._finish_error(
                 goal_handle, result, ErrorCode.E_NO_BOUNDARY,
                 '정밀 격자에서 경계를 다시 검출하지 못함', started_at)
-        boundary_offsets = convex_hull(fine_transitions)
+        boundary_offsets = grid_contour_polygon(fine_grid, fine_classes)
         if len(boundary_offsets) < 3:
             return self._finish_error(
                 goal_handle, result, ErrorCode.E_NO_BOUNDARY,
@@ -376,7 +479,8 @@ class ScanBoundaryNode(Node):
         boundary_map.session_id = goal.session_id
         boundary_map.measurements = measurements
         for x_mm, y_mm in boundary_offsets:
-            pose = self._pose_at(goal.center_search_start, x_axis, y_axis, x_mm, y_mm)
+            pose = self._pose_at(
+                corners, goal.nail_reference, x_mm, y_mm, width_mm, height_mm)
             boundary_map.boundary_polygon.append(Point(
                 x=pose.position.x, y=pose.position.y, z=pose.position.z))
         boundary_map.coarse_pitch_mm = goal.coarse_pitch_mm
@@ -386,6 +490,9 @@ class ScanBoundaryNode(Node):
         boundary_map.boundary_candidate_count = len(boundary_offsets)
         boundary_map.contact_ratio = (
             sum(item.contact_detected for item in measurements) / len(measurements))
+        boundary_map.nail_reference_stiffness_n_per_mm = nail_stiffness
+        boundary_map.dummy_reference_stiffness_n_per_mm = dummy_stiffness
+        boundary_map.material_separation_n_per_mm = abs(nail_stiffness - dummy_stiffness)
         boundary_map.valid = True
         result.map = boundary_map
         goal_handle.succeed()

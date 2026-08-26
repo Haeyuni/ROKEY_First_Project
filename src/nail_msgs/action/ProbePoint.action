@@ -1,6 +1,8 @@
 string SOURCE_COARSE = "coarse"
 string SOURCE_FINE = "fine"
 string SOURCE_MANUAL = "manual"
+string SOURCE_NAIL_REFERENCE = "nail_reference"
+string SOURCE_DUMMY_REFERENCE = "dummy_reference"
 
 geometry_msgs/Pose search_start
 geometry_msgs/Vector3 press_direction
@@ -14,6 +16,7 @@ float64 comparison_margin_n
 float64 max_force_n
 float64 lateral_force_limit_n
 int32 confirm_samples
+float64 stiffness_depth_mm
 float64 timeout_s
 bool manual_probe_tool_confirmed
 ---
