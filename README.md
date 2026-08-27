@@ -163,7 +163,8 @@ source install/setup.bash
 ```bash
 # ws_dsr 쪽 launch — 실제 파일명·인자는 사용 중인 dsr_bringup2 버전에 맞춘다
 ros2 launch dsr_bringup2 dsr_bringup2.launch.py \
-  mode:=real  name:=dsr01  model:=m0609  host:=<로봇 컨트롤러 IP>  # 에뮬레이터는 mode:=virtual (host 생략 시 기본 127.0.0.1)
+  mode:=real  name:=dsr01  model:=m0609  host:=<로봇 컨트롤러 IP>  
+  # 에뮬레이터는 mode:=virtual (host 생략 시 기본 127.0.0.1)
 ```
 
 - `name`(= `dsr_prefix`)은 이후 launch 인자와 동일해야 한다 (기본 `dsr01`).
@@ -180,7 +181,7 @@ ros2 launch dsr_bringup2 dsr_bringup2.launch.py \
 ros2 launch nail_bringup integration_bringup.launch.py
 ```
 
-`frames` + 안전 + 스킬 + 툴 + 공정 5종 + 오케스트레이터를 전부 띄운다.
+`frames` + 안전 + 스킬 + 툴 + 공정 5종 + 오케스트레이터를 전부 띄운다.  
 주요 인자:
 
 | 인자 | 기본값 | 설명 |
