@@ -34,7 +34,7 @@ Action    /session/run
 ![세션 진행 시퀀스](docs/diagrams/nailbot_session_flow.png)
 
 ```text
-PRECHECK → SAND → BRUSH → (COAT → CURE) × layer_total → [STONE] → FINISH
+PRECHECK → SAND → BRUSH → COAT → CURE → [STONE] → FINISH
 ```
 
 - 각 단계 앞에 `TOOL_CHANGE`가 들어간다.
@@ -58,8 +58,8 @@ PRECHECK → SAND → BRUSH → (COAT → CURE) × layer_total → [STONE] → F
 
 ### 워크스페이스 배치
 
-이 저장소는 **DSR 드라이버와 별도의 워크스페이스**다. 두 워크스페이스를
-overlay로 함께 source 해야 한다. (`ws_dsr`를 먼저 source)
+이 저장소는 **DSR 드라이버와 별도의 워크스페이스**다.  
+두 워크스페이스를 overlay로 함께 source 해야 한다. (`ws_dsr`를 먼저 source)
 
 ```text
 ~/ws_cobot_pjt/
@@ -253,7 +253,3 @@ npm run dev
    →  ③ web_bridge (rosbridge)  →  ④ docker compose db
    →  ⑤ uvicorn (FastAPI)  →  ⑥ npm run dev (React)
 ```
-
-로봇 없이 웹 배선만 확인하려면 ①②를 건너뛰고
-`web/backend/scripts/fake_ros_publisher.py`로 `/safety/status`,
-`/process/status`만 발행하면 된다 (로봇 동작은 모사하지 않는다).
