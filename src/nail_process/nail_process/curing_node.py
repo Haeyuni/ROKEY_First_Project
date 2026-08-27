@@ -10,6 +10,17 @@
 방법은 대기 위치로 물러나는 것뿐이고, 그래서 모든 종료 경로(성공/실패/취소/
 타임아웃)에서 반드시 대기 위치 이탈을 시도한 뒤 `parked` 를 채운다.
 `parked=false` 로 끝나는 경로가 있다면 그것 자체가 안전 결함이다.
+
+★ v0.3 변경 두 가지:
+1. 조사할 영역(체류 지점을 뿌릴 범위)을 예전에는 scan_node 의 강성 맵
+   (`GetStiffnessMap`)에서 받아왔지만, 스캔이 폐지되면서 이제는 티칭된
+   손톱 크기 파라미터(`nail_size_x_mm` / `nail_size_y_mm`)로 타원을 직접
+   만든다.
+2. **재조사(REWORK) 개념이 사라졌다.** 경화 여부를 판정하던 inspection_node
+   가 폐지돼 "어디가 덜 굳었는지"를 알 방법이 없다 — `target_regions` 로
+   일부만 다시 굽는 경로와 `exposure_scale` 배율이 함께 제거됐고, 이제 이
+   노드는 항상 전체 영역을 `dwell_points` 개 지점으로 한 번 조사한다.
+   조사량이 모자라면 `dwell_s_per_point` 를 올려서 맞출 것.
 """
 import math
 import threading
@@ -24,17 +35,19 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from nail_msgs.action import CureUV, MoveTo
-from nail_msgs.msg import ErrorCode, ResultBase, SafetyState, ToolState
-from nail_msgs.srv import GetStiffnessMap, ValidatePrecondition
+from nail_msgs.msg import ErrorCode, ResultBase, SafetyState, TaskPose, ToolState
+from nail_msgs.srv import ValidatePrecondition
 
-from nail_perception.geometry2d import centroid, polygon_area, raster_fill
+from nail_perception.geometry2d import (
+    centroid, nail_boundary_polygon, oscillating_sweep, polygon_area, raster_fill,
+)
+from nail_skill.conversions import task_pose_to_ros_pose
 
 SEVERITY_BY_CODE = {
     ErrorCode.OK: ErrorCode.SEV_NONE,
     ErrorCode.E_CANCELLED: ErrorCode.SEV_NONE,
     ErrorCode.E_MOTION_FAILED: ErrorCode.SEV_ABORT,
     ErrorCode.E_TIMEOUT: ErrorCode.SEV_ABORT,
-    ErrorCode.E_NO_SCAN: ErrorCode.SEV_ABORT,
     ErrorCode.E_PRECOND_FAILED: ErrorCode.SEV_ABORT,
     ErrorCode.E_SAFETY_BLOCKED: ErrorCode.SEV_SAFETY,
 }
@@ -57,6 +70,7 @@ class CuringNode(Node):
         self._declare_parameters()
 
         self._latest_safety = None
+        self._last_safety_rx_monotonic = None
         safety_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
@@ -67,8 +81,6 @@ class CuringNode(Node):
                                   self._on_safety_status, safety_qos,
                                   callback_group=self._cb_client)
 
-        self._get_map_client = self.create_client(
-            GetStiffnessMap, '/scan/get_map', callback_group=self._cb_client)
         self._validate_client = self.create_client(
             ValidatePrecondition, '/safety/validate', callback_group=self._cb_client)
         self._move_client = ActionClient(self, MoveTo, '/skill/move_to',
@@ -88,54 +100,86 @@ class CuringNode(Node):
     def _declare_parameters(self):
         d = self.declare_parameter
         d('safety_topic', '/safety/status')
+        d('safety_status_timeout_s', 1.0)
         d('node_timeout_s', 120.0)
-        d('log_force_data', False)
         d('uv_always_on', True)  # v0.2 고정. false 미지원 — 값을 바꿔도 동작 안 변함
         d('standoff_mm', 15.0)
         d('standoff_tolerance_mm', 3.0)
-        d('exposure_s', 30.0)
         d('path_speed_mms', 3.0)
         d('dwell_points', 5)
         d('dwell_s_per_point', 6.0)
-        d('rework_exposure_scale', 1.5)
         d('entry_direction', 'from_side')
         d('park_distance_mm', 120.0)
+        # goal.waypoints 가 비어 있을 때(=session_orchestrator 의 CureUV 호출
+        # 포함) 자동으로 쓸 기본 수동 왕복 경로 — uv_work_l/uv_work/
+        # uv_work_r(targets.yaml) 의 base_link 절대좌표를 변환 없이 그대로
+        # 쓴다(2026-08-24, left 먼저 → right 순). 외접원 9점 확장도 시도해
+        # 봤으나 3점 버전으로 되돌림(요청). sanding_node의
+        # default_waypoints/oscillations 와 동일 패턴 — TaskPose와 동일한
+        # x_mm,y_mm,z_mm,rz1_deg,ry_deg,rz2_deg 6개씩 묶어 점 개수만큼
+        # 이어붙인 float64[]. 비우면(길이<12) 기존처럼 nail_size_x_mm/y_mm
+        # 기반 dwell 지점 계산으로 대체한다.
+        d('default_waypoints', [
+            242.62, 98.89, 375.62, 137.99, -143.11, 117.95,
+            373.27, 106.30, 401.46, 91.21, -150.64, 90.18,
+            503.89, 120.55, 367.70, 53.02, -139.86, 56.63,
+        ])
+        d('oscillations', 2)
         d('max_duration_s', 120.0)
         # MoveTo 는 speed_ratio(0~1) 를 받는다 — robot_skill_node 의
         # move_max_speed_mms 를 여기서 알 방법이 없어(별도 프로세스·파라미터)
         # path_speed_mms -> ratio 환산에 쓸 가정값을 로컬로 둔다. 실제
         # move_max_speed_mms 와 다르면 조사 이송 속도가 어긋난다.
         d('assumed_move_max_speed_mms', 100.0)
+        # 손톱 경계 ★ — launch 가 static_frames.yaml 의 nail_region 에서 주입한다.
+        # 여기 기본값은 launch 없이 `ros2 run` 으로 띄웠을 때만 쓰인다.
+        d('nail_size_x_mm', 16.0)
+        d('nail_size_y_mm', 13.0)
+        d('nail_boundary_points', 24)
+
+    # --- 기본 수동 왕복 경로 (goal.waypoints 비었을 때 대체) -----------------------
+    def _default_waypoints_taskposes(self):
+        """default_waypoints 파라미터(x_mm,y_mm,z_mm,rz1_deg,ry_deg,rz2_deg 를
+        점 개수만큼 이어붙인 float64[])를 TaskPose 리스트로 변환. 길이가
+        6의 배수가 아니거나 점이 2개 미만이면 빈 리스트(=dwell 지점 계산으로
+        대체)."""
+        flat = list(self.get_parameter('default_waypoints').value)
+        if len(flat) < 12 or len(flat) % 6 != 0:
+            return []
+        poses = []
+        for i in range(0, len(flat), 6):
+            tp = TaskPose()
+            (tp.x_mm, tp.y_mm, tp.z_mm,
+             tp.rz1_deg, tp.ry_deg, tp.rz2_deg) = flat[i:i + 6]
+            poses.append(tp)
+        return poses
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg):
         self._latest_safety = msg
+        self._last_safety_rx_monotonic = time.monotonic()
 
     def _safe_to_move(self):
-        return self._latest_safety is not None and self._latest_safety.safe_to_move
+        timeout_s = self.get_parameter('safety_status_timeout_s').value
+        return (self._latest_safety is not None
+                and self._latest_safety.safe_to_move
+                and self._last_safety_rx_monotonic is not None
+                and time.monotonic() - self._last_safety_rx_monotonic <= timeout_s)
 
     def _on_cancel(self, goal_handle):
         if self._move_goal_handle is not None:
             self._move_goal_handle.cancel_goal_async()
         return CancelResponse.ACCEPT
 
-    # --- 서비스 폴링 헬퍼 --------------------------------------------------------
-    def _call_get_map(self, session_id, timeout_s=5.0):
-        if not self._get_map_client.wait_for_service(timeout_sec=timeout_s):
-            return False, False, None
-        req = GetStiffnessMap.Request()
-        req.session_id = session_id
-        future = self._get_map_client.call_async(req)
-        deadline = time.monotonic() + timeout_s
-        while not future.done():
-            if time.monotonic() > deadline:
-                return False, False, None
-            time.sleep(0.02)
-        resp = future.result()
-        if resp is None or not resp.found:
-            return False, False, None
-        return True, resp.map.valid, resp.map
+    # --- 손톱 경계 (v0.3: 스캔 대신 티칭값) ----------------------------------------
+    def _nail_boundary(self):
+        """nail_local_frame 기준 손톱 경계 다각형. 빈 리스트면 파라미터가 잘못된 것."""
+        return nail_boundary_polygon(
+            self.get_parameter('nail_size_x_mm').value,
+            self.get_parameter('nail_size_y_mm').value,
+            int(self.get_parameter('nail_boundary_points').value))
 
+    # --- 서비스 폴링 헬퍼 --------------------------------------------------------
     def _call_validate_precondition(self, session_id, timeout_s=5.0):
         if not self._validate_client.wait_for_service(timeout_sec=timeout_s):
             return False, ['ValidatePrecondition 서비스 연결 실패']
@@ -162,9 +206,10 @@ class CuringNode(Node):
         if not self._safe_to_move():
             self.get_logger().warn('CureUV REJECT: E_SAFETY_BLOCKED')
             return GoalResponse.REJECT
-        found, valid, _map = self._call_get_map(goal_request.session_id)
-        if not found or not valid:
-            self.get_logger().warn(f'CureUV REJECT: E_NO_SCAN (found={found}, valid={valid})')
+        if len(self._nail_boundary()) < 3:
+            self.get_logger().warn(
+                'CureUV REJECT: E_INVALID_GOAL — nail_size_x_mm/nail_size_y_mm/'
+                'nail_boundary_points 파라미터가 유효하지 않아 조사 영역을 만들 수 없음')
             return GoalResponse.REJECT
         ok, reasons = self._call_validate_precondition(goal_request.session_id)
         if not ok:
@@ -178,12 +223,24 @@ class CuringNode(Node):
 
     # --- 체류 지점 산출 ----------------------------------------------------------
     def _generate_dwell_points(self, boundary_xy, n_points):
-        """전체 영역 커버 — 대략 균등 간격으로 n_points 개를 뽑는다."""
+        """전체 영역 커버 — 대략 균등 간격으로 n_points 개를 뽑는다.
+
+        `sqrt(area/n)` 격자는 다각형 모서리가 잘려나가 목표보다 적게 나올 수
+        있다 (16x13mm 타원 + n=5 에서 4개만 나오는 것이 확인됨). 조사 지점
+        개수가 곧 총 노출량이므로 요청한 개수는 채워야 한다 — 후보가 모자라면
+        격자를 좁혀 다시 뜬다.
+        """
         area = polygon_area(boundary_xy)
         if area <= 1e-6 or n_points <= 0:
             return [centroid(boundary_xy)]
-        approx_pitch = math.sqrt(area / n_points)
-        candidates = raster_fill(boundary_xy, max(0.5, approx_pitch), 0.0)
+        pitch = math.sqrt(area / n_points)
+        candidates = []
+        for _ in range(6):  # 매번 0.75배 — 6회면 pitch 가 1/5 로 줄어든다
+            pitch = max(0.5, pitch)
+            candidates = raster_fill(boundary_xy, pitch, 0.0)
+            if len(candidates) >= n_points or pitch <= 0.5:
+                break
+            pitch *= 0.75
         if not candidates:
             return [centroid(boundary_xy)]
         if len(candidates) <= n_points:
@@ -215,36 +272,46 @@ class CuringNode(Node):
 
         standoff = self._val(goal.standoff_mm, 'standoff_mm')
         dwell_points_n = int(self._val(goal.dwell_points, 'dwell_points'))
-        dwell_s = self._val(goal.dwell_s_per_point, 'dwell_s_per_point') * \
-            (goal.exposure_scale if goal.exposure_scale > 0.0 else 1.0)
+        dwell_s = self._val(goal.dwell_s_per_point, 'dwell_s_per_point')
         path_speed = self._val(goal.path_speed_mms, 'path_speed_mms')
         park_distance = self._val(goal.park_distance_mm, 'park_distance_mm')
         max_duration = self._val(goal.max_duration_s, 'max_duration_s')
         speed_ratio = min(1.0, max(0.05, path_speed /
                                     self.get_parameter('assumed_move_max_speed_mms').value))
 
-        found, valid, stiffness_map = self._call_get_map(goal.session_id)
-        if not found or not valid:
-            detail = f'GetStiffnessMap: found={found} valid={valid}'
-            self._log_abort(ErrorCode.E_NO_SCAN, detail)
-            goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_NO_SCAN, detail, started_at)
-            return result
-
-        boundary_xy = [(pt.x, pt.y) for pt in stiffness_map.region.boundary_polygon]
+        boundary_xy = self._nail_boundary()
         if len(boundary_xy) < 3:
-            detail = 'boundary_polygon 점 3개 미만 — 경계 미확정'
-            self._log_abort(ErrorCode.E_NO_SCAN, detail)
+            detail = ('조사 영역 생성 실패 — nail_size_x_mm='
+                      f"{self.get_parameter('nail_size_x_mm').value}, nail_size_y_mm="
+                      f"{self.get_parameter('nail_size_y_mm').value}, nail_boundary_points="
+                      f"{self.get_parameter('nail_boundary_points').value}")
+            self._log_abort(ErrorCode.E_INVALID_GOAL, detail)
             goal_handle.abort()
-            result.base = self._result_base(False, ErrorCode.E_NO_SCAN, detail, started_at)
+            result.base = self._result_base(False, ErrorCode.E_INVALID_GOAL, detail, started_at)
             return result
 
-        # target_regions: StiffnessPoint/BoundaryRegion 계열과 동일하게 mm 규약
-        # (inspection_node 의 fail_points 도 이 계열에서 나온다).
-        if len(goal.target_regions) > 0:
-            dwell_xy = [(pt.x, pt.y) for pt in goal.target_regions]
+        oscillations = max(1, int(self.get_parameter('oscillations').value))
+        custom_poses = list(goal.waypoints)
+        source = 'goal.waypoints'
+        if len(custom_poses) < 2:
+            custom_poses = self._default_waypoints_taskposes()
+            source = 'default_waypoints 파라미터'
+
+        use_custom_waypoints = len(custom_poses) >= 2
+        if use_custom_waypoints:
+            self.get_logger().info(
+                f'CureUV: waypoints {len(custom_poses)}개 수동 지정({source}, TaskPose, 자세 '
+                '포함) — dwell_points/nail_size_x_mm/y_mm 기반 계산을 건너뛰고 그 점들을 '
+                'base_link 절대좌표로 그대로 오실레이션 왕복하며 각 지점에서 머문다 '
+                '(targets.yaml 값을 변환 없이 그대로 붙여넣을 수 있게 하기 위함). '
+                '좌표·자세 안전은 호출자 책임.')
+            dwell_poses = [task_pose_to_ros_pose(tp)
+                           for tp in oscillating_sweep(custom_poses, oscillations)]
+            dwell_frame_id = 'base_link'
         else:
             dwell_xy = self._generate_dwell_points(boundary_xy, dwell_points_n)
+            dwell_poses = [self._pose_at(xy, standoff) for xy in dwell_xy]
+            dwell_frame_id = 'nail_local_frame'
 
         center = centroid(boundary_xy)
         ex, ey = self._entry_offset_xy(self.get_parameter('entry_direction').value)
@@ -265,56 +332,80 @@ class CuringNode(Node):
         abort_code = None
         abort_detail = ''
 
-        # 1) 대기 위치로 먼저 이동 (측면 진입 — entry_direction)
-        reason, mv_result = self._move(park_pose, speed_ratio, goal_handle,
-                                        max(1.0, deadline - time.monotonic()))
-        if reason != 'ok':
-            abort_code, abort_detail = self._reason_to_code(reason, mv_result)
+        # 1) 대기 위치로 먼저 이동 (측면 진입 — entry_direction). 수동
+        #    waypoints 모드는 이 경유 없이 바로 waypoints[0]로 간다(요청) —
+        #    이탈(3번)은 안전 대응이라 모드 상관없이 그대로 유지한다.
+        if not use_custom_waypoints:
+            reason, mv_result = self._move(park_pose, speed_ratio, goal_handle,
+                                            max(1.0, deadline - time.monotonic()))
+            if reason != 'ok':
+                abort_code, abort_detail = self._reason_to_code(reason, mv_result)
 
         # 2) 체류 지점 순회
         if abort_code is None:
-            n = len(dwell_xy)
-            for idx, xy in enumerate(dwell_xy):
+            n = len(dwell_poses)
+            for idx, target_pose in enumerate(dwell_poses):
                 if time.monotonic() > deadline:
                     abort_code, abort_detail = ErrorCode.E_TIMEOUT, \
                         f'max_duration_s({max_duration}) 초과'
                     break
-                target_pose = self._pose_at(xy, standoff)
+                # movej(관절 보간)도 시도해봤으나 점 3개는 간격이 커 특이점
+                # 근처에서 휩쓰는 궤적이 나와(2026-08-24 실기 확인) movel로
+                # 되돌림. 개별 MoveTo(target_key, linear=true) 테스트가 정확히
+                # 목표로 간 것과 동일하게, 각 waypoint 로 movel 직선 이동한다.
                 reason, mv_result = self._move(target_pose, speed_ratio, goal_handle,
-                                                max(1.0, deadline - time.monotonic()))
+                                                max(1.0, deadline - time.monotonic()),
+                                                frame_id=dwell_frame_id,
+                                                linear=True)
                 if reason != 'ok':
                     abort_code, abort_detail = self._reason_to_code(reason, mv_result)
                     break
 
-                dwell_elapsed = 0.0
-                tick = 0.1
-                while dwell_elapsed < dwell_s:
-                    if goal_handle.is_cancel_requested:
-                        abort_code, abort_detail = 'CANCELLED', '사용자 취소'
-                        break
-                    if not self._safe_to_move():
-                        abort_code, abort_detail = ErrorCode.E_SAFETY_BLOCKED, \
-                            'safe_to_move=false — 즉시 이탈'
-                        break
-                    if time.monotonic() > deadline:
-                        abort_code, abort_detail = ErrorCode.E_TIMEOUT, \
-                            f'max_duration_s({max_duration}) 초과'
-                        break
-                    time.sleep(tick)
-                    dwell_elapsed += tick
-                    actual_exposure_s += tick
-                    feedback(100.0 * (idx + dwell_elapsed / dwell_s) / n, idx, dwell_elapsed,
-                             standoff)
+                if use_custom_waypoints:
+                    # 수동 waypoints 모드는 체류 없이 바로 다음 지점으로 —
+                    # 요청에 따라 dwell_s_per_point 를 적용하지 않는다.
+                    feedback(100.0 * (idx + 1) / n, idx, 0.0, standoff)
+                else:
+                    dwell_elapsed = 0.0
+                    tick = 0.1
+                    while dwell_elapsed < dwell_s:
+                        if goal_handle.is_cancel_requested:
+                            abort_code, abort_detail = 'CANCELLED', '사용자 취소'
+                            break
+                        if not self._safe_to_move():
+                            abort_code, abort_detail = ErrorCode.E_SAFETY_BLOCKED, \
+                                'safe_to_move=false — 즉시 이탈'
+                            break
+                        if time.monotonic() > deadline:
+                            abort_code, abort_detail = ErrorCode.E_TIMEOUT, \
+                                f'max_duration_s({max_duration}) 초과'
+                            break
+                        time.sleep(tick)
+                        dwell_elapsed += tick
+                        actual_exposure_s += tick
+                        feedback(100.0 * (idx + dwell_elapsed / dwell_s) / n, idx, dwell_elapsed,
+                                 standoff)
                 if abort_code is not None:
                     break
                 dwell_completed += 1
 
         # 3) 대기 위치 이탈 — 성공/실패/취소/타임아웃 관계없이 반드시 시도한다.
         #    permit 이 없으므로 이게 유일한 안전 대응이다 (NIS §6.5 경고).
+        #    수동 waypoints 모드는 park_pose(nail_local_frame 기준 계산값)가
+        #    아니라 waypoints[0](base_link 절대좌표, 이미 검증된 지점)로
+        #    돌아간다 — 좌표계가 안 맞는 park_pose로 이탈을 시도하다 실기에서
+        #    타임아웃(reason=timeout)이 나 램프가 켜진 채 엉뚱한 위치에
+        #    멈추는 사고가 있었다(2026-08-25).
         parked = False
+        if use_custom_waypoints:
+            retreat_pose = task_pose_to_ros_pose(custom_poses[0])
+            retreat_frame_id = 'base_link'
+        else:
+            retreat_pose = park_pose
+            retreat_frame_id = 'nail_local_frame'
         try:
-            retreat_reason, _ = self._move(park_pose, speed_ratio, goal_handle, 15.0,
-                                            ignore_cancel=True)
+            retreat_reason, _ = self._move(retreat_pose, speed_ratio, goal_handle, 15.0,
+                                            ignore_cancel=True, frame_id=retreat_frame_id)
             parked = (retreat_reason == 'ok')
             if not parked:
                 self.get_logger().error(
@@ -327,7 +418,7 @@ class CuringNode(Node):
         result.actual_exposure_s = actual_exposure_s
         result.dwell_completed = dwell_completed
         result.mean_standoff_mm = standoff  # 명령값 — 이 노드는 독립 거리 센서가 없어 실측 아님
-        result.coverage_ratio = dwell_completed / max(1, len(dwell_xy))
+        result.coverage_ratio = dwell_completed / max(1, len(dwell_poses))
         result.parked = parked
 
         if abort_code == 'CANCELLED':
@@ -358,11 +449,12 @@ class CuringNode(Node):
         return code, detail
 
     # --- MoveTo 클라이언트 헬퍼 (§3.3 취소 전파) -----------------------------------
-    def _move(self, pose, speed_ratio, our_goal_handle, timeout_s, ignore_cancel=False):
+    def _move(self, pose, speed_ratio, our_goal_handle, timeout_s, ignore_cancel=False,
+              frame_id='nail_local_frame', linear=True):
         goal = MoveTo.Goal()
         goal.target = pose
-        goal.frame_id = 'nail_local_frame'
-        goal.linear = True
+        goal.frame_id = frame_id
+        goal.linear = linear
         goal.speed_ratio = speed_ratio
         goal.accel_ratio = speed_ratio
         goal.timeout_s = timeout_s

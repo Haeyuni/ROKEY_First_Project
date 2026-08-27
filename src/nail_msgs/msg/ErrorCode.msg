@@ -11,29 +11,12 @@ string E_CANCELLED             = "E_CANCELLED"
 string E_COMM_LOST             = "E_COMM_LOST"
 string E_MOTION_FAILED         = "E_MOTION_FAILED"
 
-# 스캔 / 경계
-string E_COARSE_INSUFFICIENT   = "E_COARSE_INSUFFICIENT"
-string E_SEPARATION_LOW        = "E_SEPARATION_LOW"
-string E_NO_SCAN               = "E_NO_SCAN"
-
-# 접촉 (법선)
-string E_NO_CONTACT             = "E_NO_CONTACT"
-string E_OVERFORCE              = "E_OVERFORCE"
-string E_LOW_STIFFNESS          = "E_LOW_STIFFNESS"
-
-# 접촉 (수평) — 연마 전용
+# 티칭 경계 — 연마 전용
 string E_LATERAL_LIMIT          = "E_LATERAL_LIMIT"
-string E_LATERAL_JAM            = "E_LATERAL_JAM"
 
 # 툴
 string E_TOOL_MISMATCH          = "E_TOOL_MISMATCH"
 string E_GRIP_FAILED            = "E_GRIP_FAILED"
-string E_TOOL_DROP              = "E_TOOL_DROP"
-
-# 세션
-string E_REWORK_EXCEEDED        = "E_REWORK_EXCEEDED"
-string E_MAP_SESSION_MISMATCH   = "E_MAP_SESSION_MISMATCH"
-string E_STONE_MISS             = "E_STONE_MISS"
 
 # 심각도
 uint8 SEV_NONE   = 0

@@ -10,6 +10,10 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/config', [
+            'config/taught_surfaces.yaml',
+            'config/taught_stone.yaml',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -24,7 +28,6 @@ setup(
             'brushing_node = nail_process.brushing_node:main',
             'coating_node = nail_process.coating_node:main',
             'curing_node = nail_process.curing_node:main',
-            'inspection_node = nail_process.inspection_node:main',
             'stone_node = nail_process.stone_node:main',
         ],
     },

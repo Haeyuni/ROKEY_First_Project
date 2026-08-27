@@ -1,9 +1,20 @@
 geometry_msgs/Pose target
 string  frame_id
+string  target_key             # 비어있지 않으면 targets.yaml 의 target_key 를
+                                # 찾아 target/frame_id 대신 그 좌표로 이동한다
+                                # (PickPlace 와 동일한 조회 — rz1/ry/rz2 를
+                                # quaternion 변환 없이 그대로 써서 짐벌락 근처
+                                # 자세도 안전하게 지정 가능). 비어있으면 기존
+                                # 대로 target/frame_id 를 쓴다.
 bool    linear                 # true=movel, false=movej
 float64 speed_ratio            # 0.0~1.0
 float64 accel_ratio
 float64 timeout_s
+float64 y_offset_mm            # target_key(또는 target) 조회 결과의 y_mm에
+                                # 이 값을 더해서 이동한다(base_link 기준mm).
+                                # 0이면 조회된 좌표 그대로. 티칭 좌표 자체는
+                                # 건드리지 않고 호출부에서만 살짝 보정하고
+                                # 싶을 때 쓴다.
 ---
 nail_msgs/ResultBase base
 float64 position_error_mm

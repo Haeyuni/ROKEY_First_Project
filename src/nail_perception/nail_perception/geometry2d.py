@@ -1,38 +1,11 @@
-"""2D 격자·다각형 유틸리티. 단위는 전부 mm, 평면은 스캔 기준 프레임의 XY."""
+"""2D 다각형 유틸리티. 단위는 전부 mm, 평면은 `nail_local_frame` 의 XY.
+
+강성 스캔(scan_node)이 폐지되면서 격자 생성·군집 외곽선(convex_hull)·주성분
+축 추정 같은 "측정 결과로부터 경계를 만드는" 함수들은 함께 제거됐다. 지금
+경계는 측정이 아니라 **설정값**에서 온다 — `nail_boundary_polygon()` 이
+그 유일한 출처다.
+"""
 import math
-
-import numpy as np
-
-
-def make_grid(area_x_mm, area_y_mm, margin_mm, pitch_mm):
-    """중심이 원점인 직사각 격자. {(i, j): (x_mm, y_mm)} 로 반환한다.
-
-    (i, j) 인덱스를 유지하는 이유: 4-이웃 탐색(경계 후보 선정, NIS §6.1 6단계)이
-    좌표 근접도 검색 없이 인덱스 ±1 비교만으로 끝나기 때문이다.
-    """
-    half_x = area_x_mm / 2.0 + margin_mm
-    half_y = area_y_mm / 2.0 + margin_mm
-    xs = np.arange(-half_x, half_x + 1e-6, pitch_mm)
-    ys = np.arange(-half_y, half_y + 1e-6, pitch_mm)
-    grid = {}
-    for i, x in enumerate(xs):
-        for j, y in enumerate(ys):
-            grid[(i, j)] = (float(x), float(y))
-    return grid
-
-
-def adjacent_pairs_4(grid):
-    """격자의 4-이웃 쌍 (중복 없이) 이터레이터. (i,j) 인덱스 쌍을 낸다."""
-    keys = set(grid.keys())
-    seen = set()
-    for (i, j) in keys:
-        for di, dj in ((1, 0), (0, 1)):
-            other = (i + di, j + dj)
-            if other in keys:
-                pair = ((i, j), other)
-                if pair not in seen:
-                    seen.add(pair)
-                    yield pair
 
 
 def point_in_polygon(x, y, polygon_xy):
@@ -48,28 +21,6 @@ def point_in_polygon(x, y, polygon_xy):
             inside = not inside
         x1, y1 = x2, y2
     return inside
-
-
-def convex_hull(points_xy):
-    """Andrew's monotone chain. points_xy: [(x,y), ...] -> 반시계 방향 외곽선."""
-    pts = sorted(set(points_xy))
-    if len(pts) <= 2:
-        return pts
-
-    def cross(o, a, b):
-        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-
-    lower = []
-    for p in pts:
-        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
-            lower.pop()
-        lower.append(p)
-    upper = []
-    for p in reversed(pts):
-        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
-            upper.pop()
-        upper.append(p)
-    return lower[:-1] + upper[:-1]
 
 
 def polygon_area(polygon_xy):
@@ -191,15 +142,40 @@ def raster_fill(polygon_xy, pitch_mm, margin_mm=0.0):
     return points
 
 
-def pca_major_axis_deg(points_xy):
-    """점군의 1주성분 방향(도, X축 기준 반시계). 손톱 "길이축" 추정에 쓴다."""
-    if len(points_xy) < 2:
-        return 0.0
-    pts = np.array(points_xy)
-    pts = pts - pts.mean(axis=0)
-    cov = np.cov(pts.T)
-    if cov.shape != (2, 2):
-        return 0.0
-    eigvals, eigvecs = np.linalg.eigh(cov)
-    major = eigvecs[:, np.argmax(eigvals)]
-    return math.degrees(math.atan2(major[1], major[0]))
+def nail_boundary_polygon(size_x_mm, size_y_mm, n_points=24):
+    """손톱 작업 경계 다각형. `nail_local_frame` 원점(=손톱 중심) 기준 타원을
+    n_points 개로 쪼갠 볼록 다각형을 반시계 방향으로 반환한다.
+
+    강성 스캔이 폐지된 뒤 모든 공정 노드(sanding/brushing/coating/curing)가
+    작업 영역을 얻는 **유일한 경로**다. size_x_mm/size_y_mm 은 손톱의 전체
+    가로/세로 길이(반지름 아님)이며 `nail_bringup/config/static_frames.yaml`
+    의 `nail_region` 에 티칭해 둔 실측값이 launch 를 통해 파라미터로 주입된다.
+
+    볼록 다각형인 이유: sanding 의 travel_limit 계산이 쓰는
+    `ray_polygon_distance` 가 "안에서 쏘면 전방 교차가 하나뿐"이라는 볼록성을
+    전제한다.
+    """
+    if size_x_mm <= 0.0 or size_y_mm <= 0.0 or n_points < 3:
+        return []
+    a = size_x_mm / 2.0
+    b = size_y_mm / 2.0
+    return [(a * math.cos(2.0 * math.pi * i / n_points),
+             b * math.sin(2.0 * math.pi * i / n_points))
+            for i in range(n_points)]
+
+
+def oscillating_sweep(points, oscillations):
+    """points(임의 튜플/객체 목록 — 2D xy, 3D xyz, geometry_msgs/Pose 등)를
+    앞뒤로 oscillations 번 왕복하는 순서로 펼친다. sanding_node/curing_node
+    가 공유하는 "수동 지정 waypoints를 N회 왕복"용 헬퍼 — 매 왕복이 시작점
+    으로 돌아오므로, 반복 경계에서 좌표가 겹치는(이동거리 0) 항목은 한 번만
+    남긴다."""
+    if len(points) < 2:
+        return list(points)
+    backward = list(reversed(points))[1:]
+    sweep = list(points)
+    for i in range(oscillations):
+        if i > 0:
+            sweep.extend(points[1:])
+        sweep.extend(backward)
+    return sweep

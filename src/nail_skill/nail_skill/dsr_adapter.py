@@ -4,12 +4,11 @@
 robot_skill_node 의 액션 구현은 이 클래스만 호출하고, 두산 서비스 이름/시그니처를
 직접 알 필요가 없다. 드라이버 버전이 바뀌어도 여기만 고치면 된다.
 
-힘 추종 내부 루프는 두산 컨트롤러(~1kHz)가 담당한다 — 이 모듈은 목표값/종료
-조건만 던진다 (SDS §1.2 위반 금지 규칙 1).
+이동, 로봇 상태, TCP, 그리퍼와 두산 컨트롤러의 외력 조회 API를 제공한다.
 """
+import math
 import threading
 import time
-from dataclasses import dataclass
 
 import rclpy
 
@@ -18,16 +17,6 @@ from .conversions import TaskPose
 
 class DsrAdapterError(RuntimeError):
     pass
-
-
-@dataclass
-class Wrench:
-    fx_n: float
-    fy_n: float
-    fz_n: float
-    tx_nm: float
-    ty_nm: float
-    tz_nm: float
 
 
 class DsrAdapter:
@@ -67,8 +56,6 @@ class DsrAdapter:
         self._DR_TOOL = dsr.DR_TOOL
         self._DR_MV_MOD_ABS = dsr.DR_MV_MOD_ABS
         self._DR_MV_MOD_REL = dsr.DR_MV_MOD_REL
-        self._DR_FC_MOD_ABS = dsr.DR_FC_MOD_ABS
-        self._DR_FC_MOD_REL = dsr.DR_FC_MOD_REL
         self._DR_QSTOP = dsr.DR_QSTOP
         self._BUSY_STATES = {dsr.DR_STATE_BUSY, dsr.DR_STATE_BLEND,
                               dsr.DR_STATE_ACC, dsr.DR_STATE_CRZ, dsr.DR_STATE_DEC}
@@ -80,30 +67,34 @@ class DsrAdapter:
         # 폴링하는 방식을 쓴다.
         self._amovel = dsr.amovel
         self._amovejx = dsr.amovejx
+        self._amovec = dsr.amovec
+        # 뚜껑을 한 번에 돌리는 데만 쓴다(스플라인 경유점 이동).
+        # 드라이버 버전에 따라 없을 수 있어 없으면 None 으로 두고,
+        # 호출부가 끊어 도는 방식으로 물러선다.
+        self._amovesx = getattr(dsr, 'amovesx', None)
         self._check_motion = dsr.check_motion
-        self._task_compliance_ctrl = dsr.task_compliance_ctrl
-        self._release_compliance_ctrl = dsr.release_compliance_ctrl
-        self._set_desired_force = dsr.set_desired_force
-        self._release_force = dsr.release_force
-        self._get_tool_force = dsr.get_tool_force
         self._get_current_posx = dsr.get_current_posx
+        # 나사 뚜껑 풀기에서 손목(J6) 잔여 가동범위를 확인하는 데만 쓴다.
+        # 드라이버 버전에 따라 없을 수 있어 없으면 None 으로 두고, 호출부가
+        # "가동범위 확인 불가"로 처리한다.
+        self._get_current_posj = getattr(dsr, 'get_current_posj', None)
         self._set_tcp = dsr.set_tcp
         self._get_tcp = dsr.get_tcp
+        self._add_tcp = dsr.add_tcp
+        self._del_tcp = dsr.del_tcp
+        self._set_robot_mode = dsr.set_robot_mode
+        self._get_robot_mode = dsr.get_robot_mode
+        self._ROBOT_MODE_MANUAL = dsr.ROBOT_MODE_MANUAL
+        self._ROBOT_MODE_AUTONOMOUS = dsr.ROBOT_MODE_AUTONOMOUS
         self._posx = posx
-        # DSR_ROBOT2 는 DRL(구 로봇 언어) 함수명을 그대로 옮긴 것이므로
-        # get_digital_input(index)/get_robot_state() 이름을 신뢰한다(공식
-        # 파이썬 API 목록의 GPIO/System 분류에 실제로 존재 — safety_monitor
-        # §7.0 처리 참고). dsr_msgs2 의 RobotState 토픽 정확한 이름은 이
-        # 저장소에서 확인할 방법이 없어, 이미 검증된 동기 폴링 함수로
-        # 하트비트를 대신한다 — 응답이 오면 통신 생존으로 본다.
-        self._get_digital_input = dsr.get_digital_input
+        # E-Stop과 통신 상태는 외부 센서가 아니라 컨트롤러 robot_state로 확인한다.
         self._get_robot_state = dsr.get_robot_state
+        self._get_tool_force = dsr.get_tool_force
 
         # DSR_ROBOT2 의 각 wrapper 호출은 내부적으로 self._dr_node 를 임시
         # executor 에 물려 spin_until_future_complete 한다. 이 dr_node 를 두
-        # 스레드가 동시에 spin 하면(예: 100Hz 힘 퍼블리시 타이머와 액션 실행
-        # 스레드가 동시에 두산 API 를 부르는 경우) rclpy executor 상태가
-        # 깨진다. 모든 두산 API 호출을 이 락 하나로 직렬화한다.
+        # 스레드가 동시에 spin 하면 rclpy executor 상태가 깨질 수 있으므로
+        # 모든 두산 API 호출을 이 락 하나로 직렬화한다.
         self._lock = threading.Lock()
 
         self._move_stop_client = None
@@ -136,32 +127,108 @@ class DsrAdapter:
 
     def _setup_gripper_client(self):
         from onrobot_rg_msgs.srv import SetCommand
+        from sensor_msgs.msg import JointState
         self._SetCommand = SetCommand
         self._gripper_client = self._node.create_client(
             SetCommand, '/onrobot/sendCommand')
+
+        # /onrobot/sendCommand 는 Modbus 전송 성공만 확인하고 즉시
+        # success=True 를 반환한다(OnRobotRGControllerServer.sendCommandCallback,
+        # ws_dsr) — 실제 모션 완료를 보장하지 않는다. 게다가 RG2 자체
+        # 프로토콜상 그리퍼가 busy(모션 중)일 때 온 새 명령은 조용히
+        # 무시된다. 그 결과 직전 사이클의 grip 이 아직 안 끝난 채로 다음
+        # open 명령이 도착하면, 명령은 무시되고 서비스는 성공을 반환하는데
+        # 그리퍼는 실제로 열리지 않은 채 하강해버리는 문제가 실기에서
+        # 재현됨. /joint_states 의 그리퍼 조인트 effort 는 busy 일 때만
+        # 0 이 아니게 채워지므로(같은 파일 getStatus 참고) 이걸로 실제
+        # busy 상태를 직접 확인한다.
+        self._gripper_joint_state = None
+        self._gripper_joint_state_lock = threading.Lock()
+        self._node.create_subscription(
+            JointState, '/joint_states', self._on_joint_states, 10)
+
+    def _on_joint_states(self, msg):
+        for name, effort in zip(msg.name, msg.effort):
+            if 'finger_joint' in name:
+                with self._gripper_joint_state_lock:
+                    self._gripper_joint_state = (name, effort)
+                return
+
+    def _wait_gripper_idle(self, timeout_sec: float) -> bool:
+        """그리퍼가 busy 가 아닐 때까지 대기. /joint_states 에 그리퍼 조인트가
+        아직 안 잡히면(조인트 merge 노드 미기동 등) 판단 불가로 보고 True 를
+        반환한다 — 이 경우 호출부의 gripper_settle_s sleep 이 유일한
+        안전장치가 된다."""
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            with self._gripper_joint_state_lock:
+                state = self._gripper_joint_state
+            if state is None:
+                return True
+            _, effort = state
+            if effort == 0.0:
+                return True
+            time.sleep(0.02)
+        return False
 
     def destroy(self):
         self._dr_node.destroy_node()
 
     # --- motion (비동기 시작 + 폴링) ------------------------------------------
     def start_move_line(self, pose: TaskPose, vel_mms: float, acc_mms2: float,
-                         ref=None, relative: bool = False):
+                         ref=None, relative: bool = False,
+                         vel_degs: float = None, acc_degs2: float = None):
+        """vel_degs/acc_degs2 를 주면 amovel 에 [병진, 회전] 쌍으로 넘긴다.
+
+        스칼라만 주면 두산 컨트롤러가 회전 속도를 자기 기본값으로 정하는데,
+        자세 변화가 큰 이동(뚜껑 풀기의 tool Z 축 회전)에서는 그 기본값이
+        너무 빨라 제어가 안 된다 — 그럴 때만 회전 쪽을 따로 지정한다.
+        """
         p = self._posx(pose.x_mm, pose.y_mm, pose.z_mm,
                         pose.rz1_deg, pose.ry_deg, pose.rz2_deg)
         mod = self._DR_MV_MOD_REL if relative else self._DR_MV_MOD_ABS
-        _ref = self._DR_TOOL if relative else (self._DR_BASE if ref is None else ref)
+        _ref = (self._DR_TOOL if ref is None else ref) if relative \
+            else (self._DR_BASE if ref is None else ref)
+        vel = float(vel_mms) if vel_degs is None else [float(vel_mms), float(vel_degs)]
+        acc = float(acc_mms2) if acc_degs2 is None else [float(acc_mms2), float(acc_degs2)]
         with self._lock:
-            self._amovel(p, vel=float(vel_mms), acc=float(acc_mms2), ref=_ref, mod=mod)
+            self._amovel(p, vel=vel, acc=acc, ref=_ref, mod=mod)
 
     def start_move_joint_to_pose(self, pose: TaskPose, vel_mms: float, acc_mms2: float,
-                                  ref=None, sol: int = 0):
-        """movejx: 목표는 task pose 지만 관절 보간으로 이동 (MoveTo linear=false)."""
+                                  ref=None, sol: int = 2):
+        """movejx: 목표는 task pose 지만 관절 보간으로 이동 (MoveTo linear=false).
+
+        sol(관절 해 분기) 기본값을 0에서 2로 변경 — 이 로봇/셀은
+        get_current_posx 로 실측할 때마다 항상 분기 2가 나왔다(실기 확인,
+        2026-08-24/25). sol=0 으로 두면 로봇이 목표 바로 옆에 있어도
+        그 분기에서 IK 가 안 풀려 amovejx 가 즉시(수십 ms) 조용히 실패한다
+        (반환값을 확인 안 해 예외도 안 남) — ContactPath 접근(movejx) 이
+        NOT REACHABLE 로 즉시 ABORT 되는 문제의 원인이었다.
+        """
         p = self._posx(pose.x_mm, pose.y_mm, pose.z_mm,
                         pose.rz1_deg, pose.ry_deg, pose.rz2_deg)
         _ref = self._DR_BASE if ref is None else ref
         with self._lock:
             self._amovejx(p, vel=float(vel_mms), acc=float(acc_mms2),
                            ref=_ref, mod=self._DR_MV_MOD_ABS, sol=sol)
+
+    def start_move_circle(self, via: TaskPose, end: TaskPose,
+                          vel_mms: float, acc_mms2: float, ref=None):
+        """현재 위치에서 via를 지나 end로 가는 비동기 MoveC를 시작한다."""
+        via_pos = self._posx(via.x_mm, via.y_mm, via.z_mm,
+                              via.rz1_deg, via.ry_deg, via.rz2_deg)
+        end_pos = self._posx(end.x_mm, end.y_mm, end.z_mm,
+                             end.rz1_deg, end.ry_deg, end.rz2_deg)
+        _ref = self._DR_BASE if ref is None else ref
+        try:
+            with self._lock:
+                ret = self._amovec(via_pos, end_pos, vel=float(vel_mms),
+                                    acc=float(acc_mms2), ref=_ref,
+                                    mod=self._DR_MV_MOD_ABS)
+        except Exception as exc:
+            raise DsrAdapterError(f'amovec 호출 실패: {exc}') from exc
+        if ret != 0:
+            raise DsrAdapterError(f'amovec 명령 거부(ret={ret})')
 
     def start_move_rel_tool_z(self, delta_z_mm: float, vel_mms: float, acc_mms2: float):
         self.start_move_line(TaskPose(0.0, 0.0, float(delta_z_mm), 0.0, 0.0, 0.0),
@@ -170,7 +237,108 @@ class DsrAdapter:
     def start_move_rel_tool_xyz(self, dx_mm: float, dy_mm: float, dz_mm: float,
                                  vel_mms: float, acc_mms2: float):
         self.start_move_line(TaskPose(float(dx_mm), float(dy_mm), float(dz_mm), 0.0, 0.0, 0.0),
-                              vel_mms, acc_mms2, relative=True)
+                               vel_mms, acc_mms2, relative=True)
+
+    def start_rotate_tool_z(self, delta_deg: float, along_z_mm: float,
+                             vel_mms: float, acc_mms2: float,
+                             vel_degs: float, acc_degs2: float):
+        """tool +Z 축 둘레로 delta_deg 만큼 돌면서 동시에 tool Z 로 along_z_mm 이동.
+
+        나사를 푸는 움직임(회전 + 피치만큼의 축방향 이동)이 정확히 이 형태다.
+        posx 의 자세 3개는 ZYZ(A,B,C) 라서 (delta,0,0) 은 Rz(delta)·Ry(0)·Rz(0)
+        = Z축 회전 하나만 남는다. ref=DR_TOOL + mod=REL 이므로 그 Z 는 현재
+        tool 의 Z 다.
+
+        두산에는 `move_spiral` 이 따로 있지만 그건 TCP **위치**만 나선으로
+        움직이고 자세는 그대로 둔다 — 뚜껑을 옆으로 끌고 다닐 뿐 풀지 못한다.
+        나사에서 말하는 나선(회전+축방향 전진)은 이 함수 쪽이다.
+        """
+        self.start_move_line(
+            TaskPose(0.0, 0.0, float(along_z_mm), float(delta_deg), 0.0, 0.0),
+            vel_mms, acc_mms2, relative=True,
+            vel_degs=vel_degs, acc_degs2=acc_degs2)
+
+    def has_spline(self) -> bool:
+        """movesx(스플라인 경유점 이동)를 쓸 수 있는 드라이버인지."""
+        return self._amovesx is not None
+
+    def start_rotate_tool_z_continuous(self, delta_deg: float, along_z_mm: float,
+                                        step_deg: float, duration_s: float,
+                                        vel_mms: float, acc_mms2: float,
+                                        vel_degs: float, acc_degs2: float):
+        """tool +Z 축 둘레로 delta_deg 를 **한 번의 이동**으로 돈다 (중간에 안 섬).
+
+        start_rotate_tool_z() 로는 180° 넘는 회전을 한 명령에 담을 수 없다.
+        상대 이동은 결국 "목표 자세" 하나로 환산되는데, 540° 회전한 자세는
+        180° 회전한 자세와 완전히 같은 자세다 — 컨트롤러는 최단 경로로 돌아
+        540° 명령이 180° 회전으로 줄어들거나 방향이 뒤집힌다. 뚜껑 풀기가
+        segment 로 끊겨 있던 것도 이 한계 때문이다.
+
+        그래서 여기서는 step_deg(<180°) 간격의 **절대** 경유점을 직접 만들어
+        movesx 스플라인 하나로 잇는다. 경유점 사이가 매번 180° 미만이라
+        회전 방향이 확정되고, 스플라인이라 경유점마다 감속/정지하지 않는다.
+
+        경유점 계산: ZYZ(A,B,C) 자세에서 tool Z 축 회전은
+            R·Rz(θ) = Rz(A)·Ry(B)·Rz(C+θ)
+        이므로 C 에 θ 를 더하기만 하면 된다. tool Z 축의 base 방향은 C 와
+        무관하게 (sinB·cosA, sinB·sinA, cosB) 라 축방향 이동도 같이 얹는다.
+
+        along_z_mm 은 부호 포함 (음수 = tool -Z = 뚜껑이 떠오르는 쪽).
+
+        속도는 vel/acc 가 아니라 duration_s(전체 이동 시간)로 준다. 경유점들이
+        거의 제자리 회전이라 병진 거리가 몇 mm 밖에 안 되는데, 컨트롤러가
+        병진 속도만 보고 시간을 정하면 손목이 순식간에 몇 바퀴를 돈다. 시간을
+        직접 못 박으면 회전 속도가 확정된다 (vel/acc 도 같이 넘겨서 time 을
+        안 보는 드라이버에서도 상한이 걸리게 둔다).
+
+        movesx 를 못 쓰면 DsrAdapterError — 호출부가 끊어 도는 쪽으로 물러선다.
+        """
+        if self._amovesx is None:
+            raise DsrAdapterError('이 드라이버에는 movesx 가 없습니다')
+
+        # 경유점 간격은 180° 미만이어야 방향이 확정된다. 여유를 둬 170° 로 자른다.
+        step = min(abs(float(step_deg)) or 90.0, 170.0)
+        n = max(1, int(math.ceil(abs(float(delta_deg)) / step)))
+
+        cur = self.get_pose()
+        a = math.radians(cur.rz1_deg)
+        b = math.radians(cur.ry_deg)
+        ux = math.sin(b) * math.cos(a)
+        uy = math.sin(b) * math.sin(a)
+        uz = math.cos(b)
+
+        points = []
+        for k in range(1, n + 1):
+            f = k / float(n)
+            points.append(self._posx(
+                cur.x_mm + ux * float(along_z_mm) * f,
+                cur.y_mm + uy * float(along_z_mm) * f,
+                cur.z_mm + uz * float(along_z_mm) * f,
+                cur.rz1_deg, cur.ry_deg, cur.rz2_deg + float(delta_deg) * f))
+
+        if len(points) < 2:
+            # 경유점이 하나면 스플라인을 쓸 이유가 없다(=180° 이하 회전).
+            self.start_rotate_tool_z(delta_deg, along_z_mm, vel_mms, acc_mms2,
+                                       vel_degs, acc_degs2)
+            return
+
+        vel = [float(vel_mms), float(vel_degs)]
+        acc = [float(acc_mms2), float(acc_degs2)]
+        try:
+            with self._lock:
+                ret = self._amovesx(points, vel=vel, acc=acc,
+                                     time=max(0.0, float(duration_s)),
+                                     ref=self._DR_BASE, mod=self._DR_MV_MOD_ABS)
+        except Exception as exc:
+            raise DsrAdapterError(f'amovesx 호출 실패: {exc}') from exc
+        if ret is not None and ret != 0:
+            raise DsrAdapterError(f'amovesx 명령 거부(ret={ret})')
+
+    def start_move_rel_base_xyz(self, dx_mm: float, dy_mm: float, dz_mm: float,
+                                 vel_mms: float, acc_mms2: float):
+        self.start_move_line(
+            TaskPose(float(dx_mm), float(dy_mm), float(dz_mm), 0.0, 0.0, 0.0),
+            vel_mms, acc_mms2, ref=self._DR_BASE, relative=True)
 
     def is_moving(self) -> bool:
         with self._lock:
@@ -212,33 +380,6 @@ class DsrAdapter:
         self._move_stop_client.call_async(req)
         return True
 
-    # --- compliance / force -------------------------------------------------
-    def compliance_on(self, stiffness_6d):
-        with self._lock:
-            self._task_compliance_ctrl(stx=list(stiffness_6d), time=0)
-
-    def compliance_off(self):
-        with self._lock:
-            self._release_compliance_ctrl()
-
-    def set_desired_force(self, force_6d, axis_mask_6d, relative: bool = False):
-        mod = self._DR_FC_MOD_REL if relative else self._DR_FC_MOD_ABS
-        with self._lock:
-            self._set_desired_force(fd=list(force_6d), dir=list(axis_mask_6d), time=0, mod=mod)
-
-    def release_force(self):
-        with self._lock:
-            self._release_force(time=0)
-
-    # --- sensing -------------------------------------------------------------
-    def read_wrench(self, tool_frame: bool = True) -> Wrench:
-        ref = self._DR_TOOL if tool_frame else self._DR_BASE
-        with self._lock:
-            w = self._get_tool_force(ref=ref)
-        if not isinstance(w, (list, tuple)) or len(w) < 6:
-            raise DsrAdapterError('get_tool_force 응답 없음')
-        return Wrench(w[0], w[1], w[2], w[3], w[4], w[5])
-
     def get_pose(self) -> TaskPose:
         with self._lock:
             pos, _sol = self._get_current_posx(ref=self._DR_BASE)
@@ -246,24 +387,50 @@ class DsrAdapter:
             raise DsrAdapterError('get_current_posx 응답 없음')
         return TaskPose(pos[0], pos[1], pos[2], pos[3], pos[4], pos[5])
 
-    # --- 안전 감시용 읽기 전용 폴링 (safety_monitor, NIS §7) --------------------
-    def read_digital_input(self, channel: int) -> bool:
-        with self._lock:
-            val = self._get_digital_input(channel)
-        if val is None:
-            raise DsrAdapterError(f'get_digital_input({channel}) 응답 없음')
-        return bool(val)
+    def get_joints(self):
+        """관절 6개의 현재 각도(deg) 리스트. 드라이버가 안 주면 None.
 
+        None 을 예외 대신 돌려주는 이유: 이 값을 쓰는 곳(뚜껑 풀기의 J6 잔여
+        가동범위 계산)은 값이 없으면 "확인 불가"로 물러설 뿐 실패가 아니다.
+        """
+        if self._get_current_posj is None:
+            return None
+        with self._lock:
+            joints = self._get_current_posj()
+        # 드라이버 버전에 따라 (posj, ...) 튜플로 감싸 오는 경우가 있다.
+        if isinstance(joints, tuple) and joints and not isinstance(joints[0], float):
+            joints = joints[0]
+        if joints is None or len(joints) < 6:
+            return None
+        return [float(v) for v in joints[:6]]
+
+    # --- 안전 감시용 읽기 전용 폴링 -------------------------------------------
     def read_robot_state(self):
         """컨트롤러가 응답하는지만 본다 — 반환값 자체는 쓰지 않는다.
         예외 없이 리턴하면 통신 생존, 예외/타임아웃이면 comm_ok=False."""
         with self._lock:
             return self._get_robot_state()
 
+    def get_tool_force(self, ref=None):
+        """두산 컨트롤러가 계산한 외력/토크 6축 값을 읽는다."""
+        force_ref = self._DR_BASE if ref is None else ref
+        with self._lock:
+            values = self._get_tool_force(ref=force_ref)
+        if not isinstance(values, (list, tuple)) or len(values) != 6:
+            raise DsrAdapterError(f'get_tool_force 응답 오류: {values!r}')
+        return [float(value) for value in values]
+
     # --- tool / TCP ------------------------------------------------------------
     def set_tcp(self, name: str):
+        """add_tcp 와 마찬가지로 AUTONOMOUS(ROS 외부제어) 상태에서는 거부되는
+        것으로 보여 MANUAL <-> AUTONOMOUS 를 오간다 (실측 기반, add_tcp 쪽
+        docstring 참고). 실패해도 반드시 AUTONOMOUS 로 복귀시킨다."""
         with self._lock:
-            ret = self._set_tcp(name)
+            self._set_robot_mode(self._ROBOT_MODE_MANUAL)
+            try:
+                ret = self._set_tcp(name)
+            finally:
+                self._set_robot_mode(self._ROBOT_MODE_AUTONOMOUS)
         if ret != 0:
             raise DsrAdapterError(f"set_tcp('{name}') 실패")
 
@@ -271,11 +438,42 @@ class DsrAdapter:
         with self._lock:
             return self._get_tcp()
 
+    def add_tcp(self, name: str, offset):
+        """컨트롤러에 TCP 좌표계를 (재)등록한다 — 값의 출처는 호출자(랙 설정
+        파일 등)이며, 이 함수는 그대로 두산 컨트롤러에 반영만 한다.
+
+        같은 이름이 이미 있으면 두산 쪽 add_tcp 가 실패로 응답하는 것으로
+        보여 먼저 del_tcp 로 지운다 — 없는 이름을 지우는 건 실패해도 무해하니
+        결과를 무시한다. 이렇게 해야 설정 파일의 값이 바뀐 뒤 노드를 재시작할
+        때마다 컨트롤러 쪽 값도 항상 최신으로 갱신된다.
+
+        config_create_tcp/config_delete_tcp 는 로봇이 ROS(AUTONOMOUS) 제어
+        상태에서는 거부되는 것으로 보여(실측: 동일 호출이 MANUAL 에서만
+        성공), 호출 전후로 MANUAL <-> AUTONOMOUS 를 오간다. 실패해도 반드시
+        AUTONOMOUS 로 복귀시켜야 한다 — 그대로 두면 이후 이동 명령(amovel 등)이
+        전부 막힌다.
+        """
+        with self._lock:
+            self._set_robot_mode(self._ROBOT_MODE_MANUAL)
+            try:
+                self._del_tcp(name)
+                ret = self._add_tcp(name, offset)
+            finally:
+                self._set_robot_mode(self._ROBOT_MODE_AUTONOMOUS)
+        if ret != 0:
+            raise DsrAdapterError(f"add_tcp('{name}') 실패")
+
     # --- gripper (OnRobot RG, /onrobot/sendCommand) ---------------------------
     def _send_gripper_command(self, command: str, timeout_sec: float = 10.0) -> bool:
         if self._gripper_client is None or not self._gripper_client.wait_for_service(timeout_sec=5.0):
             self._node.get_logger().error('/onrobot/sendCommand 서비스 연결 실패')
             return False
+        # RG2 는 busy 상태에서 온 새 명령을 조용히 무시한다 — 직전 모션이
+        # 아직 안 끝났으면 먼저 기다려 이번 명령이 씹히는 걸 막는다.
+        if not self._wait_gripper_idle(timeout_sec):
+            self._node.get_logger().warn(
+                '/onrobot/sendCommand: 직전 그리퍼 모션이 아직 안 끝남(busy) '
+                '— 이번 명령이 무시될 수 있음')
         req = self._SetCommand.Request()
         req.command = command
         future = self._gripper_client.call_async(req)
@@ -289,7 +487,16 @@ class DsrAdapter:
                 return False
             time.sleep(0.02)
         result = future.result()
-        return bool(result is not None and result.success)
+        if not (result is not None and result.success):
+            return False
+        # 서비스는 Modbus 전송 성공만 의미할 뿐 모션 완료를 보장하지 않는다
+        # (위 주석 참고) — busy 플래그가 뜰 시간(퍼블리시 50Hz 최소 1주기)을
+        # 준 뒤 실제로 idle 로 돌아올 때까지 기다려 진짜 완료를 확인한다.
+        time.sleep(0.05)
+        if not self._wait_gripper_idle(timeout_sec):
+            self._node.get_logger().error('/onrobot/sendCommand: 그리퍼 모션 완료 대기 타임아웃')
+            return False
+        return True
 
     def gripper_open(self) -> bool:
         return self._send_gripper_command('o')

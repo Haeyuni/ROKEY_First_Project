@@ -8,10 +8,15 @@ TCP 전환(`set_tcp`) 하나뿐이고, 그마저도 robot_skill_node 와 같은 
 한 곳에 가둔다)를 지키면서, NIS §5.2 가 요구하는 "tool_manager 가 dsr TCP
 설정 서비스를 직접 쓴다"를 만족시키는 절충이다.
 
-랙 슬롯 좌표(`slot_frame`)는 값으로 저장하지 않고 TF 프레임 이름으로 참조한다
-(NIS §11.4: slot_* 는 static_transform_publisher 로 고정). PickPlace 의
-target_key 로 그 프레임 이름을 그대로 넘기면 robot_skill_node 가 TF 로 자세를
-조회한다 (robot_skill_node._target_task_pose 의 TF 폴백 경로).
+랙 슬롯 좌표는 값으로 저장하지 않는다. tool_rack.yaml 의 `slot_frame` 에는
+"위치의 이름"만 두고, 그 이름을 PickPlace 의 target_key 로 그대로 넘긴다 —
+좌표로 바꾸는 일은 robot_skill_node._target_task_pose 의 몫이다
+(nail_skill/config/targets.yaml 에서 조회, 없으면 TF 프레임으로 폴백).
+
+TCP 는 두 국면으로 나눠 쓴다 (NEUTRAL_TCP 주석 참고):
+  · 랙으로 이동할 때  → NEUTRAL_TCP(오프셋 0) — targets.yaml 좌표가 "플랜지가
+    있어야 할 자리"로 티칭된 값이기 때문
+  · 툴을 잡은 뒤      → tcp_<툴이름> — 공정 작업이 툴 끝 기준이 되도록
 """
 import threading
 import time
@@ -31,11 +36,20 @@ from nail_msgs.srv import GetToolInfo
 from .conversions import task_pose_to_ros_pose
 from .dsr_adapter import DsrAdapter, DsrAdapterError
 
+# 랙 이동 전용 TCP — 오프셋 0, 즉 "플랜지가 곧 작업점".
+#
+# targets.yaml 의 툴 좌표는 티치펜던트로 **그리퍼를 슬롯 파지 자세에 가져다
+# 놓고** 읽은 값이다. 즉 "플랜지가 여기 있어야 한다"는 뜻이지 "툴 끝이 여기"가
+# 아니다. 그런데 툴마다 tcp_offset 이 다르면(sander 92.5 / uv 110 …) 직전에
+# 들고 있던 툴이 무엇이냐에 따라 같은 좌표라도 실제 도달 높이가 달라진다.
+# → 랙으로 이동하기 직전에 항상 이 TCP 로 되돌려, 좌표 해석 기준을 고정한다.
+#   툴을 잡은 뒤에는 tcp_<툴이름> 으로 전환해 공정 작업이 툴 끝 기준이 되게 한다.
+NEUTRAL_TCP = 'tcp_none'
+
 SEVERITY_BY_CODE = {
     ErrorCode.OK: ErrorCode.SEV_NONE,
     ErrorCode.E_CANCELLED: ErrorCode.SEV_NONE,
     ErrorCode.E_GRIP_FAILED: ErrorCode.SEV_RETRY,
-    ErrorCode.E_TOOL_DROP: ErrorCode.SEV_SAFETY,
     ErrorCode.E_SAFETY_BLOCKED: ErrorCode.SEV_SAFETY,
     ErrorCode.E_TIMEOUT: ErrorCode.SEV_ABORT,
     ErrorCode.E_MOTION_FAILED: ErrorCode.SEV_ABORT,
@@ -63,6 +77,7 @@ class ToolManagerNode(Node):
         self._pick_place_goal_handle = None
 
         self._latest_safety = None
+        self._last_safety_rx_monotonic = None
         safety_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
@@ -81,6 +96,11 @@ class ToolManagerNode(Node):
         except DsrAdapterError as e:
             self.get_logger().error(str(e))
             raise
+
+        self._neutral_tcp_ready = self._register_neutral_tcp()
+
+        if p('sync_tcp_on_startup').value:
+            self._sync_tcp_from_rack()
 
         self._pick_place_client = ActionClient(self, PickPlace, '/skill/pick_place',
                                                 callback_group=self._cb_client)
@@ -110,16 +130,22 @@ class ToolManagerNode(Node):
         d('dsr_prefix', 'dsr01')
         d('robot_model', 'm0609')
         d('safety_topic', '/safety/status')
+        d('safety_status_timeout_s', 1.0)
         d('node_timeout_s', 120.0)
-        d('log_force_data', False)
         d('use_mock_hardware', False)
-        d('tool_list', ['probe', 'sander', 'brush', 'coater', 'uv', 'tweezers'])
+        d('tool_list', ['sander', 'brush', 'coater', 'uv', 'tweezers'])
         d('rack_config_file', 'config/tool_rack.yaml')
+        d('sync_tcp_on_startup', True)
         d('approach_height_mm', 50.0)
-        d('verify_grip', True)
-        d('grip_width_tolerance_mm', 1.0)
-        d('change_timeout_s', 60.0)
+        # 반납/파지 각각에 주는 PickPlace 타임아웃. 코터처럼 뚜껑을 여닫는
+        # 툴은 손목 감기 + 뚜껑 회전 + 되감기가 이 안에서 끝나야 한다 —
+        # 최악 ~1900°/45°/s ≈ 43s 가 여기에 더 붙는다.
+        d('change_timeout_s', 120.0)
         d('uv_park_facing', 'into_rack')
+        # 랙 이동 직전 TCP 를 NEUTRAL_TCP(오프셋 0)로 되돌릴지. 기본 true.
+        # false 로 두면 직전 툴의 tcp_offset 이 그대로 남아 랙 도달 높이가
+        # 교체 순서에 따라 달라진다 — 디버깅용으로만 끌 것.
+        d('neutral_tcp_for_rack', True)
 
     def _load_rack_config(self, path):
         try:
@@ -132,12 +158,76 @@ class ToolManagerNode(Node):
             return {}
         return data.get('tools', {}) or {}
 
+    def _register_neutral_tcp(self):
+        """오프셋 0 짜리 TCP 를 컨트롤러에 등록해 둔다 (NEUTRAL_TCP 주석 참고).
+
+        sync_tcp_on_startup 과 무관하게 항상 등록한다 — 값이 0 이라 잘못될
+        여지가 없고, 이게 없으면 랙 이동 기준을 고정할 방법이 사라진다.
+        실패해도 노드는 계속 뜬다(이전 동작으로 폴백하고 경고만 남긴다).
+        """
+        try:
+            self._adapter.add_tcp(NEUTRAL_TCP, [0.0] * 6)
+        except DsrAdapterError as e:
+            self.get_logger().error(
+                f'{NEUTRAL_TCP} 등록 실패: {e}. 랙 이동 시 TCP 를 0 으로 되돌리지 '
+                '못합니다 — 직전 툴의 tcp_offset 이 그대로 적용되어 파지 높이가 '
+                '교체 순서에 따라 달라질 수 있습니다.')
+            return False
+        self.get_logger().info(f'{NEUTRAL_TCP} 등록 완료 (랙 이동 기준 TCP)')
+        return True
+
+    def _use_neutral_tcp(self):
+        """랙(PickPlace)으로 이동하기 직전에 호출. 반환: 계속 진행해도 되는가.
+
+        등록 자체가 실패했으면(=이전 동작) 경고만 남기고 진행한다. 등록은
+        됐는데 전환이 실패한 경우는 좌표 기준이 어긋난 채로 움직이게 되므로
+        진행하지 않는다.
+        """
+        if not self.get_parameter('neutral_tcp_for_rack').value:
+            return True
+        if not self._neutral_tcp_ready:
+            self.get_logger().warn(
+                f'{NEUTRAL_TCP} 미등록 상태로 랙 이동 — 파지 높이가 직전 툴의 '
+                'tcp_offset 만큼 어긋날 수 있습니다.')
+            return True
+        try:
+            self._adapter.set_tcp(NEUTRAL_TCP)
+        except DsrAdapterError as e:
+            self.get_logger().error(f'{NEUTRAL_TCP} 전환 실패: {e}')
+            return False
+        self._current_tcp = NEUTRAL_TCP
+        return True
+
+    def _sync_tcp_from_rack(self):
+        """rack_config_file 의 tcp_offset 값을 두산 컨트롤러에 그대로 등록한다.
+
+        이렇게 하면 티치펜던트에서 TCP 를 수동으로 등록/수정할 필요 없이
+        rack_config_file 하나만 갱신하면 된다 — set_tcp() 가 찾는 이름
+        (`tcp_<tool>`) 은 항상 이 파일 기준으로 (재)생성된다. 한 툴 등록이
+        실패해도 나머지 툴은 계속 시도한다 — 노드 기동 자체를 막지 않는다
+        (해당 툴의 ChangeTool 만 이후 set_tcp 단계에서 실패한다).
+        """
+        for name, cfg in self._rack.items():
+            tcp_name = f'tcp_{name}'
+            offset = cfg.get('tcp_offset', [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            try:
+                self._adapter.add_tcp(tcp_name, offset)
+            except DsrAdapterError as e:
+                self.get_logger().error(f'TCP 동기화 실패({tcp_name}): {e}')
+            else:
+                self.get_logger().info(f'TCP 동기화: {tcp_name} = {offset}')
+
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg: SafetyState):
         self._latest_safety = msg
+        self._last_safety_rx_monotonic = time.monotonic()
 
     def _safe_to_move(self) -> bool:
-        return self._latest_safety is not None and self._latest_safety.safe_to_move
+        timeout_s = self.get_parameter('safety_status_timeout_s').value
+        return (self._latest_safety is not None
+                and self._latest_safety.safe_to_move
+                and self._last_safety_rx_monotonic is not None
+                and time.monotonic() - self._last_safety_rx_monotonic <= timeout_s)
 
     def _on_cancel(self, goal_handle):
         # §3.3 취소 전파: 우리가 보관 중인 하위 스킬 액션(goal_handle)을 취소한다.
@@ -152,9 +242,6 @@ class ToolManagerNode(Node):
         msg.current_tool = self._current_tool
         msg.active_tcp = self._current_tcp
         msg.grip_width_mm = self._grip_width_mm
-        cfg = self._rack.get(self._current_tool)
-        msg.expected_width_mm = cfg.get('expected_grip_width_mm', 0.0) if cfg else 0.0
-        msg.grip_verified = True
         return msg
 
     def _publish_status(self):
@@ -275,8 +362,6 @@ class ToolManagerNode(Node):
         started_at = time.monotonic()
         timeout_s = self.get_parameter('change_timeout_s').value
         approach_height = self.get_parameter('approach_height_mm').value
-        verify_grip_default = self.get_parameter('verify_grip').value
-        tol_default = self.get_parameter('grip_width_tolerance_mm').value
         result = ChangeTool.Result()
 
         def feedback(step, percent):
@@ -284,6 +369,16 @@ class ToolManagerNode(Node):
             fb.step = step
             fb.percent = percent
             goal_handle.publish_feedback(fb)
+
+        # 랙 이동은 전부 "플랜지 기준"으로 해석되어야 한다 (NEUTRAL_TCP 주석).
+        # 반납/파지가 모두 끝난 뒤(3단계)에야 새 툴의 TCP 로 바꾼다.
+        if not self._use_neutral_tcp():
+            goal_handle.abort()
+            result.base = self._result_base(
+                False, ErrorCode.E_MOTION_FAILED,
+                f'랙 이동 전 {NEUTRAL_TCP} 전환 실패 — 좌표 기준을 고정하지 못해 중단',
+                started_at)
+            return result
 
         # --- 1) 현재 툴 반납 ---------------------------------------------------
         if self._current_tool != ToolState.NONE:
@@ -312,6 +407,11 @@ class ToolManagerNode(Node):
             place_goal.mode = PickPlace.Goal.MODE_PLACE
             place_goal.target_key = cur_cfg['slot_frame']
             place_goal.approach_height_mm = approach_height
+            # 나사로 잠긴 툴(코터)은 반납 시 반대방향으로 돌려 뚜껑을 다시
+            # 잠근다 — 이 필드가 없어서 do_close 가 항상 False 로 평가돼
+            # 조이는 회전이 한 번도 실행되지 않던 누락이었다(2026-08-26).
+            place_goal.unscrew = bool(cur_cfg.get('unscrew', False))
+            place_goal.unscrew_grip_width_mm = float(cur_cfg.get('unscrew_grip_width_mm', 0.0))
 
             pp_result, err_code, err_detail = self._call_pick_place(
                 place_goal, goal_handle, timeout_s)
@@ -333,7 +433,7 @@ class ToolManagerNode(Node):
                 return result
 
             self._current_tool = ToolState.NONE
-            self._current_tcp = ''
+            self._current_tcp = ''   # 툴 없음 (컨트롤러는 NEUTRAL_TCP 상태)
             self._grip_width_mm = 0.0
             self._publish_status()
 
@@ -344,19 +444,20 @@ class ToolManagerNode(Node):
             return result
 
         # --- 2) 신규 툴 파지 -----------------------------------------------------
+        # 실제 폭 되읽기 센서가 없으므로 PickPlace의 모션·그리퍼 명령 성공만
+        # 판단한다. 실제 파지 여부는 운영자가 육안으로 확인해야 한다.
         feedback(1, 30.0)
         cfg = self._rack[goal.target_tool]  # goal_callback 에서 존재를 이미 확인함
-        verify_grip = goal.verify_after_grip or verify_grip_default
 
         pick_goal = PickPlace.Goal()
         pick_goal.mode = PickPlace.Goal.MODE_PICK
         pick_goal.target_key = cfg['slot_frame']
         pick_goal.approach_height_mm = approach_height
-        pick_goal.expected_width_mm = goal.expected_width_mm if goal.expected_width_mm > 0.0 \
-            else cfg.get('expected_grip_width_mm', 0.0)
-        pick_goal.width_tolerance_mm = goal.width_tolerance_mm if goal.width_tolerance_mm > 0.0 \
-            else tol_default
-        pick_goal.verify_grip = verify_grip
+        pick_goal.grip_width_mm = cfg.get('expected_grip_width_mm', 0.0)
+        # 나사로 잠긴 툴(코터 젤 병 뚜껑)은 슬롯에서 잡은 자리에서 먼저 돌려
+        # 풀고 나서 들어 올린다 — 실제 회전은 robot_skill_node 가 한다.
+        pick_goal.unscrew = bool(cfg.get('unscrew', False))
+        pick_goal.unscrew_grip_width_mm = float(cfg.get('unscrew_grip_width_mm', 0.0))
 
         feedback(2, 55.0)
         pp_result, err_code, err_detail = self._call_pick_place(pick_goal, goal_handle, timeout_s)
@@ -366,13 +467,10 @@ class ToolManagerNode(Node):
             result.base = self._result_base(False, ErrorCode.E_CANCELLED, err_detail, started_at)
             return result
 
-        grip_bad = err_code is not None or not pp_result.base.success or \
-            (verify_grip and not pp_result.grip_verified)
+        grip_bad = err_code is not None or not pp_result.base.success
         if grip_bad:
-            code = err_code or (pp_result.base.error.code if not pp_result.base.success
-                                 else ErrorCode.E_GRIP_FAILED)
-            detail = err_detail or (pp_result.base.error.detail if not pp_result.base.success
-                                     else f'파지 폭 검증 실패 (measured={pp_result.measured_width_mm}mm)')
+            code = err_code or pp_result.base.error.code
+            detail = err_detail or pp_result.base.error.detail
             self._log_grip_failure(code, goal.target_tool, detail)
             self._mark_tool_lost()
             goal_handle.abort()
@@ -390,25 +488,23 @@ class ToolManagerNode(Node):
             result.base = self._result_base(False, ErrorCode.E_MOTION_FAILED, detail, started_at)
             return result
 
-        # --- 4) 파지 폭 재확인 + 상태 확정 ------------------------------------------
+        # --- 4) 상태 확정 -------------------------------------------------------
         feedback(4, 95.0)
         self._current_tool = goal.target_tool
         self._current_tcp = f'tcp_{goal.target_tool}'
-        self._grip_width_mm = pp_result.measured_width_mm
+        # 뚜껑을 푼 툴은 푼 뒤에도 그 폭을 유지한 채 들려 있다 — 명령값을
+        # 그대로 발행해야 /tool/status 가 실제 그리퍼 명령과 어긋나지 않는다.
+        self._grip_width_mm = (pick_goal.unscrew_grip_width_mm if pick_goal.unscrew
+                                else pick_goal.grip_width_mm)
         self._publish_status()
 
         goal_handle.succeed()
         result.base = self._result_base(True, ErrorCode.OK, '', started_at)
         result.state = self._current_state_msg()
-        result.measured_width_mm = pp_result.measured_width_mm
         return result
 
     def _log_grip_failure(self, code, target_tool, detail):
         self.get_logger().error(f'[{code}] ChangeTool: "{target_tool}" 파지 실패 — {detail}')
-        if code == ErrorCode.E_TOOL_DROP:
-            self.get_logger().error(
-                '툴 낙하 의심 — 자동 복구하지 않습니다. 어디 떨어졌는지 확인하고 '
-                '사람이 치운 뒤에만 새 ChangeTool goal 을 보내세요.')
 
 
 def main(args=None):

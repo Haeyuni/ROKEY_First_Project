@@ -2,18 +2,11 @@
 <package format="3">
   <name>nail_perception</name>
   <version>0.1.0</version>
-  <description>scan_node: 접촉 기반 2단계 강성 스캔 및 경계 인식 (NIS §6.1)</description>
+  <description>공정 노드가 공유하는 2D 다각형 기하 유틸리티 (실행 노드 없음)</description>
   <maintainer email="team@example.com">nail team</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
-
-  <depend>rclpy</depend>
-  <depend>nail_msgs</depend>
-  <depend>geometry_msgs</depend>
-  <depend>std_msgs</depend>
-  <depend>tf2_ros</depend>
-  <exec_depend>python3-numpy</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
