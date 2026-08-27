@@ -493,12 +493,20 @@ class SessionOrchestratorNode(Node):
 
         state = {
             'layer_index': 0, 'current_tool': ToolState.NONE, 'layer_total': layer_total,
+            'last_pct': 0.0,
         }
 
         def emit(stage, local_pct, layer_index=None):
+            # TOOL_CHANGE처럼 seq에 없는 stage(=진행률 계산 대상이 아닌 stage)는
+            # 0%로 리셋하지 않고 직전에 계산된 세션 진행률을 그대로 유지한다 —
+            # 안 그러면 툴 교체 때마다 전체 진행률 바가 0%로 잠깐 튀어 보인다.
             step_key = f'{stage}{layer_index}' if layer_index is not None and \
                 f'{stage}{layer_index}' in seq else stage
-            pct = progress(step_key, local_pct) if step_key in seq else 0.0
+            if step_key in seq:
+                pct = progress(step_key, local_pct)
+                state['last_pct'] = pct
+            else:
+                pct = state['last_pct']
             self._publish_state(
                 goal_handle, session_id, stage, state['layer_index'], layer_total,
                 local_pct, pct, state['current_tool'])
