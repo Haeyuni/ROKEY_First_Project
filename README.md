@@ -1,6 +1,6 @@
 # Nailbot — 자동 네일아트 로봇 시스템
 
-두산로보틱스 ROKEY 9기 그룹A 1조 · Doosan M0609 기반 자동 네일아트 로봇
+Doosan M0609 기반 자동 네일아트 로봇
 
 ---
 
@@ -8,20 +8,7 @@
 
 ![시스템 아키텍처](docs/diagrams/nailbot_system_architecture.png)
 
-### 1.1 계층 구조
-
-| 계층 | 패키지 | 노드 | 역할 |
-|---|---|---|---|
-| 웹 | — | React / FastAPI | 키오스크·관리자 화면, 세션 REST + WebSocket 중계, 이력 저장 |
-| D · 게이트웨이 | `nail_bridge` | `web_bridge_node` | rosbridge_websocket을 화이트리스트로 감싼 웹↔ROS 유일 통로 |
-| C · 세션 | `nail_orchestrator` | `session_orchestrator` | 단계 순서·단계별 타임아웃·취소 전파 상태머신 |
-| B · 공정 | `nail_process` | `sanding` `brushing` `coating` `curing` `stone` | 공정별 ActionServer |
-| A · 스킬 | `nail_skill` | `robot_skill_node` `tool_manager` | 로봇 원자 스킬(MoveTo/PickPlace/ContactPath/LateralContact), 툴 교체·TCP |
-| 안전 | `nail_safety` | `safety_monitor` | E-Stop·통신두절 래치, `/safety/status` 발행, 전제조건 검증 |
-| 공통 | `nail_msgs` / `nail_perception` | (노드 없음) | 인터페이스 정의(msg 5 · srv 3 · action 11), 2D 기하 유틸 |
-| 기동 | `nail_bringup` | (노드 없음) | 고정 TF + 노드 조합 launch |
-
-### 1.2 통신 인터페이스
+### 1.1 통신 인터페이스
 
 ```text
 Topic     /process/status (ProcessState) · /safety/status (SafetyState)
@@ -32,20 +19,9 @@ Action    /session/run
           /skill/{move_to, pick_place, contact_path, lateral_contact} · /tool/change
 ```
 
-웹에 노출되는 것은 **구독 2개(`/process/status`, `/safety/status`)와
-쓰기 2개(`/session/run` 액션, `/safety/reset` 서비스)뿐**이다. 나머지 ROS
-자원은 `nail_bridge/config/web_bridge.yaml` 화이트리스트 밖이라 접근할 수 없다.
-
-### 1.3 네트워크 구성
+### 1.2 네트워크 구성
 
 ![네트워크 구성도](docs/diagrams/nailbot_network.png)
-
-| 프로세스 | 포트 | 비고 |
-|---|---|---|
-| Vite 개발 서버 | 5173 | React 정적 파일 (`/` 키오스크, `/admin` 관리자) |
-| FastAPI (uvicorn) | 8000 | REST + `/ws` |
-| rosbridge_websocket | 9090 | `web_bridge_node` |
-| PostgreSQL | 5432 | docker compose 로컬 또는 팀 공용 원격 DB |
 
 웹·ROS 노드·DSR 드라이버가 **로봇 PC 한 대**에서 전부 돈다.
 
@@ -61,21 +37,11 @@ Action    /session/run
 PRECHECK → SAND → BRUSH → (COAT → CURE) × layer_total → [STONE] → FINISH
 ```
 
-- `BRUSH`는 항상 실행, `STONE`은 주문의 `enable_stone` 옵션일 때만 실행한다.
-- 각 단계 앞에 `TOOL_CHANGE`가 들어간다 (툴 반납 → 픽업 → TCP 활성화).
-- 모든 전이에서 `ProcessState`를 `/process/status`와 `RunSession` feedback으로
-  동시에 발행한다.
+- 각 단계 앞에 `TOOL_CHANGE`가 들어간다.
 
 ### 2.2 동작 순서도
 
 ![동작 순서도](docs/diagrams/nailbot_operation_flow.png)
-
-중단 처리는 ① 툴 반납 → ② HOME(`rack_transit`) 복귀 → ③ `ABORTED` 발행
-순서다. 단 **툴 반납에 실패했고 들고 있는 툴이 UV 램프면 HOME 복귀를 생략하고
-현재 위치에 정지**한다 — 켜진 램프를 든 채로 이동시키지 않기 위해서다.
-
-결과 코드는 `COMPLETED` / `COMPLETED_WITH_WARN` / `FAILED` / `ABORTED_SAFETY` /
-`CANCELLED` 다섯 가지다.
 
 ---
 
@@ -83,28 +49,23 @@ PRECHECK → SAND → BRUSH → (COAT → CURE) × layer_total → [STONE] → F
 
 | 항목 | 값 |
 |---|---|
-| OS | Ubuntu (로봇 PC 1대에 웹·ROS·드라이버 전부 상주) |
-| ROS 배포판 | **ROS 2 Jazzy** (`/opt/ros/jazzy`) |
+| OS | Ubuntu 24.04 LTS|
+| ROS 배포판 | ROS 2 Jazzy |
 | Python | 3.12 |
-| 빌드 | colcon (`ament_python`, `nail_msgs`만 `ament_cmake`) |
+| 빌드 | colcon |
 | Node.js | 18+ (Vite 6 / TypeScript 5.6) |
-| 브라우저 | Chrome 최신 1종만 지원 (폴리필 없음) |
 | 컨테이너 | Docker Compose (PostgreSQL 16-alpine) |
 
 ### 워크스페이스 배치
 
 이 저장소는 **DSR 드라이버와 별도의 워크스페이스**다. 두 워크스페이스를
-overlay로 함께 source 해야 한다.
+overlay로 함께 source 해야 한다. (`ws_dsr`를 먼저 source)
 
 ```text
 ~/ws_cobot_pjt/
 ├── ws_dsr/        # 두산 dsr_bringup2 · dsr_common2 · dsr_msgs2 · onrobot 드라이버
 └── ws_cobot1/     # 이 저장소 (src/nail_*)
 ```
-
-> `safety` · `skill` · `tool` 노드는 `DSR_ROBOT2` import에 실패하면 프로세스가
-> 즉시 죽는다. **`ws_dsr`를 먼저 source 하지 않으면 `ModuleNotFoundError:
-> dsr_msgs2`로 기동 자체가 안 된다.**
 
 ---
 
@@ -124,25 +85,6 @@ overlay로 함께 source 해야 한다.
 ### 4.2 툴 · 작업물
 
 ![작업대 평면도](docs/diagrams/nailbot_cell_layout.png)
-
-| 순서 | 구성품 | ROS 키 | 보관 · 특이사항 |
-|---|---|---|---|
-| 1 | 네일 파일 | `sander` | 작업대 위 브래킷에 눕혀 보관, 손톱면을 곡선으로 연마 |
-| 2 | 분진 제거용 붓 | `brush` | 작업대 **바깥 구멍**에 수직으로 꽂아 보관, 경유점 없이 직행 |
-| 3 | 젤 네일 | `coater` | 뚜껑이 곧 붓 — `unscrew: true`(돌려 열고 반납 시 잠금) |
-| 4 | UV LED 램프 | `uv` | USB 상시 전원 — **소프트웨어로 끌 수 없음** |
-| 5 | 핀셋 | `tweezers` | 네일 파츠 중앙 홈을 파지, 그리퍼 폭을 코드와 일치시켜야 함 |
-| — | 네일 파츠 트레이 | `stone_tray` | 받침 블록 위 투명 접시(고정 필수) |
-| — | 인조 네일팁 (작업물) | `nail_local_frame` | 실리콘 손가락 모형 + 지그로 높이 확보 |
-
-- 툴 랙과 작업물 지그는 전용 치구가 아니라 **레고 브릭**으로 구성했다.
-- 작업대는 베이스플레이트 + 랩(오염 시 랩만 교체).
-
-### 4.3 계획했으나 사용하지 않은 장비
-
-F/T 힘·토크 센서(장착됐으나 미작동) · 손 안착 감지 센서(미장착) ·
-더스트 컬렉터(미장착) · 비전 카메라(미도입).
-→ 접촉 검출을 포기하고 **티칭 좌표 + `travel_limit_mm` 안전 마진** 방식으로 전환했다.
 
 ---
 
@@ -221,10 +163,13 @@ source install/setup.bash
 ```bash
 # ws_dsr 쪽 launch — 실제 파일명·인자는 사용 중인 dsr_bringup2 버전에 맞춘다
 ros2 launch dsr_bringup2 dsr_bringup2.launch.py \
-  mode:=real  name:=dsr01  model:=m0609      # 에뮬레이터는 mode:=virtual
+  mode:=real  name:=dsr01  model:=m0609  host:=<로봇 컨트롤러 IP>  # 에뮬레이터는 mode:=virtual (host 생략 시 기본 127.0.0.1)
 ```
 
 - `name`(= `dsr_prefix`)은 이후 launch 인자와 동일해야 한다 (기본 `dsr01`).
+- `mode:=real`일 때는 `host:=`(컨트롤러 IP)를 반드시 지정한다. 생략하면 기본값
+  `127.0.0.1`로 붙으려다 연결이 실패한다. 컨트롤러 포트가 기본(`12345`)과
+  다르면 `port:=`도 같이 넘긴다.
 - 노드가 뜬 것과 액션이 실제로 도는 것은 다르다 — 드라이버가 없어도 `nail_*`
   노드는 기동되지만(서비스 디스커버리 타임아웃 WARN만 출력), `MoveTo`·
   `PickPlace`를 쏘면 두산 서비스 응답을 무한 대기한다.
