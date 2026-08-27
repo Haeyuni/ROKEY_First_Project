@@ -1,5 +1,0 @@
-[37;1m2026-08-26 11:38:12.592 [31;1m[[37;1mRTPS_TRANSPORT_SHM[31;1m Error] [37mFailed init_port fastrtps_port7021: open_and_lock_file failed[34;1m -> Function [36mopen_port_internal[m
-_robot_id =dsr01
-_robot_model =m0609
-_srv_name_prefix =dsr_controller2/
-_topic_name_prefix =dsr_controller2/
