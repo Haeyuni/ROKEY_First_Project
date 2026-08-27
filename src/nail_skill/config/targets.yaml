@@ -65,9 +65,6 @@ stone_tray: # 스톤 공급 트레이 - 완 (get_current_posx 실측, 2026-08-25
 #   nail_bringup/config/static_frames.yaml 의 `nail_local_frame` 으로
 #   옮겨갔다. 이제 스톤 부착점은 절대 좌표가 아니라 "손톱 프레임의 원점"
 #   이고, session_orchestrator 가 PlaceStone 에 (0,0,0) 으로 넘긴다.
-#
-# ※ 탐침(구 probe / probe_work)도 빠졌다 — ProbePoint 스킬과 scan_node /
-#   inspection_node 가 폐지되어 이 툴을 집을 일이 없다.
 
 sander: # 네일 파일 - 재실측 (2026-08-24, get_current_posx)
   x_mm: 501.57
@@ -186,7 +183,7 @@ stone_place_approach: # stone_place 대비 z+30mm (2026-08-26)
   rz2_deg: 178.92
 
 stone_place: # get_current_posx 실측 (2026-08-26)
-  x_mm: 413.05
+  x_mm: 414.25
   y_mm: 27.40
   z_mm: 390.21
   frame_id: base_link

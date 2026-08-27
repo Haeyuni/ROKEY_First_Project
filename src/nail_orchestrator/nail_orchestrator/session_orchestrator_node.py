@@ -137,6 +137,9 @@ class SessionOrchestratorNode(Node):
         d('tool_transit_speed_ratio', 0.3)
         d('tool_transit_timeout_s', 30.0)
         d('child_cancel_wait_s', 10.0)
+        # sander_work 진입/후퇴 이동에만 base_link y+ 로 주는 보정(mm) — 티칭
+        # 좌표(targets.yaml)는 그대로 두고 호출부에서만 보정한다(요청, 2026-08-27).
+        d('sander_work_y_offset_mm', 3.0)
 
     # --- 안전 -----------------------------------------------------------------
     def _on_safety_status(self, msg):
@@ -328,27 +331,36 @@ class SessionOrchestratorNode(Node):
         return ErrorCode.E_TIMEOUT
 
     def _call_move_to_key(self, target_key, our_goal_handle, timeout_s, linear=True,
-                          ignore_cancel=False):
+                          ignore_cancel=False, speed_ratio=None, y_offset_mm=0.0):
         goal = MoveTo.Goal()
         goal.target_key = target_key
         goal.frame_id = 'base_link'
         goal.linear = linear
-        ratio = self.get_parameter('tool_transit_speed_ratio').value
+        ratio = speed_ratio if speed_ratio is not None else \
+            self.get_parameter('tool_transit_speed_ratio').value
         goal.speed_ratio = ratio
         goal.accel_ratio = ratio
         goal.timeout_s = timeout_s
+        goal.y_offset_mm = y_offset_mm
         return self._call_action(self._move_client, goal, our_goal_handle, timeout_s,
                                  ignore_cancel=ignore_cancel)
 
-    def _go_to_work(self, tool_key, our_goal_handle, move_to_work=True, via_transit=True):
+    def _go_to_work(self, tool_key, our_goal_handle, move_to_work=True, via_transit=True,
+                    work_speed_ratio=None, work_y_offset_mm=0.0):
         """ChangeTool 직후 공통 이동: 경유점(tool_transit_key) → <tool_key>_work.
 
         반환: (work_result, None) 성공 / (None, err) 실패 — err 은
         _finish_by_err 에 그대로 넘기면 된다. 대각선 이동으로 방금 집은 툴이
         랙/구조물과 부딪히는 문제 대응(PickPlace via_key 라우팅과 동일한 이유).
 
-        via_transit=False 면 이 경유점 이동 자체를 건너뛴다 — brush/uv는
-        작업위치로 바로 가도 문제없다고 확인돼(요청, 2026-08-26) 경유를 뺐다.
+        via_transit=False 면 이 경유점 이동 자체를 건너뛴다 — brush/uv/sander는
+        작업위치로 바로 가도 문제없다고 확인돼(brush/uv 요청 2026-08-26,
+        sander 요청 2026-08-27) 경유를 뺐다.
+
+        work_speed_ratio 를 주면 <tool_key>_work 로 가는 마지막 구간만 그
+        속도로 이동한다(기본은 tool_transit_speed_ratio 그대로) — 경유점
+        이동에는 영향 없다. work_y_offset_mm 도 마찬가지로 마지막 구간에만
+        적용된다(티칭 좌표 자체는 그대로 두고 호출부에서만 보정).
         """
         timeout_s = self.get_parameter('tool_transit_timeout_s').value
         if via_transit:
@@ -360,7 +372,9 @@ class SessionOrchestratorNode(Node):
         # orchestrator가 별도 작업점으로 먼저 직접 이동하지 않는다.
         if not move_to_work:
             return None, None
-        work_result, err = self._call_move_to_key(f'{tool_key}_work', our_goal_handle, timeout_s)
+        work_result, err = self._call_move_to_key(
+            f'{tool_key}_work', our_goal_handle, timeout_s, speed_ratio=work_speed_ratio,
+            y_offset_mm=work_y_offset_mm)
         if err is not None:
             return None, err
         return work_result, None
@@ -513,7 +527,15 @@ class SessionOrchestratorNode(Node):
                                         started_at, started_mono, state)
         state['current_tool'] = ToolState.SANDER
 
-        _, err = self._go_to_work('sander', goal_handle)
+        # via_transit=False — brush/uv와 동일하게 경유점(rack_transit)을 건너뛰고
+        # sander_work로 바로 이동한다(요청, 2026-08-27). work_speed_ratio는
+        # tool_transit_speed_ratio의 절반 — sander_work 진입만 더 천천히
+        # 이동한다(요청, 2026-08-27). sander_work_y_offset_mm 만큼 y+로 보정
+        # 진입한다(요청, 2026-08-27).
+        _, err = self._go_to_work(
+            'sander', goal_handle, via_transit=False,
+            work_speed_ratio=self.get_parameter('tool_transit_speed_ratio').value / 2.0,
+            work_y_offset_mm=self.get_parameter('sander_work_y_offset_mm').value)
         if err is not None:
             return self._finish_by_err(goal_handle, result, err, '경유/작업위치 이동 실패(sander)',
                                         started_at, started_mono, state)
@@ -531,6 +553,19 @@ class SessionOrchestratorNode(Node):
             return self._finish_by_err(goal_handle, result, err, 'SandSurface 실패',
                                         started_at, started_mono, state)
         emit(ProcessState.STAGE_SAND, 100.0)
+
+        # SandSurface 종료 직후 위치에서 바로 ChangeTool(brush)(=sander 반납)로
+        # 들어가면 랙으로 향하는 첫 이동이 손톱/구조물을 스치는 문제가 실기에서
+        # 확인됨(2026-08-27) — 반납 전에 sander_work로 살짝 후퇴한다. 진입과
+        # 동일하게 sander_work_y_offset_mm 만큼 y+로 보정한다(요청, 2026-08-27).
+        _, err = self._call_move_to_key(
+            'sander_work', goal_handle,
+            self.get_parameter('tool_transit_timeout_s').value,
+            speed_ratio=self.get_parameter('tool_transit_speed_ratio').value / 2.0,
+            y_offset_mm=self.get_parameter('sander_work_y_offset_mm').value)
+        if err is not None:
+            return self._finish_by_err(goal_handle, result, err, '샌딩 후 후퇴 이동 실패(sander)',
+                                        started_at, started_mono, state)
 
         # --- BRUSH (고정 공정) ------------------------------------------------------
         emit(ProcessState.STAGE_TOOL_CHANGE, 0.0)

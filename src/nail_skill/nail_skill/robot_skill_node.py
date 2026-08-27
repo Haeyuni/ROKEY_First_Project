@@ -414,6 +414,11 @@ class RobotSkillNode(Node):
                                                  f'TF 변환 실패 ({goal.frame_id}): {e}', started_at)
                 return result
             task_pose = pose_to_task_pose(base_pose)
+
+        if goal.y_offset_mm:
+            task_pose = TaskPose(task_pose.x_mm, task_pose.y_mm + goal.y_offset_mm,
+                                  task_pose.z_mm, task_pose.rz1_deg, task_pose.ry_deg,
+                                  task_pose.rz2_deg)
         accel_ratio = goal.accel_ratio if goal.accel_ratio > 0.0 else goal.speed_ratio
         vel = max(1.0, goal.speed_ratio * self.get_parameter('move_max_speed_mms').value)
         acc = max(1.0, accel_ratio * self.get_parameter('move_max_accel_mms2').value)
@@ -912,6 +917,40 @@ class RobotSkillNode(Node):
             if reason != 'ok':
                 result.base = self._finish_from_reason(reason, goal_handle, started_at,
                                                          context='PickPlace(경유-상공)')
+                return result
+        elif goal.mode == PickPlace.Goal.MODE_PLACE:
+            # via_key 가 없는 툴(붓/UV 등, 2026-08-26 요청으로 제거)은 PLACE 시
+            # 작업대(높은 z)에서 랙 approach(낮은 z)로 수평 이동과 하강이 동시에
+            # 일어나는 대각선으로 이동했다 — 그 사이 구조물에 부딪히는 문제가
+            # 실기에서 확인됨(2026-08-27). via_key 가 없을 때도 "현재 높이(또는
+            # approach 높이 중 더 높은 쪽)를 유지한 채 수평 이동 → 그 다음에만
+            # 수직 하강"으로 나눠 대각선을 없앤다.
+            try:
+                current = self._adapter.get_pose()
+            except DsrAdapterError as exc:
+                goal_handle.abort()
+                self._log_abort(ErrorCode.E_MOTION_FAILED,
+                                 f'PLACE 전 현재 자세 조회 실패: {exc}')
+                result.base = self._result_base(
+                    False, ErrorCode.E_MOTION_FAILED,
+                    f'PLACE 전 현재 자세 조회 실패: {exc}', started_at)
+                return result
+            transit_z_mm = max(current.z_mm, approach.z_mm)
+            if transit_z_mm - current.z_mm > 1e-6:
+                lift_pose = TaskPose(current.x_mm, current.y_mm, transit_z_mm,
+                                      current.rz1_deg, current.ry_deg, current.rz2_deg)
+                reason = move_and_wait(lift_pose, 0, 4.0)
+                if reason != 'ok':
+                    result.base = self._finish_from_reason(
+                        reason, goal_handle, started_at,
+                        context='PickPlace(대각선 방지-상승)')
+                    return result
+            over_approach = TaskPose(approach.x_mm, approach.y_mm, transit_z_mm,
+                                      approach.rz1_deg, approach.ry_deg, approach.rz2_deg)
+            reason = move_and_wait(over_approach, 0, 7.0)
+            if reason != 'ok':
+                result.base = self._finish_from_reason(
+                    reason, goal_handle, started_at, context='PickPlace(대각선 방지-수평)')
                 return result
 
         # 뚜껑을 돌리기 전에 손목을 반대쪽 끝으로 미리 감아 둔다. 이걸 안 하면
