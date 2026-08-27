@@ -1,15 +1,11 @@
 # Nailbot — 자동 네일아트 로봇 시스템
 
-Doosan M0609 기반 자동 네일아트 로봇
-
----
-
 ## 0. 프로젝트 개요
 
-- **목표**: 단순 반복 공정을 넘어, 사람이 선택한 디자인·작업 지시를 로봇이
+- **목표**: 단순 반복 공정을 넘어 사람이 선택한 디자인·작업 지시를 로봇이
   그대로 따라가는 휴먼 인터페이스 기반 네일아트 자동화 시스템 구현
 - **주요 기능**: 웹 키오스크에서 받은 사용자 입력(디자인·옵션)에 따라 로봇이
-  샌딩 → 브러싱 → 코팅 → 큐어링 → (스톤 부착) 공정을 자동 수행
+  샌딩 → 브러싱 → 코팅 → 큐어링 → 스톤 부착 공정을 자동 수행
 - **사용 장비**: Doosan M0609 (6축 협동로봇), OnRobot RG2 그리퍼
 - **개발 환경**: Ubuntu 24.04 LTS, ROS 2 Jazzy
 - **주요 기술 스택**: ROS 2, FastAPI + roslibpy, React (Vite/TypeScript),
@@ -48,7 +44,7 @@ Action    /session/run
 ![세션 진행 시퀀스](docs/diagrams/nailbot_session_flow.png)
 
 ```text
-PRECHECK → SAND → BRUSH → COAT → CURE → [STONE] → FINISH
+PRECHECK → SAND → BRUSH → COAT → CURE → STONE → FINISH
 ```
 
 - 각 단계 앞에 `TOOL_CHANGE`가 들어간다.
