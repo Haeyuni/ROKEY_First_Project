@@ -12,8 +12,6 @@
   PostgreSQL
 - **기간**: 2026.08.18 ~ 2026.08.27
 
----
-
 ## 1. 시스템 설계
 
 ![시스템 아키텍처](docs/diagrams/nailbot_system_architecture.png)
@@ -35,8 +33,6 @@ Action    /session/run
 
 웹·ROS 노드·DSR 드라이버가 **로봇 PC 한 대**에서 전부 돈다.
 
----
-
 ## 2. 플로우 차트
 
 ### 2.1 세션 진행 시퀀스
@@ -52,8 +48,6 @@ PRECHECK → SAND → BRUSH → COAT → CURE → STONE → FINISH
 ### 2.2 동작 순서도
 
 ![동작 순서도](docs/diagrams/nailbot_operation_flow.png)
-
----
 
 ## 3. 운영체제 환경
 
@@ -77,8 +71,6 @@ PRECHECK → SAND → BRUSH → COAT → CURE → STONE → FINISH
 └── ws_cobot1/     # 이 저장소 (src/nail_*)
 ```
 
----
-
 ## 4. 사용한 장비 목록
 
 ![장비 연결 구성](docs/diagrams/nailbot_hardware_stack.png)
@@ -95,8 +87,6 @@ PRECHECK → SAND → BRUSH → COAT → CURE → STONE → FINISH
 ### 4.2 툴 · 작업물
 
 ![작업대 평면도](docs/diagrams/nailbot_cell_layout.png)
-
----
 
 ## 5. 의존성
 
@@ -140,8 +130,6 @@ PyYAML==6.0.2
 react 18.3 · react-dom 18.3
 vite 6.0 · typescript 5.6 · @vitejs/plugin-react 4.3
 ```
-
----
 
 ## 6. 실행 순서
 
