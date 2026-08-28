@@ -14,7 +14,7 @@
 
 ## 1. 시스템 설계
 
-![시스템 아키텍처](docs/diagrams/nailbot_system_architecture.png)
+![시스템 아키텍처](https://raw.githubusercontent.com/Haeyuni/ROKEY_First_Project/main/docs/diagrams/nailbot_system_architecture.png)
 
 ### 1.1 통신 인터페이스
 
@@ -29,7 +29,7 @@ Action    /session/run
 
 ### 1.2 네트워크 구성
 
-![네트워크 구성도](docs/diagrams/nailbot_network.png)
+![네트워크 구성도](https://raw.githubusercontent.com/Haeyuni/ROKEY_First_Project/main/docs/diagrams/nailbot_network.png)
 
 웹·ROS 노드·DSR 드라이버가 **로봇 PC 한 대**에서 전부 돈다.
 
@@ -37,7 +37,7 @@ Action    /session/run
 
 ### 2.1 세션 진행 시퀀스
 
-![세션 진행 시퀀스](docs/diagrams/nailbot_session_flow.png)
+![세션 진행 시퀀스](https://raw.githubusercontent.com/Haeyuni/ROKEY_First_Project/main/docs/diagrams/nailbot_session_flow.png)
 
 ```text
 PRECHECK → SAND → BRUSH → COAT → CURE → STONE → FINISH
@@ -47,7 +47,7 @@ PRECHECK → SAND → BRUSH → COAT → CURE → STONE → FINISH
 
 ### 2.2 동작 순서도
 
-![동작 순서도](docs/diagrams/nailbot_operation_flow.png)
+![동작 순서도](https://raw.githubusercontent.com/Haeyuni/ROKEY_First_Project/main/docs/diagrams/nailbot_operation_flow.png)
 
 ## 3. 운영체제 환경
 
@@ -73,7 +73,7 @@ PRECHECK → SAND → BRUSH → COAT → CURE → STONE → FINISH
 
 ## 4. 사용한 장비 목록
 
-![장비 연결 구성](docs/diagrams/nailbot_hardware_stack.png)
+![장비 연결 구성](https://raw.githubusercontent.com/Haeyuni/ROKEY_First_Project/main/docs/diagrams/nailbot_hardware_stack.png)
 
 ### 4.1 로봇 · 제어
 
@@ -86,7 +86,7 @@ PRECHECK → SAND → BRUSH → COAT → CURE → STONE → FINISH
 
 ### 4.2 툴 · 작업물
 
-![작업대 평면도](docs/diagrams/nailbot_cell_layout.png)
+![작업대 평면도](https://raw.githubusercontent.com/Haeyuni/ROKEY_First_Project/main/docs/diagrams/nailbot_cell_layout.png)
 
 ## 5. 의존성
 
